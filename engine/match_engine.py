@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import random
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,10 @@ class MatchEngine:
     def __init__(self, state: MatchState):
         self.state = state
         self.rng = random.Random(state.rng_seed or 1)
+        self._recent_lines: deque[str] = deque(maxlen=40)
+        self._momentum: dict[str, float] = {"home": 50.0, "away": 50.0}
+        self._pressure_chain: int = 0
+        self._last_attack_side: str | None = None
 
     @classmethod
     def initialize(cls, *, match_id: str, guild_id: int | None, channel_id: int | None, mode: str,
@@ -49,21 +54,96 @@ class MatchEngine:
         return eng
 
     def _init_ps(self, side: Side, lineup: Lineup):
+        # Remove existing player states for this side (used for setup/replacement)
+        self.state.player_states = {k: v for k, v in self.state.player_states.items() if v.team_side != side}
         for e in lineup.starters + lineup.bench:
             is_starter = any(s.player_api_id == e.player_api_id for s in lineup.starters)
             key = self.state.player_key(side, e.player_api_id)
             player = self.state.players_index.get(key)
-            stamina = 100.0 if is_starter else 100.0
+            stamina = 100.0
             if player and is_starter:
                 stamina = max(90.0, min(100.0, 95.0 + (player.attributes.stamina - 70) * 0.1))
+            pos = e.position or (player.position if player else "MID")
             self.state.player_states[key] = PlayerMatchState(
-                player_api_id=e.player_api_id, name=e.name, team_side=side, position=e.position or (player.position if player else "MID"),
+                player_api_id=e.player_api_id, name=e.name, team_side=side, position=pos,
                 slot=e.slot, on_pitch=is_starter, is_starter=is_starter,
-                is_goalkeeper=(e.slot == "GK" or e.player_api_id == lineup.goalkeeper_player_id or (player and player.pos_group == "GK")),
+                is_goalkeeper=(e.slot == "GK" or e.player_api_id == lineup.goalkeeper_player_id or pos == "GK" or (player and getattr(player, "pos_group", "") == "GK")),
                 is_captain=(e.player_api_id == lineup.captain_player_id), stamina=stamina, rating=6.5, rating_points=6.5,
             )
 
+    def replace_lineup(self, side: Side, lineup: Lineup):
+        """Replace a team's lineup and reinitialize player states for that side (intended before match start)."""
+        team = self.state.team(side)
+        team.lineup = lineup
+        self._init_ps(side, lineup)
+
     # --- emit ---
+    def _norm_line(self, text: str) -> str:
+        return " ".join(str(text).strip().lower().split())
+
+    def _context_suffix(self, et: str, side: Side | None) -> str:
+        parts = []
+        score = self.state.scoreline()
+        if et in {E.PASS_SEQUENCE, E.CHANCE}:
+            if side == self.state.possession_side:
+                parts.append(f"{self.state.team(side).team.name} continue to dictate the tempo at {score}." if side else "")
+            if self._pressure_chain >= 2 and side:
+                parts.append(f"Pressure is building on {self.state.team(self.state.opp_side(side)).team.name}'s defensive third.")
+        if self.state.minute >= 80:
+            diff = abs(self.state.home.score - self.state.away.score)
+            if diff == 0:
+                parts.append("Every touch feels important with the match finely balanced.")
+            elif diff == 1:
+                parts.append("The margin remains just one goal in a tense finish.")
+        elif self.state.minute <= 10:
+            parts.append("Both teams are still measuring each other in these early moments.")
+        # tactical/momentum flavor
+        try:
+            if side in ("home", "away"):
+                mom = self._momentum.get(side, 50.0)
+                if mom >= 62:
+                    parts.append(f"{self.state.team(side).team.name} have found a strong rhythm in this spell.")
+                elif mom <= 38:
+                    parts.append(f"{self.state.team(side).team.name} are working hard to regain control.")
+        except Exception:
+            pass
+        parts = [p for p in parts if p]
+        if not parts:
+            return ""
+        return " " + self.rng.choice(parts)
+
+    def _update_momentum(self, et: str, side: Side | None, payload: dict[str, Any] | None = None):
+        payload = payload or {}
+        def bump(s, delta):
+            self._momentum[s] = max(20.0, min(80.0, self._momentum.get(s, 50.0) + delta))
+            o = self.state.opp_side(s)
+            self._momentum[o] = max(20.0, min(80.0, self._momentum.get(o, 50.0) - delta * 0.8))
+        if side not in ("home", "away"):
+            return
+        if et in {E.GOAL, E.PENALTY_SCORED}:
+            bump(side, 8.0)
+        elif et in {E.CHANCE}:
+            bump(side, 2.5)
+        elif et in {E.SHOT} and payload.get("outcome") in {"on_target", "blocked"}:
+            bump(side, 1.5)
+        elif et in {E.SAVE, E.BLOCK}:
+            bump(self.state.opp_side(side) if et == E.SAVE else side, 1.2)
+        elif et in {E.CORNER}:
+            bump(side, 1.0)
+        elif et in {E.PASS_SEQUENCE}:
+            bump(side, 0.3)
+        elif et in {E.RED_CARD, E.SECOND_YELLOW}:
+            bump(self.state.opp_side(side), 6.0)
+        elif et in {E.YELLOW_CARD}:
+            bump(self.state.opp_side(side), 0.6)
+        elif et in {E.PENALTY_MISSED}:
+            bump(self.state.opp_side(side), 4.0)
+        elif et in {E.PENALTY_SAVED}:
+            bump(side, 4.0)  # GK side
+        # drift to balance slightly
+        for s in ("home", "away"):
+            self._momentum[s] += (50.0 - self._momentum[s]) * 0.01
+
     def _emit(self, et: str, side: Side | None = None, pid: int | None = None, payload: dict[str, Any] | None = None, commentary: str | None = None) -> dict[str, Any]:
         payload = payload or {}
         ev = {"seq": self.state.next_event_seq, "minute": self.state.minute, "extra_minute": self.state.extra_minute,
@@ -71,9 +151,21 @@ class MatchEngine:
               "payload": payload, "public_payload": payload}
         if commentary is None:
             commentary = gen_commentary(self.state, ev, self.rng)
-        ev["commentary"] = commentary
+        text = str(commentary or "").strip()
+        norm = self._norm_line(text)
+        if norm and norm in {self._norm_line(x) for x in list(self._recent_lines)[-25:]}:
+            suffix = self._context_suffix(et, side)
+            if suffix and not text.endswith(suffix.strip()):
+                text = text.rstrip() + suffix
+            else:
+                # fallback variation: add minute/score context
+                text = text.rstrip() + f" ({self.state.minute}'; {self.state.scoreline()})"
+        if text:
+            self._recent_lines.append(text)
+        ev["commentary"] = text
         self.state.events.append(MatchEvent.from_dict(ev))
         self.state.next_event_seq += 1
+        self._update_momentum(et, side, payload)
         return ev
 
     # --- queries ---
@@ -270,6 +362,12 @@ class MatchEngine:
         att = self._pick_att(hs, as_)
         deff = self.state.opp_side(att)
         self.state.possession_side = att
+        # pressure chain: sustained attacks increase chance quality
+        if self._last_attack_side == att:
+            self._pressure_chain = min(4, self._pressure_chain + 1)
+        else:
+            self._pressure_chain = 1 if self._last_attack_side is not None else 0
+        self._last_attack_side = att
         seq = self._possession(att, deff, hs, as_)
         evs.extend(seq)
         if not seq:
@@ -290,15 +388,29 @@ class MatchEngine:
             self.state.away.possession_share = round(100-self.state.home.possession_share,1)
 
     def _pick_att(self, hs, as_):
-        hc = hs["midfield"]*1.02 + hs["attack"]*0.2
-        ac = as_["midfield"] + as_["attack"]*0.2
+        hc = hs["midfield"]*1.05 + hs["attack"]*0.25 + hs.get("press", 50)*0.08
+        ac = as_["midfield"]*1.0 + as_["attack"]*0.25 + as_.get("press", 50)*0.08
+        # momentum and stamina influence
+        hc *= (0.85 + self._momentum.get("home", 50.0) / 200.0)
+        ac *= (0.85 + self._momentum.get("away", 50.0) / 200.0)
+        hc *= (0.75 + self._avg_stam("home") / 200.0)
+        ac *= (0.75 + self._avg_stam("away") / 200.0)
         diff = self.state.home.score - self.state.away.score
         mf = min(1.0, self.state.minute/90.0)
-        if diff>0: ac*=1+0.08*mf
-        elif diff<0: hc*=1+0.08*mf
+        # game-state realism: trailing side pushes more late
+        if diff > 0:
+            ac *= 1 + (0.06 + 0.08*mf)
+            hc *= 1 - 0.02*mf
+        elif diff < 0:
+            hc *= 1 + (0.06 + 0.08*mf)
+            ac *= 1 - 0.02*mf
+        # slight possession persistence for realism
+        if self.state.possession_side == "home":
+            hc *= 1.05
+        else:
+            ac *= 1.05
         p_home = hc/(hc+ac) if (hc+ac)>0 else 0.5
-        p_home += 0.04 if self.state.possession_side=="home" else -0.04
-        return "home" if self.rng.random() < max(0.25,min(0.75,p_home)) else "away"
+        return "home" if self.rng.random() < max(0.22,min(0.78,p_home)) else "away"
 
     def _quiet_detail(self, att, deff, hs, as_):
         an = self.state.team(att).team.name
@@ -352,22 +464,42 @@ class MatchEngine:
     def _possession(self, att, deff, hs, as_):
         evs=[]
         att_s = hs if att=="home" else as_; def_s = as_ if att=="home" else hs
-        pa = self.rng.randint(3,8)
-        pq = max(0.55,min(0.95,0.72 + (att_s["midfield"]/max(30,def_s["press"]*0.9+def_s["midfield"]*0.2)-1.0)*0.12))
-        pq -= max(0,(60-self._avg_stam(att))*0.002)
-        pc = int(round(pa*max(0.45,min(0.97,pq + self.rng.uniform(-0.05,0.05)))))
+        control = att_s["midfield"] / max(25.0, def_s["press"] * 0.85 + def_s["midfield"] * 0.35)
+        control += (self._momentum.get(att, 50.0) - 50.0) * 0.004
+        pa = self.rng.randint(3, 9)
+        pq = max(0.52, min(0.96, 0.70 + (control - 1.0) * 0.14))
+        pq -= max(0, (58 - self._avg_stam(att))) * 0.0025
+        pc = int(round(pa * max(0.40, min(0.98, pq + self.rng.uniform(-0.04, 0.04)))))
         stat_passes(self.state, att, pa, pc)
-        midp = self.pick(att,"mid")
-        if midp: from engine.ratings import record_pass_quality as rpq; rpq(self.state,att,midp.player_api_id,pc>=pa-1)
-        turnover = 0.10 + (def_s["press"]-att_s["midfield"])*0.003 + (100-self._avg_stam(att))*0.0008
-        if self.rng.random() < max(0.03,min(0.35,turnover)):
-            evs.extend(self._turnover(deff, att, def_s, att_s)); return evs
-        prog = (att_s["attack"]*0.55 + att_s["midfield"]*0.45)/max(25, def_s["defense"]*0.7 + def_s.get("compactness",1.0)*20)
-        chance_p = max(0.03,min(0.42,0.08 + (prog-1.0)*0.12))
-        if (att=="home" and self.state.home.score<self.state.away.score) or (att=="away" and self.state.away.score<self.state.home.score):
-            if self.state.minute>=70: chance_p*=1.08
+        midp = self.pick(att, "mid", "passing") or self.pick(att, "mid")
+        if midp:
+            from engine.ratings import record_pass_quality as rpq
+            rpq(self.state, att, midp.player_api_id, pc >= max(1, pa - 1))
+
+        # turnover likelihood shaped by pressing, control, fatigue
+        turnover = 0.09 + max(0.0, (def_s["press"] - att_s["midfield"] * 0.9)) * 0.0035
+        turnover += max(0, (100 - self._avg_stam(att))) * 0.0007
+        turnover -= (control - 1.0) * 0.03
+        if self.rng.random() < max(0.03, min(0.38, turnover)):
+            self._pressure_chain = 0
+            evs.extend(self._turnover(deff, att, def_s, att_s))
+            return evs
+
+        # progression/chance based on tactical matchup, attributes, momentum, pressure chain
+        prog = (att_s["attack"] * 0.5 + att_s["midfield"] * 0.35 + att_s.get("transition_attack", 50) * 0.15) / max(25.0, def_s["defense"] * 0.65 + def_s.get("compactness", 1.0) * 22 + def_s.get("transition_defense", 50) * 0.15)
+        chance_p = 0.07 + (prog - 1.0) * 0.13
+        chance_p += self._pressure_chain * 0.018
+        chance_p += (self._momentum.get(att, 50.0) - 50.0) * 0.0015
+        # game state: chasing team creates more but can be vulnerable
+        if (att == "home" and self.state.home.score < self.state.away.score) or (att == "away" and self.state.away.score < self.state.home.score):
+            if self.state.minute >= 65:
+                chance_p *= 1.10
+        if (att == "home" and self.state.home.score > self.state.away.score) or (att == "away" and self.state.away.score > self.state.home.score):
+            if self.state.minute >= 75:
+                chance_p *= 0.92  # protect lead a bit
+        chance_p = max(0.03, min(0.45, chance_p))
         if self.rng.random() < chance_p:
-            evs.extend(self._attack(att,deff,att_s,def_s))
+            evs.extend(self._attack(att, deff, att_s, def_s))
         return evs
 
     def _turnover(self, winner_side, loser_side, w_s, l_s):

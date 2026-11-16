@@ -153,7 +153,8 @@ class MatchService:
                              home_team: dict[str, Any], away_team: dict[str, Any], home_squad: list[dict[str, Any]], away_squad: list[dict[str, Any]],
                              home_lineup: Lineup | None = None, away_lineup: Lineup | None = None,
                              home_tactics: dict[str, Any] | None = None, away_tactics: dict[str, Any] | None = None,
-                             home_manager_id: int | None = None, away_manager_id: int | None = None) -> ActiveMatchSession:
+                             home_manager_id: int | None = None, away_manager_id: int | None = None,
+                             home_custom_players: list[dict[str, Any]] | None = None, away_custom_players: list[dict[str, Any]] | None = None) -> ActiveMatchSession:
         rng = random.Random()
         ht = Team(api_id=int(home_team["api_id"]), name=home_team.get("name", "Home"), league_id=home_team.get("league_id"), league_name=home_team.get("league_name"), country=home_team.get("country"), logo=home_team.get("logo"), short_name=home_team.get("short_name") or home_team.get("code"))
         at = Team(api_id=int(away_team["api_id"]), name=away_team.get("name", "Away"), league_id=away_team.get("league_id"), league_name=away_team.get("league_name"), country=away_team.get("country"), logo=away_team.get("logo"), short_name=away_team.get("short_name") or away_team.get("code"))
@@ -161,11 +162,13 @@ class MatchService:
         al = away_lineup or generate_ai_lineup(at.api_id, at.name, away_squad, rng)
         htac = home_tactics or (generate_ai_tactics(rng) if home_manager_id is None else default_tactics())
         atac = away_tactics or (generate_ai_tactics(rng) if away_manager_id is None else default_tactics())
+        home_players = self._players_from_squad(home_squad, ht.api_id) + self._players_from_squad(home_custom_players or [], ht.api_id)
+        away_players = self._players_from_squad(away_squad, at.api_id) + self._players_from_squad(away_custom_players or [], at.api_id)
         engine = MatchEngine.initialize(
             match_id=new_match_id(), guild_id=guild_id, channel_id=channel_id, mode=mode,
             home_team=ht, away_team=at, home_lineup=hl, away_lineup=al,
             home_tactics=htac, away_tactics=atac,
-            home_players=self._players_from_squad(home_squad, ht.api_id), away_players=self._players_from_squad(away_squad, at.api_id),
+            home_players=home_players, away_players=away_players,
         )
         session = ActiveMatchSession(state=engine.state, engine=engine, db=self.db, home_manager_id=home_manager_id, away_manager_id=away_manager_id)
         self.sessions[engine.state.id] = session

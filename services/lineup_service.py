@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,10 +14,10 @@ class LineupValidationError(ValueError):
 
 
 POSITION_ALIASES = {
-    "GK": "GK", "G": "GK", "GOALKEEPER": "GK",
-    "DEF": "DEF", "D": "DEF", "DEFENDER": "DEF", "CB": "DEF", "LB": "DEF", "RB": "DEF", "LWB": "DEF", "RWB": "DEF", "WB": "DEF",
+    "GK": "GK", "G": "GK", "GOALKEEPER": "GK", "KEEPER": "GK",
+    "DEF": "DEF", "D": "DEF", "DEFENDER": "DEF", "CB": "DEF", "LB": "DEF", "RB": "DEF", "LWB": "DEF", "RWB": "DEF", "WB": "DEF", "FB": "DEF",
     "MID": "MID", "M": "MID", "MIDFIELDER": "MID", "CM": "MID", "DM": "MID", "AM": "MID", "CDM": "MID", "CAM": "MID", "LM": "MID", "RM": "MID",
-    "FWD": "FWD", "F": "FWD", "ATT": "FWD", "ATTACKER": "FWD", "FORWARD": "FWD", "ST": "FWD", "CF": "FWD", "FW": "FWD", "LW": "FWD", "RW": "FWD",
+    "FWD": "FWD", "F": "FWD", "ATT": "FWD", "ATTACKER": "FWD", "FORWARD": "FWD", "ST": "FWD", "CF": "FWD", "FW": "FWD", "LW": "FWD", "RW": "FWD", "STRIKER": "FWD",
 }
 
 
@@ -24,58 +26,202 @@ def norm_pos(pos: str | None) -> str:
     return POSITION_ALIASES.get(p, p if p in {"GK", "DEF", "MID", "FWD"} else "MID")
 
 
+def _norm_name(name: str | None) -> str:
+    s = str(name or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
 def _player_from_any(p: Any) -> dict[str, Any]:
+    if isinstance(p, str):
+        name = p.strip() or "Unknown"
+        return {"api_id": 0, "name": name, "position": "MID", "team_api_id": 0, "number": None}
+    if isinstance(p, int):
+        return {"api_id": int(p), "name": str(p), "position": "MID", "team_api_id": 0, "number": None}
     if isinstance(p, dict):
+        name = p.get("name") or p.get("player_name") or p.get("full_name") or "Unknown"
+        raw_id = p.get("api_id", p.get("id", p.get("player_id", 0)))
+        try:
+            api_id = int(raw_id) if raw_id not in (None, "") else 0
+        except Exception:
+            api_id = 0
+        try:
+            tid = int(p.get("team_api_id") or p.get("team_id") or 0)
+        except Exception:
+            tid = 0
         return {
-            "api_id": int(p.get("api_id") or p.get("id") or 0),
-            "name": p.get("name") or p.get("player_name") or "Unknown",
-            "position": norm_pos(p.get("position") or p.get("pos") or "MID"),
-            "team_api_id": int(p.get("team_api_id") or p.get("team_id") or 0),
+            "api_id": api_id,
+            "name": str(name),
+            "position": norm_pos(p.get("position") or p.get("pos") or p.get("role") or "MID"),
+            "team_api_id": tid,
             "number": p.get("number"),
         }
     # Player object
-    return {"api_id": int(getattr(p, "api_id", 0)), "name": getattr(p, "name", "Unknown"), "position": norm_pos(getattr(p, "position", "MID")), "team_api_id": int(getattr(p, "team_api_id", 0)), "number": getattr(p, "number", None)}
+    return {
+        "api_id": int(getattr(p, "api_id", 0) or 0),
+        "name": str(getattr(p, "name", "Unknown") or "Unknown"),
+        "position": norm_pos(getattr(p, "position", "MID")),
+        "team_api_id": int(getattr(p, "team_api_id", 0) or 0),
+        "number": getattr(p, "number", None),
+    }
 
 
-def validate_lineup(*, team_api_id: int, team_name: str, formation: str, starters: list[Any], bench: list[Any], squad: list[Any] | None = None, captain_player_id: int | None = None, goalkeeper_player_id: int | None = None) -> Lineup:
+def _synthetic_api_id(team_api_id: int, name: str) -> int:
+    base = f"custom:{int(team_api_id)}:{_norm_name(name)}"
+    h = zlib.adler32(base.encode("utf-8")) & 0x7FFFFFFF
+    # Negative IDs reserved for custom/synthetic players
+    return -(h or 1)
+
+
+def _build_squad_name_index(squad: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    idx: dict[str, dict[str, Any]] = {}
+    for x in (squad or []):
+        sp = _player_from_any(x)
+        if sp.get("name"):
+            idx[_norm_name(sp["name"])] = sp
+        orig = x if isinstance(x, dict) else {}
+        for k in ("short_name", "common_name"):
+            if orig.get(k):
+                idx[_norm_name(str(orig.get(k)))] = sp
+    return idx
+
+
+def resolve_lineup_player(raw: Any, squad_map: dict[int, dict[str, Any]], squad_name_idx: dict[str, dict[str, Any]], team_api_id: int) -> tuple[dict[str, Any], bool]:
+    """Return (resolved_player_dict, is_custom). Resolves by id, then by name in squad, else creates custom player."""
+    p = _player_from_any(raw)
+    pid = int(p.get("api_id") or 0)
+    if pid and pid in squad_map:
+        sp = dict(squad_map[pid])
+        # allow caller to override slot position intent? keep squad pos but preserve explicit if provided
+        if isinstance(raw, dict) and raw.get("position"):
+            sp["position"] = norm_pos(raw.get("position"))
+        if isinstance(raw, dict) and raw.get("name"):
+            sp["name"] = str(raw.get("name"))
+        sp.setdefault("custom", False)
+        return sp, False
+
+    # Try name match in squad
+    name_key = _norm_name(p.get("name"))
+    if name_key and name_key in squad_name_idx:
+        sp = dict(squad_name_idx[name_key])
+        if isinstance(raw, dict) and raw.get("position"):
+            sp["position"] = norm_pos(raw.get("position"))
+        if isinstance(raw, dict) and raw.get("name"):
+            sp["name"] = str(raw.get("name"))
+        sp.setdefault("custom", False)
+        return sp, False
+
+    # Custom player
+    custom_name = str(p.get("name") or "Custom Player").strip() or "Custom Player"
+    custom_id = pid if pid < 0 else _synthetic_api_id(team_api_id, custom_name)
+    # avoid collision with squad IDs (extremely unlikely with negative ids)
+    pos = norm_pos(p.get("position") or "MID")
+    cp = {
+        "api_id": int(custom_id),
+        "name": custom_name,
+        "position": pos,
+        "team_api_id": int(team_api_id),
+        "number": p.get("number"),
+        "custom": True,
+        "attributes": _default_custom_attributes(pos),
+    }
+    return cp, True
+
+
+def _default_custom_attributes(pos: str) -> dict[str, float]:
+    pos = norm_pos(pos)
+    base = 68.0
+    attrs = {
+        "pace": base, "acceleration": base, "stamina": 72.0, "strength": base,
+        "shooting": base, "finishing": base, "passing": base, "crossing": base - 2,
+        "dribbling": base, "tackling": base, "interceptions": base, "defensive_awareness": base,
+        "positioning": base, "vision": base, "creativity": base, "decision_making": 68.0,
+        "composure": 68.0, "heading": base, "goalkeeping": 10.0,
+    }
+    if pos == "GK":
+        attrs.update({"goalkeeping": 72.0, "positioning": 70.0, "passing": 60.0, "tackling": 20.0, "finishing": 15.0, "shooting": 15.0, "dribbling": 35.0, "crossing": 30.0})
+    elif pos == "DEF":
+        attrs.update({"tackling": 72.0, "interceptions": 71.0, "defensive_awareness": 72.0, "heading": 71.0, "strength": 71.0, "finishing": 45.0, "shooting": 45.0})
+    elif pos == "MID":
+        attrs.update({"passing": 72.0, "vision": 71.0, "creativity": 70.0, "stamina": 74.0, "decision_making": 70.0})
+    elif pos == "FWD":
+        attrs.update({"finishing": 72.0, "shooting": 72.0, "pace": 71.0, "positioning": 72.0, "dribbling": 70.0, "tackling": 40.0, "defensive_awareness": 45.0, "interceptions": 40.0})
+    return {k: float(max(5.0, min(95.0, v))) for k, v in attrs.items()}
+
+
+def validate_lineup(*, team_api_id: int, team_name: str, formation: str, starters: list[Any], bench: list[Any], squad: list[Any] | None = None, captain_player_id: int | None = None, goalkeeper_player_id: int | None = None, return_custom: bool = False):
     if formation not in SUPPORTED_FORMATIONS:
         raise LineupValidationError(f"Unsupported formation '{formation}'. Supported: {', '.join(SUPPORTED_FORMATIONS)}")
     slots = get_formation_slots(formation)
-    s = [_player_from_any(x) for x in starters]
-    b = [_player_from_any(x) for x in bench]
+
+    squad_map = {int(_player_from_any(x)["api_id"]): _player_from_any(x) for x in (squad or [])}
+    squad_name_idx = _build_squad_name_index(squad)
+    custom_players: list[dict[str, Any]] = []
+    custom_seen: set[int] = set()
+
+    def _resolve(raw: Any) -> dict[str, Any]:
+        rp, is_custom = resolve_lineup_player(raw, squad_map, squad_name_idx, team_api_id)
+        # keep explicitly provided position/name intent where sensible
+        if isinstance(raw, dict):
+            if raw.get("position"):
+                rp["position"] = norm_pos(raw.get("position"))
+            if raw.get("name") and is_custom:
+                rp["name"] = str(raw.get("name"))
+        if is_custom and rp["api_id"] not in custom_seen:
+            custom_seen.add(int(rp["api_id"]))
+            custom_players.append(rp)
+        return rp
+
+    s = [_resolve(x) for x in starters]
+    b = [_resolve(x) for x in bench]
     if len(s) != 11:
         raise LineupValidationError(f"Starters must contain exactly 11 players (got {len(s)})")
     if len(b) > 9:
         raise LineupValidationError(f"Bench cannot exceed 9 players (got {len(b)})")
-    ids = [x["api_id"] for x in s + b]
+
+    # Ensure unique IDs (including custom-generated) - if collision due to same name, disambiguate
+    def _dedupe(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: dict[int, int] = {}
+        out = []
+        for pl in players:
+            pid = int(pl["api_id"])
+            if pid in seen:
+                seen[pid] += 1
+                pid = pid - seen[pid]  # make unique negative/offset
+                pl = dict(pl)
+                pl["api_id"] = pid
+                if pl.get("custom"):
+                    custom_seen.add(pid)
+                    custom_players.append(pl)
+            else:
+                seen[pid] = 0
+            out.append(pl)
+        return out
+
+    s = _dedupe(s)
+    b = _dedupe(b)
+    ids = [int(x["api_id"]) for x in s + b]
     if len(set(ids)) != len(ids):
         raise LineupValidationError("Duplicate players found in lineup/bench")
-    squad_map = {int(_player_from_any(x)["api_id"]): _player_from_any(x) for x in (squad or [])}
-    if squad_map:
-        for pid in ids:
-            if pid not in squad_map:
-                raise LineupValidationError(f"Player {pid} is not in the selected squad")
+
     # GK check
     gks = [x for x in s if norm_pos(x.get("position")) == "GK"]
     if len(gks) != 1:
         raise LineupValidationError(f"Starting XI must include exactly 1 goalkeeper (found {len(gks)})")
     if goalkeeper_player_id and gks[0]["api_id"] != int(goalkeeper_player_id):
-        # allow but normalize
-        gk_match = next((x for x in s if x["api_id"] == int(goalkeeper_player_id)), None)
+        gk_match = next((x for x in s if int(x["api_id"]) == int(goalkeeper_player_id)), None)
         if not gk_match or norm_pos(gk_match.get("position")) != "GK":
             raise LineupValidationError("goalkeeper_player_id must refer to a starting goalkeeper")
     else:
-        goalkeeper_player_id = gks[0]["api_id"]
-    # formation compatibility (relaxed): ensure counts by group feasible
+        goalkeeper_player_id = int(gks[0]["api_id"])
+
     starters_entries: list[LineupEntry] = []
     assigned = set()
-    # assign GK slot first
     gk_slot = next(sl for sl in slots if sl.group == "GK")
-    starters_entries.append(LineupEntry(player_api_id=gks[0]["api_id"], name=gks[0]["name"], position="GK", slot=gk_slot.code))
-    assigned.add(gks[0]["api_id"])
+    starters_entries.append(LineupEntry(player_api_id=int(gks[0]["api_id"]), name=str(gks[0]["name"]), position="GK", slot=gk_slot.code))
+    assigned.add(int(gks[0]["api_id"]))
     remaining_slots = [sl for sl in slots if sl.group != "GK"]
-    remaining_players = [x for x in s if x["api_id"] not in assigned]
-    # greedy compatible assignment
+    remaining_players = [x for x in s if int(x["api_id"]) not in assigned]
     for sl in remaining_slots:
         pick_idx = None
         for i, pl in enumerate(remaining_players):
@@ -84,7 +230,6 @@ def validate_lineup(*, team_api_id: int, team_name: str, formation: str, starter
                 pick_idx = i
                 break
         if pick_idx is None:
-            # allow flexible: take any outfield
             for i, pl in enumerate(remaining_players):
                 if norm_pos(pl.get("position")) != "GK":
                     pick_idx = i
@@ -92,13 +237,15 @@ def validate_lineup(*, team_api_id: int, team_name: str, formation: str, starter
         if pick_idx is None:
             raise LineupValidationError(f"Cannot assign player to slot {sl.code}")
         pl = remaining_players.pop(pick_idx)
-        starters_entries.append(LineupEntry(player_api_id=pl["api_id"], name=pl["name"], position=norm_pos(pl.get("position")), slot=sl.code))
-    bench_entries = [LineupEntry(player_api_id=x["api_id"], name=x["name"], position=norm_pos(x.get("position")), slot=None) for x in b]
+        starters_entries.append(LineupEntry(player_api_id=int(pl["api_id"]), name=str(pl["name"]), position=norm_pos(pl.get("position")), slot=sl.code))
+    bench_entries = [LineupEntry(player_api_id=int(x["api_id"]), name=str(x["name"]), position=norm_pos(x.get("position")), slot=None) for x in b]
     if captain_player_id is None or int(captain_player_id) not in {e.player_api_id for e in starters_entries}:
-        # default captain: first outfield starter
         out = next((e for e in starters_entries if e.position != "GK"), starters_entries[0])
         captain_player_id = out.player_api_id
-    return Lineup(team_api_id=team_api_id, team_name=team_name, formation=formation, starters=starters_entries, bench=bench_entries, captain_player_id=int(captain_player_id), goalkeeper_player_id=int(goalkeeper_player_id))
+    lu = Lineup(team_api_id=team_api_id, team_name=team_name, formation=formation, starters=starters_entries, bench=bench_entries, captain_player_id=int(captain_player_id), goalkeeper_player_id=int(goalkeeper_player_id))
+    if return_custom:
+        return lu, custom_players
+    return lu
 
 
 def auto_build_lineup(team_api_id: int, team_name: str, squad: list[dict[str, Any]], formation: str = "4-3-3") -> Lineup:

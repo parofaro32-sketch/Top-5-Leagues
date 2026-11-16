@@ -85,7 +85,8 @@ class FootballDataService:
 
     async def ensure_seeded(self) -> None:
         # Seed bundled teams/players into DB for fast lookup and persistence
-        meta = await self.db.get_cache_meta("bundled_seed_v2")
+        seed_key = "bundled_seed_v4"
+        meta = await self.db.get_cache_meta(seed_key)
         if meta:
             return
         for league_key in list_league_keys():
@@ -94,7 +95,7 @@ class FootballDataService:
             for t in teams:
                 players = [normalize_player(p, t["api_id"]) for p in get_team_players(t["api_id"], league_key)]
                 await self.db.upsert_players(players, t["api_id"], self.season)
-        await self.db.set_cache_meta("bundled_seed_v2", {"ok": True, "season": self.season}, None)
+        await self.db.set_cache_meta(seed_key, {"ok": True, "season": self.season}, None)
 
     async def list_teams(self, query: str | None = None, league: str | None = None, limit: int = 25) -> list[dict[str, Any]]:
         league_key = resolve_league_key(league) if league else None

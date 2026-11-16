@@ -65,12 +65,33 @@ def _phase_flavor(state: MatchState, rng: random.Random) -> str:
 
 def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> str:
     payload = event.get("payload") or {}
-    # Prefer engine-provided detailed text when available
+    # Prefer engine-provided detailed text when available, but enrich it for depth
     detail = payload.get("detail")
     if detail:
-        txt = str(detail)
+        txt = str(detail).strip()
         if not txt.startswith(("0'", "1'", "2'", "3'", "4'", "5'", "6'", "7'", "8'", "9'")):
-            return f"{_prefix(state, event)} — {txt}"
+            txt = f"{_prefix(state, event)} — {txt}"
+        # Occasionally add extra narrative context for key/flow events
+        et = event.get("event_type")
+        if et in {E.GOAL, E.PENALTY_SCORED, E.PENALTY_SAVED, E.PENALTY_MISSED, E.RED_CARD, E.SECOND_YELLOW, E.DISALLOWED_GOAL}:
+            extra = _pick(rng, [
+                f" The atmosphere spikes as the score stands at {_score(state)}.",
+                f" A pivotal moment in the story of this match at {_score(state)}.",
+                f" You can feel the momentum swing after that incident.",
+                "",
+                "",
+            ])
+            if extra and extra.strip() not in txt:
+                txt += extra
+        elif et in {E.CHANCE, E.SAVE, E.BLOCK} and rng.random() < 0.35:
+            extra = _pick(rng, [
+                " The margins are incredibly fine in this phase.",
+                " Both benches react instantly on the touchline.",
+                " That passage underlines the quality on display.",
+                " It was a move built with real intent and precision.",
+            ])
+            if extra and extra.strip() not in txt:
+                txt += extra
         return txt
 
     et = event.get("event_type")
