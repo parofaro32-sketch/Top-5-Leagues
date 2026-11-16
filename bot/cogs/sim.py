@@ -81,6 +81,101 @@ def _format_break_status(state: dict[str, Any]) -> str:
     return _clamp("\n".join(lines))
 
 
+def _find_player_in_report(report: dict[str, Any], name: str | None, team_name: str | None = None) -> dict[str, Any] | None:
+    if not name:
+        return None
+    want = str(name).strip().lower()
+    ratings = report.get("player_ratings") or {}
+    pools = []
+    if team_name:
+        # try to match side by team name
+        fs = report.get("final_score", {})
+        if str(fs.get("home_team", "")).strip().lower() == str(team_name).strip().lower():
+            pools = [ratings.get("home", [])]
+        elif str(fs.get("away_team", "")).strip().lower() == str(team_name).strip().lower():
+            pools = [ratings.get("away", [])]
+    if not pools:
+        pools = [ratings.get("home", []), ratings.get("away", [])]
+    for pool in pools:
+        for p in pool or []:
+            if str(p.get("name", "")).strip().lower() == want:
+                return p
+    return None
+
+
+def _motm_reason(report: dict[str, Any], motm: dict[str, Any] | None) -> str:
+    if not motm:
+        return "Delivered a standout performance across the match"
+    name = motm.get("name")
+    team = motm.get("team")
+    p = _find_player_in_report(report, name, team) or {}
+    goals = int(p.get("goals") or motm.get("goals") or 0)
+    assists = int(p.get("assists") or motm.get("assists") or 0)
+    saves = int(p.get("saves") or 0)
+    key_passes = int(p.get("key_passes") or 0)
+    tackles = int(p.get("tackles") or 0)
+    interceptions = int(p.get("interceptions") or 0)
+    shots = int(p.get("shots") or 0)
+    shots_on_target = int(p.get("shots_on_target") or 0)
+    pos = str(p.get("position") or "").upper()
+    rating = motm.get("rating", p.get("rating"))
+
+    parts = []
+    if goals >= 2:
+        parts.append("scored a decisive brace")
+    elif goals == 1:
+        parts.append("scored a crucial goal")
+    if assists >= 2:
+        parts.append("provided multiple assists")
+    elif assists == 1:
+        parts.append("supplied a key assist")
+    if pos == "GK":
+        if saves >= 5:
+            parts.append("made several outstanding saves")
+        elif saves >= 3:
+            parts.append("produced important saves to keep his side in control")
+    else:
+        if key_passes >= 3:
+            parts.append("consistently unlocked the opposition with creative passing")
+        elif key_passes >= 1 and not assists:
+            parts.append("created dangerous opportunities in the final third")
+        if tackles + interceptions >= 6:
+            parts.append("dominated defensive duels and broke up play effectively")
+        elif tackles + interceptions >= 3:
+            parts.append("worked tirelessly out of possession")
+        if shots_on_target >= 3 and goals == 0:
+            parts.append("tested the goalkeeper repeatedly with quality efforts")
+
+    if not parts:
+        # fallback by rating/role
+        try:
+            r = float(rating)
+        except Exception:
+            r = 7.0
+        if pos == "GK":
+            parts.append("commanded his area with confidence and composure")
+        elif r >= 8.0:
+            parts.append("controlled key moments and influenced the match at both ends")
+        elif r >= 7.2:
+            parts.append("delivered a composed and influential all-round display")
+        else:
+            parts.append("made a telling impact in important phases of the game")
+
+    # keep it concise and readable
+    if len(parts) == 1:
+        reason = parts[0]
+    elif len(parts) == 2:
+        reason = f"{parts[0]} and {parts[1]}"
+    else:
+        reason = f"{parts[0]}, {parts[1]}, and {parts[2]}"
+    reason = reason.strip()
+    if reason:
+        reason = reason[0].upper() + reason[1:]
+    if not reason.endswith(('.', '!', '?')):
+        reason += '.'
+    return reason
+
+
 def _format_report(report: dict[str, Any]) -> list[str]:
     fs = report.get("final_score", {})
     stats = report.get("statistics", {})
@@ -88,32 +183,50 @@ def _format_report(report: dict[str, Any]) -> list[str]:
     a = stats.get("away", {})
     msgs: list[str] = []
 
-    lines = [f"**Full-Time: {fs.get('scoreline','')}**", ""]
-    goals = report.get("goalscorers", [])
+    scoreline = fs.get('scoreline') or f"{fs.get('home_team','Home')} {fs.get('home_score',0)} - {fs.get('away_score',0)} {fs.get('away_team','Away')}"
+    goals = report.get("goalscorers", []) or []
+
+    # Requested full-time summary format
+    summary_lines = [
+        "🏆 MATCH SUMMARY (Full-Time Only)",
+        scoreline,
+    ]
     if goals:
-        lines.append("**Goalscorers**")
+        summary_lines.append("")
         for g in goals:
             m = f"{g.get('minute',0)}{('+'+str(g.get('extra_minute'))) if g.get('extra_minute') else ''}'"
             who = g.get('scorer') or 'Unknown'
-            team = g.get('team') or ''
-            ast = f" (assist: {g.get('assist')})" if g.get('assist') else ''
-            lines.append(f"- {m} {who} — {team}{ast}")
+            assist = g.get('assist') or 'None'
+            summary_lines.append(f"⚽  {m}: {who} (Assist: {assist})")
     else:
-        lines.append("**Goalscorers:** None")
-    lines.append("")
-    lines.append("**Match Statistics**")
-    lines.append(f"Possession: {h.get('possession',0)}% - {a.get('possession',0)}%")
-    lines.append(f"Shots (on target): {h.get('shots',0)} ({h.get('shots_on_target',0)}) - {a.get('shots',0)} ({a.get('shots_on_target',0)})")
-    lines.append(f"xG: {h.get('xg',0)} - {a.get('xg',0)}")
-    lines.append(f"Corners: {h.get('corners',0)} - {a.get('corners',0)}")
-    lines.append(f"Fouls: {h.get('fouls',0)} - {a.get('fouls',0)}")
-    lines.append(f"Cards (Y/R): {h.get('yellow_cards',0)}/{h.get('red_cards',0)} - {a.get('yellow_cards',0)}/{a.get('red_cards',0)}")
-    lines.append(f"Pass accuracy: {h.get('pass_accuracy',0)}% - {a.get('pass_accuracy',0)}%")
+        summary_lines.append("")
+        summary_lines.append("⚽  No goals")
+
     motm = report.get("man_of_the_match")
     if motm:
-        lines.append("")
-        lines.append(f"**Man of the Match:** {motm.get('name')} ({motm.get('team')}) — {motm.get('rating')}★")
-    msgs.append(_clamp("\n".join(lines)))
+        reason = _motm_reason(report, motm)
+        motm_name = motm.get('name') or 'Unknown'
+        motm_rating = motm.get('rating', '-')
+        summary_lines.append("")
+        summary_lines.append(f"MOTM: {motm_name} - {motm_rating} *({reason})*")
+
+    summary_block = "🏆 **Match Summary & Post-Match Wrap-Up**\n```\n" + "\n".join(summary_lines) + "\n```"
+    msgs.append(_clamp(summary_block, 1900))
+
+    # Detailed statistics and records (kept for completeness)
+    detail_lines = [
+        f"**Full-Time Details: {scoreline}**",
+        "",
+        "**Match Statistics**",
+        f"Possession: {h.get('possession',0)}% - {a.get('possession',0)}%",
+        f"Shots (on target): {h.get('shots',0)} ({h.get('shots_on_target',0)}) - {a.get('shots',0)} ({a.get('shots_on_target',0)})",
+        f"xG: {h.get('xg',0)} - {a.get('xg',0)}",
+        f"Corners: {h.get('corners',0)} - {a.get('corners',0)}",
+        f"Fouls: {h.get('fouls',0)} - {a.get('fouls',0)}",
+        f"Cards (Y/R): {h.get('yellow_cards',0)}/{h.get('red_cards',0)} - {a.get('yellow_cards',0)}/{a.get('red_cards',0)}",
+        f"Pass accuracy: {h.get('pass_accuracy',0)}% - {a.get('pass_accuracy',0)}%",
+    ]
+    msgs.append(_clamp("\n".join(detail_lines)))
 
     # Ratings summary per team
     def fmt_team(side_key: str, label: str) -> str:
