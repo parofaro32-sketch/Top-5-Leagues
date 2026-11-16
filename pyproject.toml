@@ -1,0 +1,28 @@
+[project]
+name = "discord-football-manager-bot"
+version = "0.1.0"
+description = "Professional Discord football manager and realistic match simulation bot for the top 5 European leagues"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "discord.py>=2.4.0",
+  "python-dotenv>=1.0.1",
+  "aiohttp>=3.10.0",
+  "aiosqlite>=0.20.0",
+  "pypdf>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

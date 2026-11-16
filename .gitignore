@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+ENV/
+
+# Local data
+*.sqlite3
+*.db
+*.db-journal
+data/cache/
+.cache/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime
+/tmp/kilo2/
+
+# Secrets
+.env
+.env.local
+.env.*.local
