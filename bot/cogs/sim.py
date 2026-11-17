@@ -621,6 +621,13 @@ class SimCog(commands.Cog):
 
     async def _send_events_live(self, channel: discord.abc.Messageable, events: list[dict[str, Any]], delay: float = 3.0, state=None):
         import re as _re
+        events = list(events or [])
+        match_id = getattr(state, "id", None) if state is not None else None
+        if not events:
+            logger.warning("MATCH_FLOW send_events_live: empty events list match_id=%s", match_id)
+            return
+        sent = 0
+        silent = 0
         for ev in events:
             text = ev.get("commentary")
             payload = ev.get("payload") or {}
@@ -631,6 +638,7 @@ class SimCog(commands.Cog):
                     text = payload.get("detail") or payload.get("summary") or ""
             if not text:
                 # fallback: skip silent/internal events but keep pacing sane
+                silent += 1
                 if delay > 0:
                     await asyncio.sleep(delay)
                 continue
@@ -678,6 +686,7 @@ class SimCog(commands.Cog):
                     if et == "goal":
                         banner = f"# ⚽ {home_name.upper()} {hs}-{as_} {away_name.upper()}"
                         await channel.send(_clamp(banner, 1900))
+                    sent += 1
                 elif et == "substitution" and state is not None:
                     minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
                     extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
@@ -690,6 +699,7 @@ class SimCog(commands.Cog):
                     reason_txt = f" — {reason}" if reason else ""
                     msg = f"- **{mtxt}** — 🔁 **Substitution ({team_name}):** {on_name} comes on for {off_name}{reason_txt}."
                     await channel.send(_clamp(msg, 1900))
+                    sent += 1
                 elif et == "tactical_change" and state is not None:
                     minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
                     extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
@@ -699,12 +709,15 @@ class SimCog(commands.Cog):
                     summary = payload.get("summary") or payload.get("detail") or "tactical adjustment"
                     msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** {summary}"
                     await channel.send(_clamp(msg, 1900))
+                    sent += 1
                 else:
                     await channel.send(_clamp(str(text), 1900))
+                    sent += 1
             except Exception:
                 logger.exception("Failed to send match event message")
             if delay > 0:
                 await asyncio.sleep(delay)
+        logger.info("MATCH_FLOW send_events_live done match_id=%s total=%s sent=%s silent=%s", match_id, len(events), sent, silent)
 
     async def _send_live_ratings(self, channel: discord.abc.Messageable, session) -> None:
         try:
