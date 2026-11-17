@@ -623,12 +623,17 @@ class SimCog(commands.Cog):
         import re as _re
         for ev in events:
             text = ev.get("commentary")
+            payload = ev.get("payload") or {}
             if not text:
+                text = payload.get("detail") or payload.get("summary") or ""
+            if not text:
+                # fallback: skip silent internal events but keep pacing sane
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 continue
             try:
                 et = ev.get("event_type")
                 if et in {"goal", "penalty_scored"} and state is not None:
-                    payload = ev.get("payload") or {}
                     minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
                     extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
@@ -671,7 +676,6 @@ class SimCog(commands.Cog):
                         banner = f"# ⚽ {home_name.upper()} {hs}-{as_} {away_name.upper()}"
                         await channel.send(_clamp(banner, 1900))
                 elif et == "substitution" and state is not None:
-                    payload = ev.get("payload") or {}
                     minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
                     extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
@@ -684,7 +688,6 @@ class SimCog(commands.Cog):
                     msg = f"- **{mtxt}** — 🔁 **Substitution ({team_name}):** {on_name} comes on for {off_name}{reason_txt}."
                     await channel.send(_clamp(msg, 1900))
                 elif et == "tactical_change" and state is not None:
-                    payload = ev.get("payload") or {}
                     minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
                     extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"

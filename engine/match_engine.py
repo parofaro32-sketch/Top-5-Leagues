@@ -660,7 +660,7 @@ class MatchEngine:
             evs.extend(self._save_event(att, deff, finisher, gk, xg, narrative=detail))
             if corner and gk:
                 stat_corner(self.state, att)
-                evs.append(self._emit(E.CORNER, att, {"detail": f"The save forces a corner for {an}."}, commentary=""))
+                evs.append(self._emit(E.CORNER, att, {"detail": f"The save forces a corner for {an}."}))
         return evs
 
     def _gk_str(self, side):
