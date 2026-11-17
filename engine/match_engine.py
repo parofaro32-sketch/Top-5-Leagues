@@ -736,11 +736,12 @@ class MatchEngine:
             action = self.rng.choice(save_actions)
         elif outcome == "goal":
             goal_actions = [
-                f"and fires {shot} into the back of the net",
-                f"and guides {shot} beyond {gk_name} into the corner",
-                f"and drills {shot} past {gk_name}",
-                f"before dispatching {shot} confidently past {gk_name}",
-                f"and curls {shot} beautifully into the far corner",
+                f"and fires {shot} low into the back of the net",
+                f"and guides {shot} beyond {gk_name} and into the far corner",
+                f"and drills {shot} clinically past {gk_name}",
+                f"before dispatching {shot} with a composed finish past {gk_name}",
+                f"and curls {shot} beautifully beyond {gk_name}'s reach",
+                f"and slots {shot} calmly past {gk_name} from close range",
             ]
             action = self.rng.choice(goal_actions)
         elif outcome == "blocked":
@@ -779,7 +780,6 @@ class MatchEngine:
                 ])
         # Join intro and action smoothly
         text = f"{intro}, and {action}" if not action.startswith("and ") and not action.startswith("but ") and not action.startswith("before ") else f"{intro}, {action}"
-        # capitalise start and ensure punctuation
         text = text.strip()
         if text and not text[0].isupper():
             text = text[0].upper() + text[1:]

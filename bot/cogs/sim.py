@@ -553,13 +553,65 @@ class SimCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    async def _send_events_live(self, channel: discord.abc.Messageable, events: list[dict[str, Any]], delay: float = 3.0):
+    async def _send_events_live(self, channel: discord.abc.Messageable, events: list[dict[str, Any]], delay: float = 3.0, state=None):
         for ev in events:
             text = ev.get("commentary")
             if not text:
                 continue
             try:
-                await channel.send(_clamp(str(text), 1900))
+                et = ev.get("event_type")
+                if et in {"goal", "penalty_scored"} and state is not None:
+                    # Format goal as requested: bullet line + attribution sub-line + score banner
+                    payload = ev.get("payload") or {}
+                    minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
+                    extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
+                    mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                    side = ev.get("team_side")
+                    # scorer name
+                    scorer = payload.get("player_name") or payload.get("scorer_name")
+                    if not scorer and side and ev.get("player_api_id"):
+                        ps = state.player_states.get(state.player_key(side, int(ev.get("player_api_id")))) if hasattr(state, "player_states") else None
+                        scorer = ps.name if ps else "Unknown"
+                    scorer = scorer or "Unknown"
+                    assist = payload.get("assist_name")
+                    assist_txt = assist if assist else "None"
+                    # score after goal
+                    sc = payload.get("score") or {}
+                    hs = sc.get("home", getattr(state.home, "score", 0))
+                    as_ = sc.get("away", getattr(state.away, "score", 0))
+                    home_name = state.home.team.name
+                    away_name = state.away.team.name
+                    scoreline = f"{home_name} {hs} - {as_} {away_name}"
+                    # clean narrative text
+                    narrative = str(text).strip()
+                    # strip leading minute marker if present (e.g. "59' — ..." or "59+2' — ")
+                    import re as _re
+                    narrative = _re.sub(r"^(?:-?\s*\*\*)?\d+(?:\+\d+)?'\*?\*?\s*[—\-:]+\s*", "", narrative)
+                    # ensure goal emphasis
+                    if not _re.search(r"GOAL", narrative, _re.IGNORECASE):
+                        narrative = f"**⚽ GOAL!** {narrative}"
+                    else:
+                        # normalize to **⚽ GOAL!** if possible
+                        narrative = _re.sub(r"\bGOAL!?\b", "**⚽ GOAL!**", narrative, count=1)
+                        if "**⚽ GOAL!**" not in narrative and "⚽ GOAL" in narrative.upper():
+                            narrative = narrative
+                    # append score context in parens if not already present
+                    if f"{home_name} {hs}" not in narrative and f"{hs} - {as_}" not in narrative and f"{hs}-{as_}" not in narrative:
+                        narrative = narrative.rstrip()
+                        if narrative.endswith("!"):
+                            narrative = narrative[:-1].rstrip() + f"! **({scoreline})**"
+                        elif narrative.endswith("."):
+                            narrative = narrative[:-1].rstrip() + f". **({scoreline})**"
+                        else:
+                            narrative = narrative + f" **({scoreline})**"
+                    msg = f"- **{mtxt}** — {narrative}\n  * *(Goal: {scorer} | Assist: {assist_txt})*"
+                    await channel.send(_clamp(msg, 1900))
+                    # score banner after goal
+                    if et == "goal":
+                        banner = f"# ⚽ {home_name.upper()} {hs}-{as_} {away_name.upper()}"
+                        await channel.send(_clamp(banner, 1900))
+                else:
+                    await channel.send(_clamp(str(text), 1900))
             except Exception:
                 logger.exception("Failed to send match event message")
             if delay > 0:
@@ -759,7 +811,7 @@ class SimCog(commands.Cog):
                 evs = await session.continue_after_break()
 
             # Stream commentary live (1 event per 3 seconds)
-            await self._send_events_live(channel, evs, delay=3.0)
+            await self._send_events_live(channel, evs, delay=3.0, state=session.state)
 
             if session.state.status == "finished":
                 break
@@ -778,7 +830,15 @@ class SimCog(commands.Cog):
 
             await asyncio.sleep(0)
 
-        # Full-time report (stat sheet, injuries, physical condition, then summary/details/ratings/analysis)
+        # Full-time interval marker + report (stat sheet, injuries, physical condition, then summary/details/ratings/analysis)
+        try:
+            st = session.state
+            h = st.home.team.name
+            a = st.away.team.name
+            end = f"90'+{st.stoppage_time_2}" if st.stoppage_time_2 else "90'"
+            await channel.send(_clamp(f"⏸️ **INTERVAL {h} vs {a} — Interval 4 (Minutes 76' to {end})**"))
+        except Exception:
+            pass
         try:
             await self._send_tactical_break_sheets(channel, session, is_full_time=True)
             rep = session.report()
