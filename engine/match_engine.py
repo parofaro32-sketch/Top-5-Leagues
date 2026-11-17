@@ -325,35 +325,51 @@ class MatchEngine:
             if self.state.status == "finished": return StepResult(produced, finished=True)
             if self.is_waiting_for_break_decisions(): return StepResult(produced, break_reached=self.state.pending_break)
             if self.state.status == "setup": produced.extend(self.start()); continue
+            # First-half stoppage time
+            if self.state.phase == "first_half_stoppage":
+                self.state.extra_minute += 1
+                produced.extend(self._minute())
+                if self.state.extra_minute >= self.state.stoppage_time_1:
+                    produced.append(self._emit(E.HALF_TIME, payload={"detail": f"Half-time. {self.state.scoreline()}"}))
+                    self.state.pending_break = "halftime"; self.state.status = "halftime"; self.state.phase = "halftime"
+                    self.state.home_break_decision_done = False; self.state.away_break_decision_done = False
+                    produced.append(self._emit(E.TACTICAL_BREAK, payload={"label": "Half-time", "break": "halftime", "detail": "Half-time. The match is paused for tactical decisions."}))
+                    return StepResult(produced, break_reached="halftime")
+                continue
+            # Second-half stoppage time
             if self.state.phase == "second_half_stoppage":
                 self.state.extra_minute += 1
                 produced.extend(self._minute())
                 if self.state.extra_minute >= self.state.stoppage_time_2:
-                    self.state.status="finished"; self.state.phase="finished"; finalize_all(self.state)
+                    self.state.status = "finished"; self.state.phase = "finished"; finalize_all(self.state)
                     produced.append(self._emit(E.FULL_TIME, payload={"detail": f"Full-time! {self.state.scoreline()}"}))
                     return StepResult(produced, finished=True)
                 continue
+            # Transition into second-half stoppage at end of 90'
             if self.state.minute >= 90 and self.state.phase == "second_half":
                 self.state.phase = "second_half_stoppage"; self.state.extra_minute = 0
-                produced.append(self._emit(E.STOPPAGE_TIME, payload={"minutes": self.state.stoppage_time_2, "half":"the second half", "detail": f"The referee indicates {self.state.stoppage_time_2} minute(s) of stoppage time at the end of the second half."}))
+                produced.append(self._emit(E.STOPPAGE_TIME, payload={"minutes": self.state.stoppage_time_2, "half": "the second half", "detail": f"The referee indicates {self.state.stoppage_time_2} minute(s) of stoppage time at the end of the second half."}))
                 continue
+
+            # Simulate next regular minute
             self.state.minute += 1; self.state.extra_minute = 0
             produced.extend(self._minute())
+
+            # End of first half regulation -> stoppage then halftime break
             if self.state.phase == "first_half" and self.state.minute == 45:
-                produced.append(self._emit(E.HALF_TIME, payload={"detail": f"Half-time. {self.state.scoreline()}"}))
-                self.state.pending_break="halftime"; self.state.status="halftime"; self.state.phase="halftime"
-                self.state.home_break_decision_done=False; self.state.away_break_decision_done=False
-                produced.append(self._emit(E.TACTICAL_BREAK, payload={"label":"Half-time","break":"halftime","detail":"Half-time. The match is paused for tactical decisions."}))
-                return StepResult(produced, break_reached="halftime")
+                self.state.phase = "first_half_stoppage"; self.state.extra_minute = 0
+                produced.append(self._emit(E.STOPPAGE_TIME, payload={"minutes": self.state.stoppage_time_1, "half": "the first half", "detail": f"The referee indicates {self.state.stoppage_time_1} minute(s) of stoppage time at the end of the first half."}))
+                continue
+            # Mandatory tactical breaks in second half
             if self.state.phase == "second_half" and self.state.minute == 60:
-                self.state.pending_break="break_60"; self.state.status="break"; self.state.phase="break_60"
-                self.state.home_break_decision_done=False; self.state.away_break_decision_done=False
-                produced.append(self._emit(E.TACTICAL_BREAK, payload={"label":"60th-minute tactical break","break":"break_60","detail":"60th-minute tactical break. The match is paused for tactical decisions."}))
+                self.state.pending_break = "break_60"; self.state.status = "break"; self.state.phase = "break_60"
+                self.state.home_break_decision_done = False; self.state.away_break_decision_done = False
+                produced.append(self._emit(E.TACTICAL_BREAK, payload={"label": "60th-minute tactical break", "break": "break_60", "detail": "60th-minute tactical break. The match is paused for tactical decisions."}))
                 return StepResult(produced, break_reached="break_60")
             if self.state.phase == "second_half" and self.state.minute == 75:
-                self.state.pending_break="break_75"; self.state.status="break"; self.state.phase="break_75"
-                self.state.home_break_decision_done=False; self.state.away_break_decision_done=False
-                produced.append(self._emit(E.TACTICAL_BREAK, payload={"label":"75th-minute tactical break","break":"break_75","detail":"75th-minute tactical break. The match is paused for tactical decisions."}))
+                self.state.pending_break = "break_75"; self.state.status = "break"; self.state.phase = "break_75"
+                self.state.home_break_decision_done = False; self.state.away_break_decision_done = False
+                produced.append(self._emit(E.TACTICAL_BREAK, payload={"label": "75th-minute tactical break", "break": "break_75", "detail": "75th-minute tactical break. The match is paused for tactical decisions."}))
                 return StepResult(produced, break_reached="break_75")
         return StepResult(produced, finished=self.state.status=="finished")
 

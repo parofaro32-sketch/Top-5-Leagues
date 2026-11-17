@@ -179,27 +179,32 @@ def validate_lineup(*, team_api_id: int, team_name: str, formation: str, starter
     if len(b) > 9:
         raise LineupValidationError(f"Bench cannot exceed 9 players (got {len(b)})")
 
-    # Ensure unique IDs (including custom-generated) - if collision due to same name, disambiguate
-    def _dedupe(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        seen: dict[int, int] = {}
+    # Ensure unique players by ID and normalized name (prevents repeated players in lineup)
+    def _dedupe(players: list[dict[str, Any]], label: str) -> list[dict[str, Any]]:
+        seen_ids: dict[int, int] = {}
+        seen_names: set[str] = set()
         out = []
         for pl in players:
             pid = int(pl["api_id"])
-            if pid in seen:
-                seen[pid] += 1
-                pid = pid - seen[pid]  # make unique negative/offset
-                pl = dict(pl)
-                pl["api_id"] = pid
-                if pl.get("custom"):
-                    custom_seen.add(pid)
-                    custom_players.append(pl)
-            else:
-                seen[pid] = 0
+            nkey = _norm_name(pl.get("name"))
+            if pid in seen_ids or (nkey and nkey in seen_names):
+                # duplicate player - skip to avoid repeated names/entries
+                continue
+            seen_ids[pid] = 1
+            if nkey:
+                seen_names.add(nkey)
             out.append(pl)
         return out
 
-    s = _dedupe(s)
-    b = _dedupe(b)
+    s = _dedupe(s, "starters")
+    b = _dedupe(b, "bench")
+    # remove any bench player already in starters
+    s_ids = {int(x["api_id"]) for x in s}
+    s_names = {_norm_name(x.get("name")) for x in s}
+    b = [x for x in b if int(x["api_id"]) not in s_ids and _norm_name(x.get("name")) not in s_names]
+
+    if len(s) != 11:
+        raise LineupValidationError(f"Starters must contain exactly 11 unique players (got {len(s)} after removing duplicates)")
     ids = [int(x["api_id"]) for x in s + b]
     if len(set(ids)) != len(ids):
         raise LineupValidationError("Duplicate players found in lineup/bench")

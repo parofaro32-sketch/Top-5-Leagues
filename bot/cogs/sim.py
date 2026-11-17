@@ -51,7 +51,23 @@ def _format_lineup(state, side: str) -> str:
         }.get(slot, 9)
         return (pos_order.get(grp, 2), slot_rank, slot, e.name)
 
-    starters_sorted = sorted(starters, key=sort_key)
+    # Defensive dedupe by player id/name to avoid displaying repeated players
+    seen_ids = set()
+    seen_names = set()
+    unique_starters = []
+    for e in starters:
+        pid = int(getattr(e, "player_api_id", 0) or 0)
+        nkey = str(getattr(e, "name", "") or "").strip().lower()
+        if pid and pid in seen_ids:
+            continue
+        if nkey and nkey in seen_names:
+            continue
+        if pid:
+            seen_ids.add(pid)
+        if nkey:
+            seen_names.add(nkey)
+        unique_starters.append(e)
+    starters_sorted = sorted(unique_starters, key=sort_key)
     lines = [f"**{team.team.name} — Starting Lineup**", f"Formation: **{lu.formation}**", "", "**Starting XI (Position):**"]
 
     current_group = None
