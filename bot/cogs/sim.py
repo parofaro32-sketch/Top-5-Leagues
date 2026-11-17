@@ -641,7 +641,28 @@ class SimCog(commands.Cog):
         except Exception:
             logger.exception("Failed to send tactical break/full-time sheets")
 
+    def _interval_break_label(self, session) -> str | None:
+        st = session.state
+        h = st.home.team.name
+        a = st.away.team.name
+        br = st.pending_break
+        if br == "halftime":
+            return f"⏸️ **INTERVAL {h} vs {a} — Interval 1 (Minutes 0' to 45')**"
+        if br == "break_60":
+            return f"⏸️ **INTERVAL {h} vs {a} — Interval 2 (Minutes 46' to 60')**"
+        if br == "break_75":
+            return f"⏸️ **INTERVAL {h} vs {a} — Interval 3 (Minutes 61' to 75')**"
+        return None
+
     async def _handle_break(self, channel: discord.abc.Messageable, session) -> None:
+        # Interval marker for completed segment
+        label = self._interval_break_label(session)
+        if label:
+            try:
+                await channel.send(label)
+            except Exception:
+                logger.exception("Failed to send interval break label")
+
         # Tactical break reports (stat sheet, injuries, physical condition, live ratings)
         await self._send_tactical_break_sheets(channel, session, is_full_time=False)
         await self._send_live_ratings(channel, session)
@@ -655,11 +676,14 @@ class SimCog(commands.Cog):
 
         if not has_human:
             # Bot vs Bot: brief message and continue smoothly
-            await channel.send(_clamp(f"Tactical break: both AI managers make adjustments. {session.state.scoreline()} — play will resume shortly."))
+            try:
+                await channel.send("🤖 **Both AI Managers have locked in tactical adjustments!** Resuming match...")
+            except Exception:
+                await channel.send(_clamp(f"Tactical break: both AI managers make adjustments. {session.state.scoreline()} — play will resume shortly."))
             await asyncio.sleep(1)
             return
 
-        # Manager mode: show break status and controls, wait for readiness
+        # Manager mode: show controls, wait for readiness
         view = BreakControlView(session.state.id, session)
         try:
             await channel.send(_clamp("Managers: confirm ready or apply AI-suggested adjustments for your side."), view=view)
