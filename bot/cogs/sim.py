@@ -19,46 +19,92 @@ def _clamp(text: str, limit: int = 1900) -> str:
     return text[: limit - 20] + "\n…(truncated)"
 
 
+def _slot_group(slot: str | None, position: str | None) -> str:
+    s = (slot or "").upper()
+    p = (position or "MID").upper()
+    if s == "GK" or p == "GK":
+        return "GK"
+    if s in {"LB", "RB", "LWB", "RWB", "CB", "LCB", "RCB"} or p == "DEF":
+        return "DEF"
+    if s in {"LW", "RW", "ST", "CF", "LS", "RS"} or p == "FWD":
+        return "FWD"
+    return "MID"
+
+
 def _format_lineup(state, side: str) -> str:
     team = state.team(side)
     lu = team.lineup
     starters = list(lu.starters)
     bench = list(lu.bench)
-    # Order starters roughly GK, DEF, MID, FWD by slot/position for readability
-    order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
-    starters_sorted = sorted(starters, key=lambda e: (order.get((e.position or "MID").upper(), 2), e.slot or ""))
-    lines = [f"**{team.team.name}** — Formation: {lu.formation}"]
-    lines.append("Starting XI:")
+    pos_order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
+    group_labels = {"GK": "Goalkeeper", "DEF": "Defence", "MID": "Midfield", "FWD": "Attack"}
+
+    def sort_key(e):
+        grp = _slot_group(e.slot, e.position)
+        slot = (e.slot or "").upper()
+        # stable-ish order within groups by common slot names
+        slot_rank = {
+            "GK": 0,
+            "LB": 0, "LWB": 0, "LCB": 1, "CB": 2, "RCB": 3, "RB": 4, "RWB": 4,
+            "CDM": 0, "LDM": 0, "RDM": 1, "LM": 0, "LCM": 1, "CM": 2, "RCM": 3, "RM": 4, "CAM": 5, "LAM": 4, "RAM": 6,
+            "LW": 0, "LS": 0, "CF": 1, "ST": 2, "RS": 3, "RW": 4,
+        }.get(slot, 9)
+        return (pos_order.get(grp, 2), slot_rank, slot, e.name)
+
+    starters_sorted = sorted(starters, key=sort_key)
+    lines = [f"**{team.team.name} — Starting Lineup**", f"Formation: **{lu.formation}**", "", "**Starting XI (Position):**"]
+
+    current_group = None
     for e in starters_sorted:
+        grp = _slot_group(e.slot, e.position)
+        if grp != current_group:
+            if current_group is not None:
+                lines.append("")
+            lines.append(f"__{group_labels.get(grp, grp)}__")
+            current_group = grp
+        pos_label = e.slot or (e.position or "POS")
         tags = []
         if e.player_api_id == lu.captain_player_id:
             tags.append("C")
-        if e.player_api_id == lu.goalkeeper_player_id or (e.position or "").upper() == "GK":
-            tags.append("GK")
+        if e.player_api_id == lu.goalkeeper_player_id or pos_label.upper() == "GK" or (e.position or "").upper() == "GK":
+            if "GK" not in tags:
+                tags.append("GK")
         tag_txt = f" ({', '.join(tags)})" if tags else ""
-        slot = f"[{e.slot}] " if e.slot else ""
-        lines.append(f"- {slot}{e.name} — {e.position}{tag_txt}")
+        lines.append(f"- **{pos_label}**: {e.name}{tag_txt}")
+
+    lines.append("")
     if bench:
-        lines.append("Bench: " + ", ".join([f"{b.name} ({b.position})" for b in bench]))
+        bench_txt = ", ".join([f"{b.name} ({b.slot or b.position or 'SUB'})" for b in bench])
+        lines.append(f"**Bench:** {bench_txt}")
     else:
-        lines.append("Bench: none")
+        lines.append("**Bench:** none")
+
     # Tactics summary
     t = team.tactics or {}
     atk = t.get("attacking", {})
     dfn = t.get("defensive", {})
     tparts = []
     if atk.get("mentality"):
-        tparts.append(f"mentality {atk.get('mentality')}")
-    if dfn.get("pressing_intensity"):
-        tparts.append(f"press {dfn.get('pressing_intensity')}")
-    if dfn.get("defensive_line"):
-        tparts.append(f"line {dfn.get('defensive_line')}")
+        tparts.append(f"mentality: {atk.get('mentality')}")
     if atk.get("build_up"):
-        tparts.append(f"build-up {atk.get('build_up')}")
+        tparts.append(f"build-up: {atk.get('build_up')}")
     if atk.get("attacking_width"):
-        tparts.append(f"width {atk.get('attacking_width')}")
+        tparts.append(f"width: {atk.get('attacking_width')}")
+    if atk.get("attacking_transitions"):
+        tparts.append(f"transitions: {atk.get('attacking_transitions')}")
+    if atk.get("counterattacking"):
+        tparts.append("counter-attacking: on")
+    if dfn.get("pressing_intensity"):
+        tparts.append(f"press: {dfn.get('pressing_intensity')}")
+    if dfn.get("defensive_line"):
+        tparts.append(f"line: {dfn.get('defensive_line')}")
+    if dfn.get("compactness"):
+        tparts.append(f"compactness: {dfn.get('compactness')}")
+    if dfn.get("counterpressing"):
+        tparts.append("counter-press: on")
     if tparts:
-        lines.append("Tactics: " + ", ".join(tparts))
+        lines.append("**Tactical Setup:** " + ", ".join(tparts))
+
     return _clamp("\n".join(lines))
 
 
@@ -176,11 +222,15 @@ def _interval_text_for_state(state) -> str | None:
     # Determine which interval is about to be simulated based on current state
     if state.status == "setup":
         return "⚡ *Simulating Interval 1 (0' - 45' Half-Time) with Match Intelligence Engine...*"
-    if state.pending_break == "halftime":
+    return None
+
+
+def _next_interval_text(pending_break: str | None, state) -> str | None:
+    if pending_break == "halftime":
         return "⚡ *Simulating Interval 2 (46' - 60') with Match Intelligence Engine...*"
-    if state.pending_break == "break_60":
+    if pending_break == "break_60":
         return "⚡ *Simulating Interval 3 (61' - 75') with Match Intelligence Engine...*"
-    if state.pending_break == "break_75":
+    if pending_break == "break_75":
         st2 = getattr(state, "stoppage_time_2", 0) or 0
         end = f"90'+{st2}" if st2 else "90'+"
         return f"⚡ *Simulating Interval 4 (76' - {end} Full Time) with Match Intelligence Engine...*"
@@ -554,6 +604,7 @@ class SimCog(commands.Cog):
         self.bot = bot
 
     async def _send_events_live(self, channel: discord.abc.Messageable, events: list[dict[str, Any]], delay: float = 3.0, state=None):
+        import re as _re
         for ev in events:
             text = ev.get("commentary")
             if not text:
@@ -561,41 +612,35 @@ class SimCog(commands.Cog):
             try:
                 et = ev.get("event_type")
                 if et in {"goal", "penalty_scored"} and state is not None:
-                    # Format goal as requested: bullet line + attribution sub-line + score banner
                     payload = ev.get("payload") or {}
                     minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
                     extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
                     side = ev.get("team_side")
-                    # scorer name
                     scorer = payload.get("player_name") or payload.get("scorer_name")
                     if not scorer and side and ev.get("player_api_id"):
-                        ps = state.player_states.get(state.player_key(side, int(ev.get("player_api_id")))) if hasattr(state, "player_states") else None
-                        scorer = ps.name if ps else "Unknown"
+                        try:
+                            ps = state.player_states.get(state.player_key(side, int(ev.get("player_api_id"))))
+                            scorer = ps.name if ps else None
+                        except Exception:
+                            scorer = None
                     scorer = scorer or "Unknown"
                     assist = payload.get("assist_name")
                     assist_txt = assist if assist else "None"
-                    # score after goal
                     sc = payload.get("score") or {}
                     hs = sc.get("home", getattr(state.home, "score", 0))
                     as_ = sc.get("away", getattr(state.away, "score", 0))
                     home_name = state.home.team.name
                     away_name = state.away.team.name
                     scoreline = f"{home_name} {hs} - {as_} {away_name}"
-                    # clean narrative text
                     narrative = str(text).strip()
-                    # strip leading minute marker if present (e.g. "59' — ..." or "59+2' — ")
-                    import re as _re
                     narrative = _re.sub(r"^(?:-?\s*\*\*)?\d+(?:\+\d+)?'\*?\*?\s*[—\-:]+\s*", "", narrative)
-                    # ensure goal emphasis
-                    if not _re.search(r"GOAL", narrative, _re.IGNORECASE):
-                        narrative = f"**⚽ GOAL!** {narrative}"
+                    narrative = _re.sub(r"^\*\*?⚽?\s*GOAL!?\*\*?\s*", "", narrative, flags=_re.IGNORECASE)
+                    narrative = _re.sub(r"^⚽\s*GOAL!?\s*", "", narrative, flags=_re.IGNORECASE)
+                    if narrative:
+                        narrative = f"**⚽ GOAL!** {narrative.strip()}"
                     else:
-                        # normalize to **⚽ GOAL!** if possible
-                        narrative = _re.sub(r"\bGOAL!?\b", "**⚽ GOAL!**", narrative, count=1)
-                        if "**⚽ GOAL!**" not in narrative and "⚽ GOAL" in narrative.upper():
-                            narrative = narrative
-                    # append score context in parens if not already present
+                        narrative = f"**⚽ GOAL!** {scorer} finds the net"
                     if f"{home_name} {hs}" not in narrative and f"{hs} - {as_}" not in narrative and f"{hs}-{as_}" not in narrative:
                         narrative = narrative.rstrip()
                         if narrative.endswith("!"):
@@ -606,10 +651,32 @@ class SimCog(commands.Cog):
                             narrative = narrative + f" **({scoreline})**"
                     msg = f"- **{mtxt}** — {narrative}\n  * *(Goal: {scorer} | Assist: {assist_txt})*"
                     await channel.send(_clamp(msg, 1900))
-                    # score banner after goal
                     if et == "goal":
                         banner = f"# ⚽ {home_name.upper()} {hs}-{as_} {away_name.upper()}"
                         await channel.send(_clamp(banner, 1900))
+                elif et == "substitution" and state is not None:
+                    payload = ev.get("payload") or {}
+                    minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
+                    extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
+                    mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                    side = ev.get("team_side")
+                    team_name = state.team(side).team.name if side else "Team"
+                    on_name = payload.get("on_name") or "Substitute"
+                    off_name = payload.get("off_name") or "Player"
+                    reason = payload.get("reason")
+                    reason_txt = f" — {reason}" if reason else ""
+                    msg = f"- **{mtxt}** — 🔁 **Substitution ({team_name}):** {on_name} comes on for {off_name}{reason_txt}."
+                    await channel.send(_clamp(msg, 1900))
+                elif et == "tactical_change" and state is not None:
+                    payload = ev.get("payload") or {}
+                    minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
+                    extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
+                    mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                    side = ev.get("team_side")
+                    team_name = state.team(side).team.name if side else "Team"
+                    summary = payload.get("summary") or payload.get("detail") or "tactical adjustment"
+                    msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** {summary}"
+                    await channel.send(_clamp(msg, 1900))
                 else:
                     await channel.send(_clamp(str(text), 1900))
             except Exception:
@@ -706,7 +773,7 @@ class SimCog(commands.Cog):
             return f"⏸️ **INTERVAL {h} vs {a} — Interval 3 (Minutes 61' to 75')**"
         return None
 
-    async def _handle_break(self, channel: discord.abc.Messageable, session) -> None:
+    async def _handle_break(self, channel: discord.abc.Messageable, session) -> list[dict[str, Any]]:
         # Interval marker for completed segment
         label = self._interval_break_label(session)
         if label:
@@ -719,32 +786,42 @@ class SimCog(commands.Cog):
         await self._send_tactical_break_sheets(channel, session, is_full_time=False)
         await self._send_live_ratings(channel, session)
 
-        # Auto-resolve AI sides immediately
-        await session.auto_resolve_ai_sides_if_ready()
+        # Auto-resolve AI sides immediately (subs/tactics) and capture events to show
+        action_evs = await session.auto_resolve_ai_sides_if_ready()
         await session.save()
 
-        bs = session.break_status()
         has_human = (session.home_manager_id is not None) or (session.away_manager_id is not None)
 
         if not has_human:
-            # Bot vs Bot: brief message and continue smoothly
+            # Show bot-vs-bot subs/tactical adjustments clearly
+            if action_evs:
+                await self._send_events_live(channel, action_evs, delay=1.0, state=session.state)
             try:
                 await channel.send("🤖 **Both AI Managers have locked in tactical adjustments!** Resuming match...")
             except Exception:
-                await channel.send(_clamp(f"Tactical break: both AI managers make adjustments. {session.state.scoreline()} — play will resume shortly."))
-            await asyncio.sleep(1)
-            return
+                pass
+            return action_evs
 
-        # Manager mode: show controls, wait for readiness
+        # Manager mode: show AI-side actions now (if any), then controls for humans
+        if action_evs:
+            await self._send_events_live(channel, action_evs, delay=1.0, state=session.state)
+
         view = BreakControlView(session.state.id, session)
         try:
             await channel.send(_clamp("Managers: confirm ready or apply AI-suggested adjustments for your side."), view=view)
         except Exception:
-            await channel.send(_format_break_status(bs))
+            try:
+                await channel.send(_format_break_status(session.break_status()))
+            except Exception:
+                pass
 
         waited = 0
         while session.state.pending_break and session.engine.is_waiting_for_break_decisions():
-            await session.auto_resolve_ai_sides_if_ready()
+            # apply AI again just in case (safe/idempotent per side)
+            more = await session.auto_resolve_ai_sides_if_ready()
+            if more:
+                action_evs.extend(more)
+                await self._send_events_live(channel, more, delay=1.0, state=session.state)
             await session.save()
             if session.is_ready_to_resume():
                 break
@@ -759,11 +836,15 @@ class SimCog(commands.Cog):
                         try:
                             from engine.ai_manager import decide_ai_break_actions
                             actions = decide_ai_break_actions(session.state, side)
-                            await session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Auto-applied (timeout)")
+                            timeout_evs = await session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Auto-applied (timeout)")
+                            if timeout_evs:
+                                action_evs.extend(timeout_evs)
+                                await self._send_events_live(channel, timeout_evs, delay=1.0, state=session.state)
                         except Exception:
                             logger.exception("Failed to auto-apply break actions on timeout for %s", side)
                 await session.save()
                 break
+        return action_evs
 
     async def _run_match_flow(self, interaction: discord.Interaction, session):
         channel = interaction.channel
@@ -783,52 +864,76 @@ class SimCog(commands.Cog):
         except Exception:
             logger.exception("Failed to send starting lineups")
 
-        # Main loop
-        while True:
-            if session.state.status == "finished":
-                break
-
-            # Announce interval before simulating/streaming its segment
-            interval_msg = _interval_text_for_state(session.state)
-            if interval_msg:
-                try:
-                    await channel.send(interval_msg)
-                except Exception:
-                    logger.exception("Failed to send interval announcement")
-
-            if session.state.status == "setup":
-                evs = await session.start_and_simulate_until_break()
-            elif session.state.pending_break and session.engine.is_waiting_for_break_decisions():
-                # Should not happen normally, but handle safely
-                await self._handle_break(channel, session)
-                if session.is_ready_to_resume() and session.state.pending_break:
-                    evs = await session.continue_after_break()
-                else:
-                    await asyncio.sleep(1)
-                    continue
-            else:
-                # Fallback continue if somehow not finished and not in handled break state
-                evs = await session.continue_after_break()
-
-            # Stream commentary live (1 event per 3 seconds)
-            await self._send_events_live(channel, evs, delay=3.0, state=session.state)
-
-            if session.state.status == "finished":
-                break
-
-            # Handle tactical/halftime break
-            if session.state.pending_break and session.engine.is_waiting_for_break_decisions():
-                await self._handle_break(channel, session)
-                # If still waiting (rare), loop back
+        # Main loop: always drive simulation forward until full time
+        while session.state.status != "finished":
+            try:
+                # If we're in a pending break, handle it and resume to next segment
                 if session.state.pending_break and session.engine.is_waiting_for_break_decisions():
-                    await asyncio.sleep(1)
+                    pending = session.state.pending_break
+                    await self._handle_break(channel, session)
+                    # Ensure decisions are ready; force AI resolution if still stuck
+                    if session.state.pending_break and not session.is_ready_to_resume():
+                        try:
+                            await session.auto_resolve_ai_sides_if_ready()
+                            await session.save()
+                        except Exception:
+                            logger.exception("Failed to force-resolve break decisions")
+                    if session.state.pending_break and not session.is_ready_to_resume():
+                        await asyncio.sleep(1)
+                        continue
+                    # Resume into next interval segment
+                    next_msg = _next_interval_text(pending, session.state)
+                    if next_msg:
+                        try:
+                            await channel.send(next_msg)
+                        except Exception:
+                            logger.exception("Failed to send next interval announcement")
+                    evs = await session.continue_after_break()
+                    await self._send_events_live(channel, evs, delay=3.0, state=session.state)
                     continue
-                # If ready, resume in next loop iteration (which will announce interval and stream)
-                if session.is_ready_to_resume() and session.state.pending_break:
-                    await session.auto_resolve_ai_sides_if_ready()
-                continue
 
-            await asyncio.sleep(0)
+                # Start or simulate next segment (setup/normal)
+                interval_msg = _interval_text_for_state(session.state)
+                if interval_msg:
+                    try:
+                        await channel.send(interval_msg)
+                    except Exception:
+                        logger.exception("Failed to send interval announcement")
+
+                if session.state.status == "setup":
+                    evs = await session.start_and_simulate_until_break()
+                elif session.state.status == "finished":
+                    break
+                else:
+                    # Not in break and not finished: continue simulation to break/end
+                    try:
+                        evs = await session.continue_after_break()
+                    except Exception:
+                        evs = []
+                    if not evs and session.state.status != "finished":
+                        step = session.engine.simulate_until_break_or_end()
+                        evs = step.events
+                        await session.append_events(evs)
+                        await session.save()
+
+                if evs:
+                    await self._send_events_live(channel, evs, delay=3.0, state=session.state)
+                elif session.state.status != "finished" and not session.state.pending_break:
+                    # Safety: avoid tight loop if nothing produced unexpectedly
+                    await asyncio.sleep(0.5)
+            except Exception:
+                logger.exception("Match flow iteration failed; attempting recovery")
+                try:
+                    if session.state.status != "finished" and not session.state.pending_break:
+                        step = session.engine.simulate_until_break_or_end()
+                        if step.events:
+                            await session.append_events(step.events)
+                            await session.save()
+                            await self._send_events_live(channel, step.events, delay=3.0, state=session.state)
+                    await asyncio.sleep(0.5)
+                except Exception:
+                    logger.exception("Match flow recovery failed")
+                    await asyncio.sleep(1)
 
         # Full-time interval marker + report (stat sheet, injuries, physical condition, then summary/details/ratings/analysis)
         try:
@@ -989,163 +1094,6 @@ class SimCog(commands.Cog):
             msg += f"\nHome manager: <@{hm_id}>\nAway manager: <@{am_id}>"
         try:
             await interaction.followup.send(_clamp(msg), ephemeral=True)
-        except Exception:
-            pass
-
-        # Run full flow in background task
-        asyncio.create_task(self._run_match_flow(interaction, session))
-
-
-async def setup(bot):
-    await bot.add_cog(SimCog(bot))
-
-
-    @app_commands.command(name="sim", description="Start a football match simulation (Bot vs Bot or Manager vs Manager)")
-    @app_commands.describe(
-        mode="Match mode",
-        league="League to choose teams from",
-        home_team="Home team name (search)",
-        away_team="Away team name (search)",
-        home_manager="Home human manager (Manager vs Manager)",
-        away_manager="Away human manager (Manager vs Manager)",
-    )
-    @app_commands.choices(mode=[
-        app_commands.Choice(name="Bot vs Bot", value="bot_vs_bot"),
-        app_commands.Choice(name="Manager vs Manager", value="manager_vs_manager"),
-    ])
-    async def sim(self, interaction: discord.Interaction,
-                  mode: app_commands.Choice[str],
-                  league: str | None = None,
-                  home_team: str | None = None,
-                  away_team: str | None = None,
-                  home_manager: discord.User | None = None,
-                  away_manager: discord.User | None = None):
-        await interaction.response.defer(thinking=True)
-        fd = self.bot.football_data
-        ms = self.bot.match_service
-
-        # Resolve teams
-        async def resolve_team(q: str | None, label: str) -> dict[str, Any] | None:
-            if not q:
-                return None
-            matches = await fd.list_teams(query=q, league=league, limit=5)
-            if not matches:
-                return None
-            # exact-ish first
-            ql = q.lower().strip()
-            for m in matches:
-                if (m.get("name") or "").lower() == ql or (m.get("short_name") or "").lower() == ql:
-                    return m
-            return matches[0]
-
-        home = await resolve_team(home_team, "home")
-        away = await resolve_team(away_team, "away")
-
-        # If teams not provided or not found, fall back to interactive selection for the given/first league
-        if home is None or away is None or (home and away and home.get("api_id") == away.get("api_id")):
-            leagues = fd.list_leagues()
-            league_key = None
-            from data.bundled import resolve_league_key
-            if league:
-                league_key = resolve_league_key(league)
-            if not league_key:
-                league_key = leagues[0]["key"] if leagues else "premier_league"
-            teams = await fd.list_teams(league=league_key, limit=25)
-            if len(teams) < 2:
-                await interaction.followup.send(embed=error_embed("Team Data Missing", "Could not load enough teams for selection."), ephemeral=True)
-                return
-
-            view = SimpleChoiceView(interaction.user.id)
-            selected: dict[str, Any] = {"home": home, "away": away}
-
-            async def on_home_pick(inter: discord.Interaction, team_id: int):
-                t = await fd.get_team(team_id)
-                selected["home"] = t
-                await inter.response.edit_message(embed=setup_embed("Match Setup", f"Home team selected: **{t.get('name')}**\nNow select away team."), view=view2)
-
-            async def on_away_pick(inter: discord.Interaction, team_id: int):
-                t = await fd.get_team(team_id)
-                if selected.get("home") and int(t.get("api_id", 0)) == int(selected["home"].get("api_id", 0)):
-                    await inter.response.send_message("Away team must be different from home team.", ephemeral=True)
-                    return
-                selected["away"] = t
-                await inter.response.edit_message(embed=setup_embed("Match Setup", f"Home: **{selected['home'].get('name')}**\nAway: **{t.get('name')}**\nStarting simulation..."), view=None)
-                await self._launch_with_selection(interaction, mode.value, selected["home"], selected["away"], home_manager, away_manager)
-
-            view.add_item(TeamSelect(teams, "Select HOME team", on_home_pick))
-            view2 = SimpleChoiceView(interaction.user.id)
-            # away options exclude selected home later; initial full list ok
-            async def on_home_pick_chain(inter: discord.Interaction, team_id: int):
-                t = await fd.get_team(team_id)
-                selected["home"] = t
-                away_opts = [x for x in teams if int(x["api_id"]) != team_id]
-                view2_local = SimpleChoiceView(interaction.user.id)
-                view2_local.add_item(TeamSelect(away_opts, "Select AWAY team", on_away_pick))
-                await inter.response.edit_message(embed=setup_embed("Match Setup", f"Home team: **{t.get('name')}**\nSelect away team."), view=view2_local)
-
-            # rebuild view with chained handler
-            view = SimpleChoiceView(interaction.user.id)
-            view.add_item(TeamSelect(teams, "Select HOME team", on_home_pick_chain))
-            await interaction.followup.send(embed=setup_embed("Match Setup", f"League: **{next((l['name'] for l in fd.list_leagues() if l['key']==league_key), league_key)}**\nSelect the home team, then away team."), view=view, ephemeral=True)
-            return
-
-        await self._launch_with_selection(interaction, mode.value, home, away, home_manager, away_manager)
-
-    async def _launch_with_selection(self, interaction: discord.Interaction, mode: str, home: dict[str, Any], away: dict[str, Any], home_manager: discord.User | None, away_manager: discord.User | None):
-        fd = self.bot.football_data
-        ms = self.bot.match_service
-        channel = interaction.channel
-        if channel is None:
-            await interaction.followup.send(embed=error_embed("Error", "No channel available to run the match."), ephemeral=True)
-            return
-
-        if int(home["api_id"]) == int(away["api_id"]):
-            await interaction.followup.send(embed=error_embed("Invalid Selection", "Home and away teams must be different."), ephemeral=True)
-            return
-
-        hm_id = None
-        am_id = None
-        if mode == "manager_vs_manager":
-            hm_id = home_manager.id if home_manager else interaction.user.id
-            am_id = away_manager.id if away_manager else None
-            if am_id is None:
-                await interaction.followup.send(embed=error_embed("Manager Required", "Manager vs Manager mode requires `away_manager` to be specified (and optionally `home_manager`)."), ephemeral=True)
-                return
-            if hm_id == am_id:
-                await interaction.followup.send(embed=error_embed("Invalid Managers", "Home and away managers must be different users."), ephemeral=True)
-                return
-
-        try:
-            home_squad = await fd.get_squad(int(home["api_id"]))
-            away_squad = await fd.get_squad(int(away["api_id"]))
-        except Exception as e:
-            logger.exception("Failed to load squads")
-            await interaction.followup.send(embed=error_embed("Data Error", f"Failed to load team squads: {e}"), ephemeral=True)
-            return
-
-        if len(home_squad) < 11 or len(away_squad) < 11:
-            await interaction.followup.send(embed=error_embed("Squad Error", "One or both teams do not have enough players in bundled data."), ephemeral=True)
-            return
-
-        try:
-            session = await ms.create_session(
-                guild_id=interaction.guild_id,
-                channel_id=channel.id if hasattr(channel, 'id') else None,
-                mode=mode,
-                home_team=home, away_team=away,
-                home_squad=home_squad, away_squad=away_squad,
-                home_manager_id=hm_id, away_manager_id=am_id,
-            )
-        except Exception as e:
-            logger.exception("Failed to create match session")
-            await interaction.followup.send(embed=error_embed("Simulation Error", f"Failed to create match: {e}"), ephemeral=True)
-            return
-
-        msg = f"Match created: **{home.get('name')}** vs **{away.get('name')}**\nMatch ID: `{session.state.id}`\nMode: {mode.replace('_',' ').title()}"
-        if mode == "manager_vs_manager":
-            msg += f"\nHome manager: <@{hm_id}>\nAway manager: <@{am_id}>\nDefault lineups/tactics auto-assigned; managers can use break controls and `/lineup`/`tactics` features for adjustments (current build auto-applies AI suggestions on ready/timeout)."
-        try:
-            await interaction.followup.send(embed=info_embed("Simulation Ready", msg), ephemeral=True)
         except Exception:
             pass
 

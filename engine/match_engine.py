@@ -48,9 +48,10 @@ class MatchEngine:
         for p in away_players: st.players_index[st.player_key("away", p.api_id)] = p
         eng._init_ps("home", home_lineup)
         eng._init_ps("away", away_lineup)
-        st.possession_side = "home" if eng.rng.random() < 0.53 else "away"
-        st.stoppage_time_1 = eng.rng.randint(1, 3)
-        st.stoppage_time_2 = eng.rng.randint(2, 6)
+        # Fair kickoff: no inherent advantage for either side
+        st.possession_side = "home" if eng.rng.random() < 0.5 else "away"
+        st.stoppage_time_1 = eng.rng.randint(1, 4)
+        st.stoppage_time_2 = eng.rng.randint(3, 6)
         return eng
 
     def _init_ps(self, side: Side, lineup: Lineup):
@@ -232,14 +233,15 @@ class MatchEngine:
         evs = []
         if br == "halftime":
             apply_halftime_recovery(self.state)
-            self.state.minute = 46; self.state.extra_minute = 0; self.state.phase = "second_half"
+            # simulate_until_break_or_end increments minute before simulating, so set to 45 to start at 46'
+            self.state.minute = 45; self.state.extra_minute = 0; self.state.phase = "second_half"
             self.state.possession_side = "away" if self.state.possession_side == "home" else "home"
             evs.append(self._emit(E.SECOND_HALF_KICKOFF, self.state.possession_side))
         elif br == "break_60":
-            self.state.minute = 61; self.state.extra_minute = 0; self.state.phase = "second_half"
+            self.state.minute = 60; self.state.extra_minute = 0; self.state.phase = "second_half"
             evs.append(self._emit(E.BREAK_RESUME, payload={"detail":"Play resumes after the 60th-minute tactical break."}))
         elif br == "break_75":
-            self.state.minute = 76; self.state.extra_minute = 0; self.state.phase = "second_half"
+            self.state.minute = 75; self.state.extra_minute = 0; self.state.phase = "second_half"
             evs.append(self._emit(E.BREAK_RESUME, payload={"detail":"Play resumes after the 75th-minute tactical break."}))
         return evs
 
@@ -418,47 +420,68 @@ class MatchEngine:
         minute = self.state.minute
         score = self.state.scoreline()
         diff = self.state.team(att).score - self.state.team(deff).score
-        phase = "early on" if minute < 20 else "as the half develops" if minute < 45 else "after the restart" if minute < 65 else "in a tense spell" if minute < 80 else "in the closing stages"
+        if minute < 15:
+            phase = "in the opening phase"
+        elif minute < 35:
+            phase = "as the first half develops"
+        elif minute < 45:
+            phase = "approaching half-time"
+        elif minute < 60:
+            phase = "after the restart"
+        elif minute < 75:
+            phase = "in a key second-half spell"
+        else:
+            phase = "in the closing stages"
+
+        att_s = hs if att == "home" else as_
+        def_s = as_ if att == "home" else hs
         opts = [
-            f"{an} circulate possession patiently through midfield, drawing {dn} across before looking to switch the point of attack.",
-            f"{an} build from the back with measured passing, while {dn} keep a compact block and wait for a trigger to press.",
-            f"Play slows {phase} as {an} recycle the ball across the defensive line, searching for a runner between {dn}'s lines.",
-            f"{an} probe down the right channel, but {dn} shuffle across quickly and force play back into less dangerous areas.",
-            f"{an} test the left flank with a combination pass, yet {dn}'s full-back holds position and the move breaks down safely.",
-            f"A midfield battle unfolds: {an} try to play through pressure while {dn} snap into challenges to disrupt the rhythm.",
-            f"{an} knock the ball around confidently {phase}, though {dn}'s spacing denies any clear passing lane into the box.",
-            f"{dn} drop into an organized shape and {an} are made to settle for sideways possession near the halfway line.",
-            f"{an} attempt to quicken the tempo with a forward pass, but {dn} read it early and regain territorial control.",
-            f"{an} keep the ball moving under light pressure; {dn} stay disciplined, refusing to overcommit at {score}.",
-            f"Neat link-up play from {an} in midfield, but the final ball toward the forwards is cut out by {dn}.",
-            f"{an} work an overload on one side, switch play, and then recycle again as {dn} recover their defensive structure.",
-            f"{phase.capitalize()}, {an} look to dictate possession while {dn} focus on staying compact and springing forward when possible.",
-            f"{an} try to draw {dn} out with short passes around the center circle, waiting for a gap to exploit.",
-            f"{dn} apply a brief press, but {an} play out calmly and re-establish control in their own half.",
+            f"{an} circulate possession with patience {phase}, moving the ball through midfield triangles and switching play to draw {dn} out of their compact defensive shape.",
+            f"{an} build carefully from the back at {score}, inviting pressure before probing for a progressive pass between the lines as {dn} hold their structure.",
+            f"{phase.capitalize()}, {an} work a controlled passing sequence, rotating positions and changing the tempo to test {dn}'s spacing and discipline.",
+            f"{an} probe down the flank with a combination of short passes, but {dn} shuffle across quickly, close the lane, and force the play back into safer areas.",
+            f"A tactical spell unfolds: {an} try to play through pressure with quick combinations, while {dn} maintain compact distances and snap into duels when triggers appear.",
+            f"{an} recycle possession across the back line and midfield, searching for a runner in behind as {dn} stay organized and protect the central channels.",
+            f"{dn} apply selective pressure, yet {an} remain composed on the ball, resetting the attack and patiently looking for a gap in the opposition block.",
+            f"{an} stretch the field and switch the point of attack, but {dn} recover their shape well and deny access to the penalty area.",
+            f"{phase.capitalize()}, {an} vary their buildup with a mix of short combinations and a more direct ball forward, though {dn} read the intentions and clear the danger.",
+            f"{an} attempt to increase the tempo with a forward pass into an advanced pocket, but {dn}'s midfield screen intercepts the idea and regains territorial control.",
+            f"Possession battle in midfield: {an} look to dictate rhythm at {score}, while {dn} focus on compactness, pressing triggers, and quick recovery into shape.",
+            f"{an} combine neatly in tight spaces and try to turn play toward goal, but {dn} track runners diligently and force a reset toward the halfway line.",
         ]
+
+        # Tactics-driven flavor
+        if att_s.get("press", 1.0) >= 1.08:
+            opts.append(f"With an assertive approach, {an} look to move the ball forward quickly after regains, testing whether {dn} can cope with the increased tempo and pressure.")
+        if def_s.get("press", 1.0) >= 1.08:
+            opts.append(f"{dn}'s pressing scheme asks questions of {an}'s buildup, but composed passing and good support angles help {an} play out of the pressure for now.")
+        if att_s.get("width", 1.0) >= 1.08:
+            opts.append(f"{an} use the width of the pitch to stretch {dn}'s defensive block, switching play wide in search of isolation and crossing opportunities.")
+        if def_s.get("compactness", 1.0) >= 1.08:
+            opts.append(f"{dn} stay very compact between the lines, reducing space for {an} to thread passes into dangerous central areas.")
+        if def_s.get("line_height", 1.0) >= 1.12:
+            opts.append(f"{dn} hold a relatively high line to compress space, while {an} assess the timing of runs in behind and look for the right moment to play forward.")
+        elif def_s.get("line_height", 1.0) <= 0.88:
+            opts.append(f"{dn} defend in a deeper block to protect space behind, and {an} patiently circulate possession trying to draw them out.")
+        if att_s.get("transition_attack", 1.0) >= 1.08:
+            opts.append(f"{an} appear ready to spring forward on the transition, positioning players to attack quickly if possession turns over in midfield.")
+
+        # Game-state flavor (tactics/game management)
         if diff > 0:
             opts += [
-                f"Leading the match, {an} manage the tempo carefully, keeping possession and forcing {dn} to chase shadows.",
-                f"{an} show composure with the advantage, circulating the ball to drain momentum from {dn}'s response.",
+                f"With the lead at {score}, {an} manage the game intelligently, valuing possession and forcing {dn} to expend energy chasing the ball.",
+                f"{an} show composure while ahead, slowing the tempo at times and choosing moments carefully to accelerate play against {dn}.",
             ]
         elif diff < 0:
             opts += [
-                f"Chasing the game, {an} push numbers higher and move the ball quicker, but {dn} absorb the pressure for now.",
-                f"{an} take a few more risks in possession as they look for a route back, while {dn} remain watchful.",
+                f"Chasing the game at {score}, {an} commit more support into advanced areas and move the ball with greater urgency, though {dn} remain disciplined.",
+                f"{an} take measured risks in possession as they search for a route back, pushing numbers forward while {dn} look to exploit any gaps on the break.",
             ]
         else:
             opts += [
-                f"With the score level at {score}, neither side wants to overcommit as {an} and {dn} trade careful spells of possession.",
+                f"With the score level at {score}, both sides balance ambition and caution as {an} probe for openings and {dn} protect their shape.",
             ]
-        # subtle tactical flavor
-        att_s = hs if att == "home" else as_
-        def_s = as_ if att == "home" else hs
-        if def_s.get("press", 1.0) > att_s.get("midfield", 1.0) * 0.95:
-            opts.append(f"{dn}'s press asks questions, but {an} stay composed on the ball and avoid a costly turnover.")
-        if def_s.get("compactness", 1.0) > 1.05:
-            opts.append(f"{dn} remain very compact between the lines, making it difficult for {an} to thread passes into advanced areas.")
-        if att_s.get("width", 1.0) > 1.05:
-            opts.append(f"{an} stretch the pitch and try to use the full width, but {dn} track the runners and protect central spaces.")
+
         return self.rng.choice(opts)
 
     def _possession(self, att, deff, hs, as_):
@@ -486,18 +509,25 @@ class MatchEngine:
             return evs
 
         # progression/chance based on tactical matchup, attributes, momentum, pressure chain
-        prog = (att_s["attack"] * 0.5 + att_s["midfield"] * 0.35 + att_s.get("transition_attack", 50) * 0.15) / max(25.0, def_s["defense"] * 0.62 + def_s.get("compactness", 1.0) * 20 + def_s.get("transition_defense", 50) * 0.15)
-        chance_p = 0.11 + (prog - 1.0) * 0.16
-        chance_p += self._pressure_chain * 0.022
-        chance_p += (self._momentum.get(att, 50.0) - 50.0) * 0.002
+        prog = (att_s["attack"] * 0.52 + att_s["midfield"] * 0.33 + att_s.get("transition_attack", 50) * 0.15) / max(24.0, def_s["defense"] * 0.60 + def_s.get("compactness", 1.0) * 18 + def_s.get("transition_defense", 50) * 0.14)
+        chance_p = 0.14 + (prog - 1.0) * 0.18
+        chance_p += self._pressure_chain * 0.025
+        chance_p += (self._momentum.get(att, 50.0) - 50.0) * 0.0022
+        # tactical intent from the start: proactive shapes create more threat
+        if att_s.get("press", 1.0) >= 1.08 or att_s.get("width", 1.0) >= 1.08 or att_s.get("transition_attack", 1.0) >= 1.08:
+            chance_p *= 1.04
+        if def_s.get("line_height", 1.0) >= 1.12 and att_s.get("transition_attack", 1.0) >= 1.0:
+            chance_p *= 1.03
         # game state: chasing team creates more but can be vulnerable
         if (att == "home" and self.state.home.score < self.state.away.score) or (att == "away" and self.state.away.score < self.state.home.score):
-            if self.state.minute >= 60:
-                chance_p *= 1.12
+            if self.state.minute >= 55:
+                chance_p *= 1.14
+            elif self.state.minute >= 35:
+                chance_p *= 1.06
         if (att == "home" and self.state.home.score > self.state.away.score) or (att == "away" and self.state.away.score > self.state.home.score):
-            if self.state.minute >= 78:
-                chance_p *= 0.94  # protect lead a bit late
-        chance_p = max(0.05, min(0.52, chance_p))
+            if self.state.minute >= 80:
+                chance_p *= 0.95  # protect lead a bit late
+        chance_p = max(0.06, min(0.60, chance_p))
         if self.rng.random() < chance_p:
             evs.extend(self._attack(att, deff, att_s, def_s))
         return evs
@@ -563,15 +593,15 @@ class MatchEngine:
             stat_key(self.state, att, creator.player_api_id)
             rating_key(self.state, att, creator.player_api_id)
 
-        xg = max(0.03, min(0.88, 0.11 + (((att_s["attack"] * (1.08 if is_counter else 1.0)) / max(25, def_s["defense"] * 0.82 + self._gk_str(deff) * 0.12)) - 1.0) * 0.22 + (0.07 if is_counter else 0.0)))
-        if is_counter and def_s.get("line_height", 1.0) > 1.08:
+        xg = max(0.04, min(0.90, 0.13 + (((att_s["attack"] * (1.10 if is_counter else 1.0)) / max(24, def_s["defense"] * 0.80 + self._gk_str(deff) * 0.11)) - 1.0) * 0.24 + (0.08 if is_counter else 0.0)))
+        if is_counter and def_s.get("line_height", 1.0) > 1.06:
             xg += 0.05
         # sustained pressure / quality buildup creates better chances
         if self._pressure_chain >= 2:
-            xg += min(0.06, 0.02 * self._pressure_chain)
-        xg = max(0.03, min(0.90, xg))
+            xg += min(0.08, 0.025 * self._pressure_chain)
+        xg = max(0.04, min(0.92, xg))
 
-        block_p = 0.16 + def_s["defense"] * 0.0012
+        block_p = 0.15 + def_s["defense"] * 0.0010
         if self.rng.random() < block_p:
             blocker = defender or self.pick(deff, "def")
             stat_shot(self.state, att, finisher.player_api_id, False, xg * 0.3)
@@ -579,7 +609,7 @@ class MatchEngine:
             if blocker:
                 stat_tackle(self.state, deff, blocker.player_api_id)
                 record_tackle(self.state, deff, blocker.player_api_id)
-            corner = self.rng.random() < 0.32
+            corner = self.rng.random() < 0.30
             detail = self._compose_chance_outcome(intro, finisher, gk, "blocked", corner=corner)
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.append(self._emit(E.BLOCK, deff, blocker.player_api_id if blocker else None, {"detail": detail}))
@@ -588,7 +618,7 @@ class MatchEngine:
                 evs.append(self._emit(E.CORNER, att, {"detail": f"The block deflects behind, and {an} will have a corner."}, commentary=""))
             return evs
 
-        on_target_p = max(0.22, min(0.72, 0.38 + xg * 0.55))
+        on_target_p = max(0.24, min(0.76, 0.40 + xg * 0.58))
         on_target = self.rng.random() < on_target_p
         stat_shot(self.state, att, finisher.player_api_id, on_target, xg)
         rating_shot(self.state, att, finisher.player_api_id, on_target, big_chance=xg > 0.22)
@@ -598,7 +628,7 @@ class MatchEngine:
             detail = self._compose_chance_outcome(intro, finisher, gk, f"missed_{miss_kind}")
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.append(self._emit(E.SHOT, att, finisher.player_api_id, {"outcome": "off_target", "detail": detail, "xg": round(xg, 3)}))
-            if xg > 0.30 and self.rng.random() < 0.55:
+            if xg > 0.32 and self.rng.random() < 0.50:
                 record_missed_big(self.state, att, finisher.player_api_id)
             return evs
 
@@ -608,7 +638,7 @@ class MatchEngine:
             narrative = f"CHANCE! {narrative}" if not narrative.upper().startswith("CHANCE") else narrative
             evs.extend(self._score_goal(att, deff, finisher, creator, xg, is_counter=is_counter, narrative=narrative))
         else:
-            corner = self.rng.random() < (0.32 if xg > 0.20 else 0.20)
+            corner = self.rng.random() < (0.30 if xg > 0.22 else 0.18)
             detail = self._compose_chance_outcome(intro, finisher, gk, "saved", corner=corner)
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.extend(self._save_event(att, deff, finisher, gk, xg, narrative=detail))
@@ -626,25 +656,27 @@ class MatchEngine:
 
     def _goal_prob(self, att, deff, finisher, gk, xg, att_s, def_s, is_counter):
         fp = self.state.players_index.get(self.state.player_key(att, finisher.player_api_id))
-        fs = 62.0
+        fs = 63.0
         if fp:
             fs = (fp.attributes.finishing * 0.5 + fp.attributes.composure * 0.3 + fp.attributes.shooting * 0.2) * (0.55 + 0.45 * finisher.stamina / 100.0)
         gks = self._gk_str(deff)
         # More realistic conversion: a decent on-target chance should score fairly often
-        quality = (0.75 + fs / 170.0) * (1.18 - gks / 210.0)
-        base = (0.10 + xg * 0.95) * quality
+        quality = (0.78 + fs / 165.0) * (1.20 - gks / 215.0)
+        base = (0.12 + xg * 1.00) * quality
         if is_counter:
-            base *= 1.08
+            base *= 1.10
         # big chances / close range feel
-        if xg >= 0.35:
+        if xg >= 0.30:
             base *= 1.08
+        if xg >= 0.45:
+            base *= 1.06
         men_a = len(self.on_pitch(att))
         men_d = len(self.on_pitch(deff))
         if men_a > men_d:
-            base *= 1.0 + 0.06 * (men_a - men_d)
+            base *= 1.0 + 0.07 * (men_a - men_d)
         elif men_d > men_a:
             base *= 0.97
-        return max(0.06, min(0.88, base))
+        return max(0.08, min(0.90, base))
 
     # --- rich play-by-play helpers ---
     def _pick_pass_type(self, is_counter: bool = False, wide: bool = False) -> str:

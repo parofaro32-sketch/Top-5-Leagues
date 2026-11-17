@@ -85,7 +85,7 @@ class FootballDataService:
 
     async def ensure_seeded(self) -> None:
         # Seed bundled teams/players into DB for fast lookup and persistence
-        seed_key = "bundled_seed_v4"
+        seed_key = "bundled_seed_v5"
         meta = await self.db.get_cache_meta(seed_key)
         if meta:
             return

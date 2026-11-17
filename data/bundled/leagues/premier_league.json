@@ -4,469 +4,4367 @@
   "country": "England",
   "season": "2025-26",
   "teams": [
-    {"api_id": 133604, "name": "Arsenal", "short_name": "ARS", "logo": "https://r2.thesportsdb.com/images/media/team/badge/uyhbfe1612467038.png", "players": [
-      {"api_id": 13360401, "name": "David Raya", "position": "GK", "number": 1, "nationality": "Spain"},
-      {"api_id": 13360402, "name": "Neto", "position": "GK", "number": 32, "nationality": "Brazil"},
-      {"api_id": 13360403, "name": "William Saliba", "position": "DEF", "number": 2, "nationality": "France"},
-      {"api_id": 13360404, "name": "Kieran Tierney", "position": "DEF", "number": 3, "nationality": "Scotland"},
-      {"api_id": 13360405, "name": "Ben White", "position": "DEF", "number": 4, "nationality": "England"},
-      {"api_id": 13360406, "name": "Gabriel Magalhães", "position": "DEF", "number": 6, "nationality": "Brazil"},
-      {"api_id": 13360407, "name": "Jurriën Timber", "position": "DEF", "number": 12, "nationality": "Netherlands"},
-      {"api_id": 13360408, "name": "Jakub Kiwior", "position": "DEF", "number": 15, "nationality": "Poland"},
-      {"api_id": 13360409, "name": "Oleksandr Zinchenko", "position": "DEF", "number": 17, "nationality": "Ukraine"},
-      {"api_id": 13360410, "name": "Takehiro Tomiyasu", "position": "DEF", "number": 18, "nationality": "Japan"},
-      {"api_id": 13360411, "name": "Riccardo Calafiori", "position": "DEF", "number": 33, "nationality": "Italy"},
-      {"api_id": 13360412, "name": "Myles Lewis-Skelly", "position": "DEF", "number": 49, "nationality": "England"},
-      {"api_id": 13360413, "name": "Thomas Partey", "position": "MID", "number": 5, "nationality": "Ghana"},
-      {"api_id": 13360414, "name": "Martin Ødegaard", "position": "MID", "number": 8, "nationality": "Norway"},
-      {"api_id": 13360415, "name": "Jorginho", "position": "MID", "number": 20, "nationality": "Italy"},
-      {"api_id": 13360416, "name": "Mikel Merino", "position": "MID", "number": 23, "nationality": "Spain"},
-      {"api_id": 13360417, "name": "Declan Rice", "position": "MID", "number": 41, "nationality": "England"},
-      {"api_id": 13360418, "name": "Ethan Nwaneri", "position": "MID", "number": 53, "nationality": "England"},
-      {"api_id": 13360419, "name": "Bukayo Saka", "position": "FWD", "number": 7, "nationality": "England"},
-      {"api_id": 13360420, "name": "Gabriel Jesus", "position": "FWD", "number": 9, "nationality": "Brazil"},
-      {"api_id": 13360421, "name": "Gabriel Martinelli", "position": "FWD", "number": 11, "nationality": "Brazil"},
-      {"api_id": 13360422, "name": "Leandro Trossard", "position": "FWD", "number": 19, "nationality": "Belgium"},
-      {"api_id": 13360423, "name": "Kai Havertz", "position": "FWD", "number": 29, "nationality": "Germany"},
-      {"api_id": 13360424, "name": "Raheem Sterling", "position": "FWD", "number": 30, "nationality": "England"}
-    ]},
-    {"api_id": 133610, "name": "Chelsea", "short_name": "CHE", "logo": "https://r2.thesportsdb.com/images/media/team/badge/yvwvtu1448813215.png", "players": [
-      {"api_id": 13361001, "name": "Robert Sánchez", "position": "GK", "number": 1, "nationality": "Spain"},
-      {"api_id": 13361002, "name": "Filip Jörgensen", "position": "GK", "number": 12, "nationality": "Denmark"},
-      {"api_id": 13361003, "name": "Axel Disasi", "position": "DEF", "number": 2, "nationality": "France"},
-      {"api_id": 13361004, "name": "Marc Cucurella", "position": "DEF", "number": 3, "nationality": "Spain"},
-      {"api_id": 13361005, "name": "Tosin Adarabioyo", "position": "DEF", "number": 4, "nationality": "England"},
-      {"api_id": 13361006, "name": "Benoît Badiashile", "position": "DEF", "number": 5, "nationality": "France"},
-      {"api_id": 13361007, "name": "Levi Colwill", "position": "DEF", "number": 6, "nationality": "England"},
-      {"api_id": 13361008, "name": "Reece James", "position": "DEF", "number": 24, "nationality": "England"},
-      {"api_id": 13361009, "name": "Malo Gusto", "position": "DEF", "number": 27, "nationality": "France"},
-      {"api_id": 13361010, "name": "Wesley Fofana", "position": "DEF", "number": 29, "nationality": "France"},
-      {"api_id": 13361011, "name": "Josh Acheampong", "position": "DEF", "number": 34, "nationality": "England"},
-      {"api_id": 13361012, "name": "Enzo Fernández", "position": "MID", "number": 8, "nationality": "Argentina"},
-      {"api_id": 13361013, "name": "Moisés Caicedo", "position": "MID", "number": 25, "nationality": "Ecuador"},
-      {"api_id": 13361014, "name": "Roméo Lavia", "position": "MID", "number": 45, "nationality": "Belgium"},
-      {"api_id": 13361015, "name": "Kiernan Dewsbury-Hall", "position": "MID", "number": 22, "nationality": "England"},
-      {"api_id": 13361016, "name": "Cole Palmer", "position": "MID", "number": 20, "nationality": "England"},
-      {"api_id": 13361017, "name": "Pedro Neto", "position": "FWD", "number": 7, "nationality": "Portugal"},
-      {"api_id": 13361018, "name": "Mykhailo Mudryk", "position": "FWD", "number": 10, "nationality": "Ukraine"},
-      {"api_id": 13361019, "name": "Noni Madueke", "position": "FWD", "number": 11, "nationality": "England"},
-      {"api_id": 13361020, "name": "Nicolas Jackson", "position": "FWD", "number": 15, "nationality": "Senegal"},
-      {"api_id": 13361021, "name": "Christopher Nkunku", "position": "FWD", "number": 18, "nationality": "France"},
-      {"api_id": 13361022, "name": "Jadon Sancho", "position": "FWD", "number": 19, "nationality": "England"},
-      {"api_id": 13361023, "name": "Marc Guiu", "position": "FWD", "number": 38, "nationality": "Spain"},
-      {"api_id": 13361024, "name": "João Félix", "position": "FWD", "number": 14, "nationality": "Portugal"}
-    ]},
-    {"api_id": 133613, "name": "Manchester City", "short_name": "MCI", "logo": "https://r2.thesportsdb.com/images/media/team/badge/vwpvry1467462651.png", "players": [
-      {"api_id": 13361301, "name": "Ederson", "position": "GK", "number": 31, "nationality": "Brazil"},
-      {"api_id": 13361302, "name": "Stefan Ortega", "position": "GK", "number": 18, "nationality": "Germany"},
-      {"api_id": 13361303, "name": "Kyle Walker", "position": "DEF", "number": 2, "nationality": "England"},
-      {"api_id": 13361304, "name": "Rúben Dias", "position": "DEF", "number": 3, "nationality": "Portugal"},
-      {"api_id": 13361305, "name": "John Stones", "position": "DEF", "number": 5, "nationality": "England"},
-      {"api_id": 13361306, "name": "Nathan Aké", "position": "DEF", "number": 6, "nationality": "Netherlands"},
-      {"api_id": 13361307, "name": "Manuel Akanji", "position": "DEF", "number": 25, "nationality": "Switzerland"},
-      {"api_id": 13361308, "name": "Joško Gvardiol", "position": "DEF", "number": 24, "nationality": "Croatia"},
-      {"api_id": 13361309, "name": "Rico Lewis", "position": "DEF", "number": 82, "nationality": "England"},
-      {"api_id": 13361310, "name": "Jahmai Simpson-Pusey", "position": "DEF", "number": 66, "nationality": "England"},
-      {"api_id": 13361311, "name": "Mateo Kovačić", "position": "MID", "number": 8, "nationality": "Croatia"},
-      {"api_id": 13361312, "name": "Jack Grealish", "position": "MID", "number": 10, "nationality": "England"},
-      {"api_id": 13361313, "name": "Rodri", "position": "MID", "number": 16, "nationality": "Spain"},
-      {"api_id": 13361314, "name": "Kevin De Bruyne", "position": "MID", "number": 17, "nationality": "Belgium"},
-      {"api_id": 13361315, "name": "Bernardo Silva", "position": "MID", "number": 20, "nationality": "Portugal"},
-      {"api_id": 13361316, "name": "İlkay Gündoğan", "position": "MID", "number": 19, "nationality": "Germany"},
-      {"api_id": 13361317, "name": "Matheus Nunes", "position": "MID", "number": 27, "nationality": "Portugal"},
-      {"api_id": 13361318, "name": "Phil Foden", "position": "MID", "number": 47, "nationality": "England"},
-      {"api_id": 13361319, "name": "James McAtee", "position": "MID", "number": 87, "nationality": "England"},
-      {"api_id": 13361320, "name": "Erling Haaland", "position": "FWD", "number": 9, "nationality": "Norway"},
-      {"api_id": 13361321, "name": "Jérémy Doku", "position": "FWD", "number": 11, "nationality": "Belgium"},
-      {"api_id": 13361322, "name": "Savinho", "position": "FWD", "number": 26, "nationality": "Brazil"},
-      {"api_id": 13361323, "name": "Omar Marmoush", "position": "FWD", "number": 7, "nationality": "Egypt"}
-    ]},
-    {"api_id": 133602, "name": "Liverpool", "short_name": "LIV", "logo": "https://r2.thesportsdb.com/images/media/team/badge/kfaher1737969724.png", "players": [
-      {"api_id": 13360201, "name": "Alisson", "position": "GK", "number": 1, "nationality": "Brazil"},
-      {"api_id": 13360202, "name": "Caoimhín Kelleher", "position": "GK", "number": 62, "nationality": "Ireland"},
-      {"api_id": 13360203, "name": "Joe Gomez", "position": "DEF", "number": 2, "nationality": "England"},
-      {"api_id": 13360204, "name": "Virgil van Dijk", "position": "DEF", "number": 4, "nationality": "Netherlands"},
-      {"api_id": 13360205, "name": "Ibrahima Konaté", "position": "DEF", "number": 5, "nationality": "France"},
-      {"api_id": 13360206, "name": "Andy Robertson", "position": "DEF", "number": 26, "nationality": "Scotland"},
-      {"api_id": 13360207, "name": "Jarell Quansah", "position": "DEF", "number": 78, "nationality": "England"},
-      {"api_id": 13360208, "name": "Conor Bradley", "position": "DEF", "number": 84, "nationality": "Northern Ireland"},
-      {"api_id": 13360209, "name": "Kostas Tsimikas", "position": "DEF", "number": 21, "nationality": "Greece"},
-      {"api_id": 13360210, "name": "Trent Alexander-Arnold", "position": "DEF", "number": 66, "nationality": "England"},
-      {"api_id": 13360211, "name": "Wataru Endō", "position": "MID", "number": 3, "nationality": "Japan"},
-      {"api_id": 13360212, "name": "Dominik Szoboszlai", "position": "MID", "number": 8, "nationality": "Hungary"},
-      {"api_id": 13360213, "name": "Alexis Mac Allister", "position": "MID", "number": 10, "nationality": "Argentina"},
-      {"api_id": 13360214, "name": "Curtis Jones", "position": "MID", "number": 17, "nationality": "England"},
-      {"api_id": 13360215, "name": "Harvey Elliott", "position": "MID", "number": 19, "nationality": "England"},
-      {"api_id": 13360216, "name": "Ryan Gravenberch", "position": "MID", "number": 38, "nationality": "Netherlands"},
-      {"api_id": 13360217, "name": "Luis Díaz", "position": "FWD", "number": 7, "nationality": "Colombia"},
-      {"api_id": 13360218, "name": "Darwin Núñez", "position": "FWD", "number": 9, "nationality": "Uruguay"},
-      {"api_id": 13360219, "name": "Mohamed Salah", "position": "FWD", "number": 11, "nationality": "Egypt"},
-      {"api_id": 13360220, "name": "Federico Chiesa", "position": "FWD", "number": 14, "nationality": "Italy"},
-      {"api_id": 13360221, "name": "Cody Gakpo", "position": "FWD", "number": 18, "nationality": "Netherlands"},
-      {"api_id": 13360222, "name": "Diogo Jota", "position": "FWD", "number": 20, "nationality": "Portugal"}
-    ]},
-    {"api_id": 133612, "name": "Manchester United", "short_name": "MUN", "logo": "https://r2.thesportsdb.com/images/media/team/badge/xzqdr11517660252.png", "players": [
-      {"api_id": 13361201, "name": "André Onana", "position": "GK", "number": 24, "nationality": "Cameroon"},
-      {"api_id": 13361202, "name": "Altay Bayındır", "position": "GK", "number": 1, "nationality": "Turkey"},
-      {"api_id": 13361203, "name": "Victor Lindelöf", "position": "DEF", "number": 2, "nationality": "Sweden"},
-      {"api_id": 13361204, "name": "Matthijs de Ligt", "position": "DEF", "number": 4, "nationality": "Netherlands"},
-      {"api_id": 13361205, "name": "Harry Maguire", "position": "DEF", "number": 5, "nationality": "England"},
-      {"api_id": 13361206, "name": "Lisandro Martínez", "position": "DEF", "number": 6, "nationality": "Argentina"},
-      {"api_id": 13361207, "name": "Tyrell Malacia", "position": "DEF", "number": 12, "nationality": "Netherlands"},
-      {"api_id": 13361208, "name": "Leny Yoro", "position": "DEF", "number": 15, "nationality": "France"},
-      {"api_id": 13361209, "name": "Diogo Dalot", "position": "DEF", "number": 20, "nationality": "Portugal"},
-      {"api_id": 13361210, "name": "Luke Shaw", "position": "DEF", "number": 23, "nationality": "England"},
-      {"api_id": 13361211, "name": "Noussair Mazraoui", "position": "DEF", "number": 3, "nationality": "Morocco"},
-      {"api_id": 13361212, "name": "Bruno Fernandes", "position": "MID", "number": 8, "nationality": "Portugal"},
-      {"api_id": 13361213, "name": "Christian Eriksen", "position": "MID", "number": 14, "nationality": "Denmark"},
-      {"api_id": 13361214, "name": "Casemiro", "position": "MID", "number": 18, "nationality": "Brazil"},
-      {"api_id": 13361215, "name": "Mason Mount", "position": "MID", "number": 7, "nationality": "England"},
-      {"api_id": 13361216, "name": "Kobbie Mainoo", "position": "MID", "number": 37, "nationality": "England"},
-      {"api_id": 13361217, "name": "Manuel Ugarte", "position": "MID", "number": 25, "nationality": "Uruguay"},
-      {"api_id": 13361218, "name": "Toby Collyer", "position": "MID", "number": 43, "nationality": "England"},
-      {"api_id": 13361219, "name": "Rasmus Højlund", "position": "FWD", "number": 9, "nationality": "Denmark"},
-      {"api_id": 13361220, "name": "Marcus Rashford", "position": "FWD", "number": 10, "nationality": "England"},
-      {"api_id": 13361221, "name": "Joshua Zirkzee", "position": "FWD", "number": 11, "nationality": "Netherlands"},
-      {"api_id": 13361222, "name": "Alejandro Garnacho", "position": "FWD", "number": 17, "nationality": "Argentina"},
-      {"api_id": 13361223, "name": "Amad Diallo", "position": "FWD", "number": 16, "nationality": "Ivory Coast"}
-    ]},
-    {"api_id": 133616, "name": "Tottenham Hotspur", "short_name": "TOT", "logo": "https://r2.thesportsdb.com/images/media/team/badge/dfyfhl1604094109.png", "players": [
-      {"api_id": 13361601, "name": "Guglielmo Vicario", "position": "GK", "number": 1, "nationality": "Italy"},
-      {"api_id": 13361602, "name": "Fraser Forster", "position": "GK", "number": 20, "nationality": "England"},
-      {"api_id": 13361603, "name": "Sergio Reguilón", "position": "DEF", "number": 3, "nationality": "Spain"},
-      {"api_id": 13361604, "name": "Radu Drăgușin", "position": "DEF", "number": 6, "nationality": "Romania"},
-      {"api_id": 13361605, "name": "Destiny Udogie", "position": "DEF", "number": 13, "nationality": "Italy"},
-      {"api_id": 13361606, "name": "Archie Gray", "position": "DEF", "number": 14, "nationality": "England"},
-      {"api_id": 13361607, "name": "Cristian Romero", "position": "DEF", "number": 17, "nationality": "Argentina"},
-      {"api_id": 13361608, "name": "Pedro Porro", "position": "DEF", "number": 23, "nationality": "Spain"},
-      {"api_id": 13361609, "name": "Djed Spence", "position": "DEF", "number": 24, "nationality": "England"},
-      {"api_id": 13361610, "name": "Ben Davies", "position": "DEF", "number": 33, "nationality": "Wales"},
-      {"api_id": 13361611, "name": "Micky van de Ven", "position": "DEF", "number": 37, "nationality": "Netherlands"},
-      {"api_id": 13361612, "name": "Yves Bissouma", "position": "MID", "number": 8, "nationality": "Mali"},
-      {"api_id": 13361613, "name": "James Maddison", "position": "MID", "number": 10, "nationality": "England"},
-      {"api_id": 13361614, "name": "Lucas Bergvall", "position": "MID", "number": 15, "nationality": "Sweden"},
-      {"api_id": 13361615, "name": "Pape Matar Sarr", "position": "MID", "number": 29, "nationality": "Senegal"},
-      {"api_id": 13361616, "name": "Rodrigo Bentancur", "position": "MID", "number": 30, "nationality": "Uruguay"},
-      {"api_id": 13361617, "name": "Dejan Kulusevski", "position": "MID", "number": 21, "nationality": "Sweden"},
-      {"api_id": 13361618, "name": "Son Heung-min", "position": "FWD", "number": 7, "nationality": "South Korea"},
-      {"api_id": 13361619, "name": "Richarlison", "position": "FWD", "number": 9, "nationality": "Brazil"},
-      {"api_id": 13361620, "name": "Timo Werner", "position": "FWD", "number": 16, "nationality": "Germany"},
-      {"api_id": 13361621, "name": "Dominic Solanke", "position": "FWD", "number": 19, "nationality": "England"},
-      {"api_id": 13361622, "name": "Brennan Johnson", "position": "FWD", "number": 22, "nationality": "Wales"},
-      {"api_id": 13361623, "name": "Wilson Odobert", "position": "FWD", "number": 28, "nationality": "France"}
-    ]},
-    {"api_id": 133601, "name": "Aston Villa", "short_name": "AVL", "logo": "https://r2.thesportsdb.com/images/media/team/badge/jyqfav1473456468.png", "players": [
-      {"api_id": 13360101, "name": "Emiliano Martínez", "position": "GK", "number": 23, "nationality": "Argentina"},
-      {"api_id": 13360102, "name": "Robin Olsen", "position": "GK", "number": 25, "nationality": "Sweden"},
-      {"api_id": 13360103, "name": "Matty Cash", "position": "DEF", "number": 2, "nationality": "Poland"},
-      {"api_id": 13360104, "name": "Diego Carlos", "position": "DEF", "number": 3, "nationality": "Brazil"},
-      {"api_id": 13360105, "name": "Ezri Konsa", "position": "DEF", "number": 4, "nationality": "England"},
-      {"api_id": 13360106, "name": "Tyrone Mings", "position": "DEF", "number": 5, "nationality": "England"},
-      {"api_id": 13360107, "name": "Lucas Digne", "position": "DEF", "number": 12, "nationality": "France"},
-      {"api_id": 13360108, "name": "Pau Torres", "position": "DEF", "number": 14, "nationality": "Spain"},
-      {"api_id": 13360109, "name": "Ian Maatsen", "position": "DEF", "number": 22, "nationality": "Netherlands"},
-      {"api_id": 13360110, "name": "Lamare Bogarde", "position": "DEF", "number": 26, "nationality": "Netherlands"},
-      {"api_id": 13360111, "name": "Ross Barkley", "position": "MID", "number": 6, "nationality": "England"},
-      {"api_id": 13360112, "name": "John McGinn", "position": "MID", "number": 7, "nationality": "Scotland"},
-      {"api_id": 13360113, "name": "Youri Tielemans", "position": "MID", "number": 8, "nationality": "Belgium"},
-      {"api_id": 13360114, "name": "Boubacar Kamara", "position": "MID", "number": 44, "nationality": "France"},
-      {"api_id": 13360115, "name": "Amadou Onana", "position": "MID", "number": 24, "nationality": "Belgium"},
-      {"api_id": 13360116, "name": "Jacob Ramsey", "position": "MID", "number": 41, "nationality": "England"},
-      {"api_id": 13360117, "name": "Leon Bailey", "position": "FWD", "number": 9, "nationality": "Jamaica"},
-      {"api_id": 13360118, "name": "Ollie Watkins", "position": "FWD", "number": 11, "nationality": "England"},
-      {"api_id": 13360119, "name": "Jhon Durán", "position": "FWD", "number": 9, "nationality": "Colombia"},
-      {"api_id": 13360120, "name": "Morgan Rogers", "position": "FWD", "number": 27, "nationality": "England"},
-      {"api_id": 13360121, "name": "Jaden Philogene", "position": "FWD", "number": 19, "nationality": "England"}
-    ]},
-    {"api_id": 133615, "name": "Everton", "short_name": "EVE", "logo": "https://r2.thesportsdb.com/images/media/team/badge/eqayrf1523184794.png", "players": [
-      {"api_id": 13361501, "name": "Jordan Pickford", "position": "GK", "number": 1, "nationality": "England"},
-      {"api_id": 13361502, "name": "João Virgínia", "position": "GK", "number": 12, "nationality": "Portugal"},
-      {"api_id": 13361503, "name": "Nathan Patterson", "position": "DEF", "number": 2, "nationality": "Scotland"},
-      {"api_id": 13361504, "name": "Michael Keane", "position": "DEF", "number": 5, "nationality": "England"},
-      {"api_id": 13361505, "name": "James Tarkowski", "position": "DEF", "number": 6, "nationality": "England"},
-      {"api_id": 13361506, "name": "Ashley Young", "position": "DEF", "number": 18, "nationality": "England"},
-      {"api_id": 13361507, "name": "Vitaliy Mykolenko", "position": "DEF", "number": 19, "nationality": "Ukraine"},
-      {"api_id": 13361508, "name": "Jarrad Branthwaite", "position": "DEF", "number": 32, "nationality": "England"},
-      {"api_id": 13361509, "name": "Jake O'Brien", "position": "DEF", "number": 15, "nationality": "Ireland"},
-      {"api_id": 13361510, "name": "James Garner", "position": "MID", "number": 37, "nationality": "England"},
-      {"api_id": 13361511, "name": "Idrissa Gueye", "position": "MID", "number": 27, "nationality": "Senegal"},
-      {"api_id": 13361512, "name": "Abdoulaye Doucouré", "position": "MID", "number": 16, "nationality": "Mali"},
-      {"api_id": 13361513, "name": "Orel Mangala", "position": "MID", "number": 8, "nationality": "Belgium"},
-      {"api_id": 13361514, "name": "Tim Iroegbunam", "position": "MID", "number": 42, "nationality": "England"},
-      {"api_id": 13361515, "name": "Dwight McNeil", "position": "FWD", "number": 7, "nationality": "England"},
-      {"api_id": 13361516, "name": "Dominic Calvert-Lewin", "position": "FWD", "number": 9, "nationality": "England"},
-      {"api_id": 13361517, "name": "Iliman Ndiaye", "position": "FWD", "number": 10, "nationality": "Senegal"},
-      {"api_id": 13361518, "name": "Beto", "position": "FWD", "number": 14, "nationality": "Portugal"},
-      {"api_id": 13361519, "name": "Jack Harrison", "position": "FWD", "number": 11, "nationality": "England"},
-      {"api_id": 13361520, "name": "Jesper Lindstrøm", "position": "FWD", "number": 29, "nationality": "Denmark"}
-    ]},
-    {"api_id": 133636, "name": "Newcastle United", "short_name": "NEW", "logo": "https://r2.thesportsdb.com/images/media/team/badge/lhwuiz1621593302.png", "players": [
-      {"api_id": 13363601, "name": "Nick Pope", "position": "GK", "number": 22, "nationality": "England"},
-      {"api_id": 13363602, "name": "Martin Dúbravka", "position": "GK", "number": 1, "nationality": "Slovakia"},
-      {"api_id": 13363603, "name": "Kieran Trippier", "position": "DEF", "number": 2, "nationality": "England"},
-      {"api_id": 13363604, "name": "Sven Botman", "position": "DEF", "number": 4, "nationality": "Netherlands"},
-      {"api_id": 13363605, "name": "Fabian Schär", "position": "DEF", "number": 5, "nationality": "Switzerland"},
-      {"api_id": 13363606, "name": "Jamaal Lascelles", "position": "DEF", "number": 6, "nationality": "England"},
-      {"api_id": 13363607, "name": "Dan Burn", "position": "DEF", "number": 33, "nationality": "England"},
-      {"api_id": 13363608, "name": "Tino Livramento", "position": "DEF", "number": 21, "nationality": "England"},
-      {"api_id": 13363609, "name": "Lewis Hall", "position": "DEF", "number": 20, "nationality": "England"},
-      {"api_id": 13363610, "name": "Emil Krafth", "position": "DEF", "number": 17, "nationality": "Sweden"},
-      {"api_id": 13363611, "name": "Joelinton", "position": "MID", "number": 7, "nationality": "Brazil"},
-      {"api_id": 13363612, "name": "Sandro Tonali", "position": "MID", "number": 8, "nationality": "Italy"},
-      {"api_id": 13363613, "name": "Bruno Guimarães", "position": "MID", "number": 39, "nationality": "Brazil"},
-      {"api_id": 13363614, "name": "Joe Willock", "position": "MID", "number": 28, "nationality": "England"},
-      {"api_id": 13363615, "name": "Sean Longstaff", "position": "MID", "number": 36, "nationality": "England"},
-      {"api_id": 13363616, "name": "Lewis Miley", "position": "MID", "number": 67, "nationality": "England"},
-      {"api_id": 13363617, "name": "Anthony Gordon", "position": "FWD", "number": 10, "nationality": "England"},
-      {"api_id": 13363618, "name": "Harvey Barnes", "position": "FWD", "number": 11, "nationality": "England"},
-      {"api_id": 13363619, "name": "Alexander Isak", "position": "FWD", "number": 14, "nationality": "Sweden"},
-      {"api_id": 13363620, "name": "Callum Wilson", "position": "FWD", "number": 9, "nationality": "England"},
-      {"api_id": 13363621, "name": "Jacob Murphy", "position": "FWD", "number": 23, "nationality": "England"},
-      {"api_id": 13363622, "name": "William Osula", "position": "FWD", "number": 18, "nationality": "Denmark"}
-    ]},
-    {"api_id": 133632, "name": "Crystal Palace", "short_name": "CRY", "logo": "https://r2.thesportsdb.com/images/media/team/badge/ia6i3m1656014992.png", "players": [
-      {"api_id": 13363201, "name": "Dean Henderson", "position": "GK", "number": 1, "nationality": "England"},
-      {"api_id": 13363202, "name": "Matt Turner", "position": "GK", "number": 30, "nationality": "United States"},
-      {"api_id": 13363203, "name": "Joel Ward", "position": "DEF", "number": 2, "nationality": "England"},
-      {"api_id": 13363204, "name": "Tyrick Mitchell", "position": "DEF", "number": 3, "nationality": "England"},
-      {"api_id": 13363205, "name": "Marc Guéhi", "position": "DEF", "number": 6, "nationality": "England"},
-      {"api_id": 13363206, "name": "Maxence Lacroix", "position": "DEF", "number": 5, "nationality": "France"},
-      {"api_id": 13363207, "name": "Daniel Muñoz", "position": "DEF", "number": 12, "nationality": "Colombia"},
-      {"api_id": 13363208, "name": "Chris Richards", "position": "DEF", "number": 26, "nationality": "United States"},
-      {"api_id": 13363209, "name": "Trevoh Chalobah", "position": "DEF", "number": 27, "nationality": "England"},
-      {"api_id": 13363210, "name": "Jefferson Lerma", "position": "MID", "number": 8, "nationality": "Colombia"},
-      {"api_id": 13363211, "name": "Will Hughes", "position": "MID", "number": 19, "nationality": "England"},
-      {"api_id": 13363212, "name": "Adam Wharton", "position": "MID", "number": 20, "nationality": "England"},
-      {"api_id": 13363213, "name": "Cheick Doucouré", "position": "MID", "number": 28, "nationality": "Mali"},
-      {"api_id": 13363214, "name": "Daichi Kamada", "position": "MID", "number": 18, "nationality": "Japan"},
-      {"api_id": 13363215, "name": "Eberechi Eze", "position": "MID", "number": 10, "nationality": "England"},
-      {"api_id": 13363216, "name": "Ismaïla Sarr", "position": "FWD", "number": 7, "nationality": "Senegal"},
-      {"api_id": 13363217, "name": "Jean-Philippe Mateta", "position": "FWD", "number": 14, "nationality": "France"},
-      {"api_id": 13363218, "name": "Eddie Nketiah", "position": "FWD", "number": 9, "nationality": "England"},
-      {"api_id": 13363219, "name": "Justin Devenny", "position": "FWD", "number": 55, "nationality": "Northern Ireland"}
-    ]},
-    {"api_id": 133619, "name": "Brighton & Hove Albion", "short_name": "BHA", "logo": "https://r2.thesportsdb.com/images/media/team/badge/ywypts1448810904.png", "players": [
-      {"api_id": 13361901, "name": "Bart Verbruggen", "position": "GK", "number": 1, "nationality": "Netherlands"},
-      {"api_id": 13361902, "name": "Jason Steele", "position": "GK", "number": 23, "nationality": "England"},
-      {"api_id": 13361903, "name": "Tariq Lamptey", "position": "DEF", "number": 2, "nationality": "Ghana"},
-      {"api_id": 13361904, "name": "Igor Julio", "position": "DEF", "number": 3, "nationality": "Brazil"},
-      {"api_id": 13361905, "name": "Adam Webster", "position": "DEF", "number": 4, "nationality": "England"},
-      {"api_id": 13361906, "name": "Lewis Dunk", "position": "DEF", "number": 5, "nationality": "England"},
-      {"api_id": 13361907, "name": "Jan Paul van Hecke", "position": "DEF", "number": 29, "nationality": "Netherlands"},
-      {"api_id": 13361908, "name": "Pervis Estupiñán", "position": "DEF", "number": 30, "nationality": "Ecuador"},
-      {"api_id": 13361909, "name": "Joël Veltman", "position": "DEF", "number": 34, "nationality": "Netherlands"},
-      {"api_id": 13361910, "name": "Ferdi Kadıoğlu", "position": "DEF", "number": 24, "nationality": "Turkey"},
-      {"api_id": 13361911, "name": "James Milner", "position": "MID", "number": 6, "nationality": "England"},
-      {"api_id": 13361912, "name": "Carlos Baleba", "position": "MID", "number": 20, "nationality": "Cameroon"},
-      {"api_id": 13361913, "name": "Yasin Ayari", "position": "MID", "number": 26, "nationality": "Sweden"},
-      {"api_id": 13361914, "name": "Mats Wieffer", "position": "MID", "number": 27, "nationality": "Netherlands"},
-      {"api_id": 13361915, "name": "Matt O'Riley", "position": "MID", "number": 33, "nationality": "Denmark"},
-      {"api_id": 13361916, "name": "Jack Hinshelwood", "position": "MID", "number": 41, "nationality": "England"},
-      {"api_id": 13361917, "name": "Kaoru Mitoma", "position": "FWD", "number": 22, "nationality": "Japan"},
-      {"api_id": 13361918, "name": "João Pedro", "position": "FWD", "number": 9, "nationality": "Brazil"},
-      {"api_id": 13361919, "name": "Danny Welbeck", "position": "FWD", "number": 18, "nationality": "England"},
-      {"api_id": 13361920, "name": "Yankuba Minteh", "position": "FWD", "number": 11, "nationality": "Gambia"},
-      {"api_id": 13361921, "name": "Georginio Rutter", "position": "FWD", "number": 14, "nationality": "France"},
-      {"api_id": 13361922, "name": "Brajan Gruda", "position": "FWD", "number": 8, "nationality": "Germany"}
-    ]},
-    {"api_id": 133600, "name": "Fulham", "short_name": "FUL", "logo": "https://r2.thesportsdb.com/images/media/team/badge/xwwvyt1448811086.png", "players": [
-      {"api_id": 13360001, "name": "Bernd Leno", "position": "GK", "number": 1, "nationality": "Germany"},
-      {"api_id": 13360002, "name": "Steven Benda", "position": "GK", "number": 23, "nationality": "Germany"},
-      {"api_id": 13360003, "name": "Kenny Tete", "position": "DEF", "number": 2, "nationality": "Netherlands"},
-      {"api_id": 13360004, "name": "Calvin Bassey", "position": "DEF", "number": 3, "nationality": "Nigeria"},
-      {"api_id": 13360005, "name": "Joachim Andersen", "position": "DEF", "number": 5, "nationality": "Denmark"},
-      {"api_id": 13360006, "name": "Timothy Castagne", "position": "DEF", "number": 21, "nationality": "Belgium"},
-      {"api_id": 13360007, "name": "Antonee Robinson", "position": "DEF", "number": 33, "nationality": "United States"},
-      {"api_id": 13360008, "name": "Issa Diop", "position": "DEF", "number": 31, "nationality": "France"},
-      {"api_id": 13360009, "name": "Jorge Cuenca", "position": "DEF", "number": 15, "nationality": "Spain"},
-      {"api_id": 13360010, "name": "Harrison Reed", "position": "MID", "number": 6, "nationality": "England"},
-      {"api_id": 13360011, "name": "Tom Cairney", "position": "MID", "number": 10, "nationality": "Scotland"},
-      {"api_id": 13360012, "name": "Sander Berge", "position": "MID", "number": 16, "nationality": "Norway"},
-      {"api_id": 13360013, "name": "Andreas Pereira", "position": "MID", "number": 18, "nationality": "Brazil"},
-      {"api_id": 13360014, "name": "Saša Lukić", "position": "MID", "number": 20, "nationality": "Serbia"},
-      {"api_id": 13360015, "name": "Emile Smith Rowe", "position": "MID", "number": 32, "nationality": "England"},
-      {"api_id": 13360016, "name": "Alex Iwobi", "position": "FWD", "number": 17, "nationality": "Nigeria"},
-      {"api_id": 13360017, "name": "Raúl Jiménez", "position": "FWD", "number": 7, "nationality": "Mexico"},
-      {"api_id": 13360018, "name": "Harry Wilson", "position": "FWD", "number": 8, "nationality": "Wales"},
-      {"api_id": 13360019, "name": "Adama Traoré", "position": "FWD", "number": 11, "nationality": "Spain"},
-      {"api_id": 13360020, "name": "Rodrigo Muniz", "position": "FWD", "number": 9, "nationality": "Brazil"},
-      {"api_id": 13360021, "name": "Reiss Nelson", "position": "FWD", "number": 30, "nationality": "England"}
-    ]},
-    {"api_id": 133614, "name": "West Ham United", "short_name": "WHU", "logo": "https://r2.thesportsdb.com/images/media/team/badge/yutyxs1467459956.png", "players": [
-      {"api_id": 13361401, "name": "Alphonse Areola", "position": "GK", "number": 23, "nationality": "France"},
-      {"api_id": 13361402, "name": "Łukasz Fabiański", "position": "GK", "number": 1, "nationality": "Poland"},
-      {"api_id": 13361403, "name": "Aaron Cresswell", "position": "DEF", "number": 3, "nationality": "England"},
-      {"api_id": 13361404, "name": "Maximilian Kilman", "position": "DEF", "number": 26, "nationality": "England"},
-      {"api_id": 13361405, "name": "Vladimír Coufal", "position": "DEF", "number": 5, "nationality": "Czech Republic"},
-      {"api_id": 13361406, "name": "Konstantinos Mavropanos", "position": "DEF", "number": 15, "nationality": "Greece"},
-      {"api_id": 13361407, "name": "Emerson Palmieri", "position": "DEF", "number": 33, "nationality": "Italy"},
-      {"api_id": 13361408, "name": "Jean-Clair Todibo", "position": "DEF", "number": 25, "nationality": "France"},
-      {"api_id": 13361409, "name": "Aaron Wan-Bissaka", "position": "DEF", "number": 29, "nationality": "England"},
-      {"api_id": 13361410, "name": "Tomáš Souček", "position": "MID", "number": 28, "nationality": "Czech Republic"},
-      {"api_id": 13361411, "name": "Lucas Paquetá", "position": "MID", "number": 10, "nationality": "Brazil"},
-      {"api_id": 13361412, "name": "Edson Álvarez", "position": "MID", "number": 19, "nationality": "Mexico"},
-      {"api_id": 13361413, "name": "Guido Rodríguez", "position": "MID", "number": 24, "nationality": "Argentina"},
-      {"api_id": 13361414, "name": "Carlos Soler", "position": "MID", "number": 4, "nationality": "Spain"},
-      {"api_id": 13361415, "name": "Andy Irving", "position": "MID", "number": 39, "nationality": "Scotland"},
-      {"api_id": 13361416, "name": "Jarrod Bowen", "position": "FWD", "number": 20, "nationality": "England"},
-      {"api_id": 13361417, "name": "Michail Antonio", "position": "FWD", "number": 9, "nationality": "Jamaica"},
-      {"api_id": 13361418, "name": "Mohammed Kudus", "position": "FWD", "number": 14, "nationality": "Ghana"},
-      {"api_id": 13361419, "name": "Crysencio Summerville", "position": "FWD", "number": 7, "nationality": "Netherlands"},
-      {"api_id": 13361420, "name": "Niclas Füllkrug", "position": "FWD", "number": 11, "nationality": "Germany"},
-      {"api_id": 13361421, "name": "Danny Ings", "position": "FWD", "number": 18, "nationality": "England"}
-    ]},
-    {"api_id": 133607, "name": "Wolverhampton Wanderers", "short_name": "WOL", "logo": "https://r2.thesportsdb.com/images/media/team/badge/u9qr031621593327.png", "players": [
-      {"api_id": 13360701, "name": "José Sá", "position": "GK", "number": 1, "nationality": "Portugal"},
-      {"api_id": 13360702, "name": "Sam Johnstone", "position": "GK", "number": 31, "nationality": "England"},
-      {"api_id": 13360703, "name": "Matt Doherty", "position": "DEF", "number": 2, "nationality": "Ireland"},
-      {"api_id": 13360704, "name": "Rayan Aït-Nouri", "position": "DEF", "number": 3, "nationality": "Algeria"},
-      {"api_id": 13360705, "name": "Santiago Bueno", "position": "DEF", "number": 4, "nationality": "Uruguay"},
-      {"api_id": 13360706, "name": "Toti Gomes", "position": "DEF", "number": 24, "nationality": "Portugal"},
-      {"api_id": 13360707, "name": "Craig Dawson", "position": "DEF", "number": 15, "nationality": "England"},
-      {"api_id": 13360708, "name": "Nélson Semedo", "position": "DEF", "number": 22, "nationality": "Portugal"},
-      {"api_id": 13360709, "name": "Yerson Mosquera", "position": "DEF", "number": 14, "nationality": "Colombia"},
-      {"api_id": 13360710, "name": "Mario Lemina", "position": "MID", "number": 5, "nationality": "Gabon"},
-      {"api_id": 13360711, "name": "Boubacar Traoré", "position": "MID", "number": 6, "nationality": "Mali"},
-      {"api_id": 13360712, "name": "André", "position": "MID", "number": 7, "nationality": "Brazil"},
-      {"api_id": 13360713, "name": "João Gomes", "position": "MID", "number": 8, "nationality": "Brazil"},
-      {"api_id": 13360714, "name": "Tommy Doyle", "position": "MID", "number": 20, "nationality": "England"},
-      {"api_id": 13360715, "name": "Pablo Sarabia", "position": "MID", "number": 21, "nationality": "Spain"},
-      {"api_id": 13360716, "name": "Matheus Cunha", "position": "FWD", "number": 10, "nationality": "Brazil"},
-      {"api_id": 13360717, "name": "Hwang Hee-chan", "position": "FWD", "number": 11, "nationality": "South Korea"},
-      {"api_id": 13360718, "name": "Jørgen Strand Larsen", "position": "FWD", "number": 9, "nationality": "Norway"},
-      {"api_id": 13360719, "name": "Gonçalo Guedes", "position": "FWD", "number": 17, "nationality": "Portugal"},
-      {"api_id": 13360720, "name": "Carlos Forbs", "position": "FWD", "number": 19, "nationality": "Portugal"}
-    ]},
-    {"api_id": 134301, "name": "Bournemouth", "short_name": "BOU", "logo": "https://r2.thesportsdb.com/images/media/team/badge/y08nak1534071116.png", "players": [
-      {"api_id": 13430101, "name": "Kepa Arrizabalaga", "position": "GK", "number": 13, "nationality": "Spain"},
-      {"api_id": 13430102, "name": "Mark Travers", "position": "GK", "number": 42, "nationality": "Ireland"},
-      {"api_id": 13430103, "name": "Adam Smith", "position": "DEF", "number": 15, "nationality": "England"},
-      {"api_id": 13430104, "name": "Marcos Senesi", "position": "DEF", "number": 25, "nationality": "Argentina"},
-      {"api_id": 13430105, "name": "Illia Zabarnyi", "position": "DEF", "number": 27, "nationality": "Ukraine"},
-      {"api_id": 13430106, "name": "Milos Kerkez", "position": "DEF", "number": 3, "nationality": "Hungary"},
-      {"api_id": 13430107, "name": "James Hill", "position": "DEF", "number": 23, "nationality": "England"},
-      {"api_id": 13430108, "name": "Dean Huijsen", "position": "DEF", "number": 2, "nationality": "Spain"},
-      {"api_id": 13430109, "name": "Julian Araujo", "position": "DEF", "number": 22, "nationality": "Mexico"},
-      {"api_id": 13430110, "name": "Lewis Cook", "position": "MID", "number": 4, "nationality": "England"},
-      {"api_id": 13430111, "name": "Ryan Christie", "position": "MID", "number": 10, "nationality": "Scotland"},
-      {"api_id": 13430112, "name": "Tyler Adams", "position": "MID", "number": 18, "nationality": "United States"},
-      {"api_id": 13430113, "name": "Alex Scott", "position": "MID", "number": 8, "nationality": "England"},
-      {"api_id": 13430114, "name": "David Brooks", "position": "MID", "number": 7, "nationality": "Wales"},
-      {"api_id": 13430115, "name": "Marcus Tavernier", "position": "MID", "number": 16, "nationality": "England"},
-      {"api_id": 13430116, "name": "Antoine Semenyo", "position": "FWD", "number": 24, "nationality": "Ghana"},
-      {"api_id": 13430117, "name": "Evanilson", "position": "FWD", "number": 9, "nationality": "Brazil"},
-      {"api_id": 13430118, "name": "Dango Ouattara", "position": "FWD", "number": 11, "nationality": "Burkina Faso"},
-      {"api_id": 13430119, "name": "Justin Kluivert", "position": "FWD", "number": 19, "nationality": "Netherlands"},
-      {"api_id": 13430120, "name": "Enes Ünal", "position": "FWD", "number": 26, "nationality": "Turkey"}
-    ]},
-    {"api_id": 134355, "name": "Brentford", "short_name": "BRE", "logo": "https://r2.thesportsdb.com/images/media/team/badge/grv1aw1546459692.png", "players": [
-      {"api_id": 13435501, "name": "Mark Flekken", "position": "GK", "number": 1, "nationality": "Netherlands"},
-      {"api_id": 13435502, "name": "Hákon Valdimarsson", "position": "GK", "number": 12, "nationality": "Iceland"},
-      {"api_id": 13435503, "name": "Ben Mee", "position": "DEF", "number": 16, "nationality": "England"},
-      {"api_id": 13435504, "name": "Ethan Pinnock", "position": "DEF", "number": 5, "nationality": "Jamaica"},
-      {"api_id": 13435505, "name": "Kristoffer Ajer", "position": "DEF", "number": 20, "nationality": "Norway"},
-      {"api_id": 13435506, "name": "Nathan Collins", "position": "DEF", "number": 22, "nationality": "Ireland"},
-      {"api_id": 13435507, "name": "Mads Roerslev", "position": "DEF", "number": 30, "nationality": "Denmark"},
-      {"api_id": 13435508, "name": "Sepp van den Berg", "position": "DEF", "number": 4, "nationality": "Netherlands"},
-      {"api_id": 13435509, "name": "Keane Lewis-Potter", "position": "DEF", "number": 23, "nationality": "England"},
-      {"api_id": 13435510, "name": "Christian Nørgaard", "position": "MID", "number": 6, "nationality": "Denmark"},
-      {"api_id": 13435511, "name": "Mathias Jensen", "position": "MID", "number": 8, "nationality": "Denmark"},
-      {"api_id": 13435512, "name": "Vitaly Janelt", "position": "MID", "number": 27, "nationality": "Germany"},
-      {"api_id": 13435513, "name": "Mikkel Damsgaard", "position": "MID", "number": 24, "nationality": "Denmark"},
-      {"api_id": 13435514, "name": "Yehor Yarmoliuk", "position": "MID", "number": 18, "nationality": "Ukraine"},
-      {"api_id": 13435515, "name": "Fábio Carvalho", "position": "MID", "number": 14, "nationality": "Portugal"},
-      {"api_id": 13435516, "name": "Bryan Mbeumo", "position": "FWD", "number": 19, "nationality": "Cameroon"},
-      {"api_id": 13435517, "name": "Yoane Wissa", "position": "FWD", "number": 11, "nationality": "DR Congo"},
-      {"api_id": 13435518, "name": "Kevin Schade", "position": "FWD", "number": 9, "nationality": "Germany"},
-      {"api_id": 13435519, "name": "Igor Thiago", "position": "FWD", "number": 17, "nationality": "Brazil"}
-    ]},
-    {"api_id": 133631, "name": "Nottingham Forest", "short_name": "NFO", "logo": "https://r2.thesportsdb.com/images/media/team/badge/bk4qjs1546440351.png", "players": [
-      {"api_id": 13363101, "name": "Matz Sels", "position": "GK", "number": 26, "nationality": "Belgium"},
-      {"api_id": 13363102, "name": "Carlos Miguel", "position": "GK", "number": 33, "nationality": "Brazil"},
-      {"api_id": 13363103, "name": "Ola Aina", "position": "DEF", "number": 34, "nationality": "Nigeria"},
-      {"api_id": 13363104, "name": "Neco Williams", "position": "DEF", "number": 7, "nationality": "Wales"},
-      {"api_id": 13363105, "name": "Murillo", "position": "DEF", "number": 5, "nationality": "Brazil"},
-      {"api_id": 13363106, "name": "Nikola Milenković", "position": "DEF", "number": 31, "nationality": "Serbia"},
-      {"api_id": 13363107, "name": "Harry Toffolo", "position": "DEF", "number": 15, "nationality": "England"},
-      {"api_id": 13363108, "name": "Álex Moreno", "position": "DEF", "number": 19, "nationality": "Spain"},
-      {"api_id": 13363109, "name": "Willy Boly", "position": "DEF", "number": 30, "nationality": "Ivory Coast"},
-      {"api_id": 13363110, "name": "Ryan Yates", "position": "MID", "number": 22, "nationality": "England"},
-      {"api_id": 13363111, "name": "Nicolás Domínguez", "position": "MID", "number": 16, "nationality": "Argentina"},
-      {"api_id": 13363112, "name": "Elliot Anderson", "position": "MID", "number": 8, "nationality": "England"},
-      {"api_id": 13363113, "name": "Morgan Gibbs-White", "position": "MID", "number": 10, "nationality": "England"},
-      {"api_id": 13363114, "name": "Danilo", "position": "MID", "number": 28, "nationality": "Brazil"},
-      {"api_id": 13363115, "name": "Ibrahim Sangaré", "position": "MID", "number": 6, "nationality": "Ivory Coast"},
-      {"api_id": 13363116, "name": "Callum Hudson-Odoi", "position": "FWD", "number": 14, "nationality": "England"},
-      {"api_id": 13363117, "name": "Anthony Elanga", "position": "FWD", "number": 21, "nationality": "Sweden"},
-      {"api_id": 13363118, "name": "Chris Wood", "position": "FWD", "number": 11, "nationality": "New Zealand"},
-      {"api_id": 13363119, "name": "Taiwo Awoniyi", "position": "FWD", "number": 9, "nationality": "Nigeria"},
-      {"api_id": 13363120, "name": "Jota Silva", "position": "FWD", "number": 20, "nationality": "Portugal"}
-    ]},
-    {"api_id": 133626, "name": "Leicester City", "short_name": "LEI", "logo": "https://r2.thesportsdb.com/images/media/team/badge/xtxwtu1448813356.png", "players": [
-      {"api_id": 13362601, "name": "Mads Hermansen", "position": "GK", "number": 30, "nationality": "Denmark"},
-      {"api_id": 13362602, "name": "Jakub Stolarczyk", "position": "GK", "number": 41, "nationality": "Poland"},
-      {"api_id": 13362603, "name": "James Justin", "position": "DEF", "number": 2, "nationality": "England"},
-      {"api_id": 13362604, "name": "Wout Faes", "position": "DEF", "number": 3, "nationality": "Belgium"},
-      {"api_id": 13362605, "name": "Conor Coady", "position": "DEF", "number": 4, "nationality": "England"},
-      {"api_id": 13362606, "name": "Caleb Okoli", "position": "DEF", "number": 5, "nationality": "Italy"},
-      {"api_id": 13362607, "name": "Jannik Vestergaard", "position": "DEF", "number": 23, "nationality": "Denmark"},
-      {"api_id": 13362608, "name": "Victor Kristiansen", "position": "DEF", "number": 16, "nationality": "Denmark"},
-      {"api_id": 13362609, "name": "Luke Thomas", "position": "DEF", "number": 33, "nationality": "England"},
-      {"api_id": 13362610, "name": "Wilfred Ndidi", "position": "MID", "number": 25, "nationality": "Nigeria"},
-      {"api_id": 13362611, "name": "Harry Winks", "position": "MID", "number": 8, "nationality": "England"},
-      {"api_id": 13362612, "name": "Boubakary Soumaré", "position": "MID", "number": 24, "nationality": "France"},
-      {"api_id": 13362613, "name": "Oliver Skipp", "position": "MID", "number": 22, "nationality": "England"},
-      {"api_id": 13362614, "name": "Bilal El Khannouss", "position": "MID", "number": 11, "nationality": "Morocco"},
-      {"api_id": 13362615, "name": "Facundo Buonanotte", "position": "MID", "number": 40, "nationality": "Argentina"},
-      {"api_id": 13362616, "name": "Jamie Vardy", "position": "FWD", "number": 9, "nationality": "England"},
-      {"api_id": 13362617, "name": "Stephy Mavididi", "position": "FWD", "number": 10, "nationality": "England"},
-      {"api_id": 13362618, "name": "Patson Daka", "position": "FWD", "number": 20, "nationality": "Zambia"},
-      {"api_id": 13362619, "name": "Jordan Ayew", "position": "FWD", "number": 18, "nationality": "Ghana"},
-      {"api_id": 13362620, "name": "Bobby De Cordova-Reid", "position": "FWD", "number": 14, "nationality": "Jamaica"}
-    ]},
-    {"api_id": 133611, "name": "Ipswich Town", "short_name": "IPS", "logo": "https://r2.thesportsdb.com/images/media/team/badge/ljv0q81621593125.png", "players": [
-      {"api_id": 13361101, "name": "Arijanet Murić", "position": "GK", "number": 1, "nationality": "Kosovo"},
-      {"api_id": 13361102, "name": "Christian Walton", "position": "GK", "number": 28, "nationality": "England"},
-      {"api_id": 13361103, "name": "Leif Davis", "position": "DEF", "number": 3, "nationality": "England"},
-      {"api_id": 13361104, "name": "Luke Woolfenden", "position": "DEF", "number": 6, "nationality": "England"},
-      {"api_id": 13361105, "name": "Cameron Burgess", "position": "DEF", "number": 15, "nationality": "Australia"},
-      {"api_id": 13361106, "name": "Dara O'Shea", "position": "DEF", "number": 26, "nationality": "Ireland"},
-      {"api_id": 13361107, "name": "Axel Tuanzebe", "position": "DEF", "number": 40, "nationality": "DR Congo"},
-      {"api_id": 13361108, "name": "Ben Johnson", "position": "DEF", "number": 18, "nationality": "England"},
-      {"api_id": 13361109, "name": "Jacob Greaves", "position": "DEF", "number": 24, "nationality": "England"},
-      {"api_id": 13361110, "name": "Sam Morsy", "position": "MID", "number": 5, "nationality": "Egypt"},
-      {"api_id": 13361111, "name": "Massimo Luongo", "position": "MID", "number": 25, "nationality": "Australia"},
-      {"api_id": 13361112, "name": "Jens Cajuste", "position": "MID", "number": 12, "nationality": "Sweden"},
-      {"api_id": 13361113, "name": "Jack Taylor", "position": "MID", "number": 14, "nationality": "Ireland"},
-      {"api_id": 13361114, "name": "Kalvin Phillips", "position": "MID", "number": 8, "nationality": "England"},
-      {"api_id": 13361115, "name": "Omari Hutchinson", "position": "FWD", "number": 20, "nationality": "England"},
-      {"api_id": 13361116, "name": "Wes Burns", "position": "FWD", "number": 7, "nationality": "Wales"},
-      {"api_id": 13361117, "name": "Liam Delap", "position": "FWD", "number": 19, "nationality": "England"},
-      {"api_id": 13361118, "name": "Conor Chaplin", "position": "FWD", "number": 10, "nationality": "England"},
-      {"api_id": 13361119, "name": "Sammie Szmodics", "position": "FWD", "number": 23, "nationality": "Ireland"},
-      {"api_id": 13361120, "name": "Jack Clarke", "position": "FWD", "number": 47, "nationality": "England"}
-    ]},
-    {"api_id": 133608, "name": "Southampton", "short_name": "SOU", "logo": "https://r2.thesportsdb.com/images/media/team/badge/qusxss1448813481.png", "players": [
-      {"api_id": 13360801, "name": "Aaron Ramsdale", "position": "GK", "number": 30, "nationality": "England"},
-      {"api_id": 13360802, "name": "Alex McCarthy", "position": "GK", "number": 1, "nationality": "England"},
-      {"api_id": 13360803, "name": "Kyle Walker-Peters", "position": "DEF", "number": 2, "nationality": "England"},
-      {"api_id": 13360804, "name": "Jan Bednarek", "position": "DEF", "number": 35, "nationality": "Poland"},
-      {"api_id": 13360805, "name": "Taylor Harwood-Bellis", "position": "DEF", "number": 6, "nationality": "England"},
-      {"api_id": 13360806, "name": "Jack Stephens", "position": "DEF", "number": 5, "nationality": "England"},
-      {"api_id": 13360807, "name": "Ryan Manning", "position": "DEF", "number": 3, "nationality": "Ireland"},
-      {"api_id": 13360808, "name": "Yukinari Sugawara", "position": "DEF", "number": 16, "nationality": "Japan"},
-      {"api_id": 13360809, "name": "Nathan Wood", "position": "DEF", "number": 15, "nationality": "England"},
-      {"api_id": 13360810, "name": "Flynn Downes", "position": "MID", "number": 4, "nationality": "England"},
-      {"api_id": 13360811, "name": "Joe Aribo", "position": "MID", "number": 7, "nationality": "Nigeria"},
-      {"api_id": 13360812, "name": "Will Smallbone", "position": "MID", "number": 8, "nationality": "Ireland"},
-      {"api_id": 13360813, "name": "Adam Lallana", "position": "MID", "number": 10, "nationality": "England"},
-      {"api_id": 13360814, "name": "Mateus Fernandes", "position": "MID", "number": 18, "nationality": "Portugal"},
-      {"api_id": 13360815, "name": "Lesley Ugochukwu", "position": "MID", "number": 26, "nationality": "France"},
-      {"api_id": 13360816, "name": "Tyler Dibling", "position": "FWD", "number": 33, "nationality": "England"},
-      {"api_id": 13360817, "name": "Adam Armstrong", "position": "FWD", "number": 9, "nationality": "England"},
-      {"api_id": 13360818, "name": "Cameron Archer", "position": "FWD", "number": 19, "nationality": "England"},
-      {"api_id": 13360819, "name": "Paul Onuachu", "position": "FWD", "number": 32, "nationality": "Nigeria"},
-      {"api_id": 13360820, "name": "Kamaldeen Sulemana", "position": "FWD", "number": 20, "nationality": "Ghana"}
-    ]}
+    {
+      "api_id": 133604,
+      "name": "Arsenal",
+      "short_name": "ARS",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/uyhbfe1612467038.png",
+      "players": [
+        {
+          "name": "David Raya Martín",
+          "position": "GK",
+          "api_id": 133604155561
+        },
+        {
+          "name": "Karl Hein",
+          "position": "GK",
+          "api_id": 133604464748
+        },
+        {
+          "name": "Kepa Arrizabalaga Revuelta",
+          "position": "GK",
+          "api_id": 133604110745
+        },
+        {
+          "name": "Tommy Setford",
+          "position": "GK",
+          "api_id": 133604552221
+        },
+        {
+          "name": "Benjamin White",
+          "position": "DEF",
+          "api_id": 133604199869
+        },
+        {
+          "name": "Brayden Clarke",
+          "position": "DEF",
+          "api_id": 133604564324
+        },
+        {
+          "name": "Cristhian Mosquera",
+          "position": "DEF",
+          "api_id": 133604501040
+        },
+        {
+          "name": "Gabriel dos Santos Magalhães",
+          "position": "DEF",
+          "api_id": 133604227597
+        },
+        {
+          "name": "Jakub Kiwior",
+          "position": "DEF",
+          "api_id": 133604441854
+        },
+        {
+          "name": "Josh Nichols",
+          "position": "DEF",
+          "api_id": 133604500167
+        },
+        {
+          "name": "Jurriën Timber",
+          "position": "DEF",
+          "api_id": 133604446122
+        },
+        {
+          "name": "Maldini Kacurri",
+          "position": "DEF",
+          "api_id": 133604589793
+        },
+        {
+          "name": "Marli Salmon",
+          "position": "DEF",
+          "api_id": 133604617065
+        },
+        {
+          "name": "Myles Lewis-Skelly",
+          "position": "DEF",
+          "api_id": 133604500169
+        },
+        {
+          "name": "Piero Hincapié",
+          "position": "DEF",
+          "api_id": 133604449104
+        },
+        {
+          "name": "Riccardo Calafiori",
+          "position": "DEF",
+          "api_id": 133604467075
+        },
+        {
+          "name": "William Saliba",
+          "position": "DEF",
+          "api_id": 133604463424
+        },
+        {
+          "name": "Albert Sambi Lokonga",
+          "position": "MID",
+          "api_id": 133604438742
+        },
+        {
+          "name": "Andre Harriman-Annous",
+          "position": "MID",
+          "api_id": 133604647243
+        },
+        {
+          "name": "Bukayo Saka",
+          "position": "MID",
+          "api_id": 133604224340
+        },
+        {
+          "name": "Christian Nørgaard",
+          "position": "MID",
+          "api_id": 133604129295
+        },
+        {
+          "name": "Declan Rice",
+          "position": "MID",
+          "api_id": 133604205480
+        },
+        {
+          "name": "Eberechi Eze",
+          "position": "MID",
+          "api_id": 133604233413
+        },
+        {
+          "name": "Ethan Nwaneri",
+          "position": "MID",
+          "api_id": 133604500175
+        },
+        {
+          "name": "Fábio Ferreira Vieira",
+          "position": "MID",
+          "api_id": 133604439098
+        },
+        {
+          "name": "Gabriel Martinelli Silva",
+          "position": "MID",
+          "api_id": 133604445145
+        },
+        {
+          "name": "Ismeal Kabia",
+          "position": "MID",
+          "api_id": 133604589796
+        },
+        {
+          "name": "Leandro Trossard",
+          "position": "MID",
+          "api_id": 133604117216
+        },
+        {
+          "name": "Martin Ødegaard",
+          "position": "MID",
+          "api_id": 133604185029
+        },
+        {
+          "name": "Martín Zubimendi Ibáñez",
+          "position": "MID",
+          "api_id": 133604482655
+        },
+        {
+          "name": "Max Dowman",
+          "position": "MID",
+          "api_id": 133604617077
+        },
+        {
+          "name": "Mikel Merino Zazón",
+          "position": "MID",
+          "api_id": 133604196384
+        },
+        {
+          "name": "Noni Madueke",
+          "position": "MID",
+          "api_id": 133604249857
+        },
+        {
+          "name": "Gabriel Fernando de Jesus",
+          "position": "FWD",
+          "api_id": 133604206651
+        },
+        {
+          "name": "Kai Havertz",
+          "position": "FWD",
+          "api_id": 133604220847
+        },
+        {
+          "name": "Viktor Gyökeres",
+          "position": "FWD",
+          "api_id": 133604225117
+        }
+      ]
+    },
+    {
+      "api_id": 133601,
+      "name": "Aston Villa",
+      "short_name": "AVL",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/jyqfav1473456468.png",
+      "players": [
+        {
+          "name": "Emiliano Martínez Romero",
+          "position": "GK",
+          "api_id": 13360199980
+        },
+        {
+          "name": "Filip Marschall",
+          "position": "GK",
+          "api_id": 133601463381
+        },
+        {
+          "name": "James Wright",
+          "position": "GK",
+          "api_id": 133601482283
+        },
+        {
+          "name": "Joe Gauci",
+          "position": "GK",
+          "api_id": 133601463492
+        },
+        {
+          "name": "Marco Bizot",
+          "position": "GK",
+          "api_id": 13360173147
+        },
+        {
+          "name": "Ronnie Hollingshead",
+          "position": "GK",
+          "api_id": 133601517875
+        },
+        {
+          "name": "Sam Proctor",
+          "position": "GK",
+          "api_id": 133601565505
+        },
+        {
+          "name": "Andrés García",
+          "position": "DEF",
+          "api_id": 133601607798
+        },
+        {
+          "name": "Ezri Konsa Ngoyo",
+          "position": "DEF",
+          "api_id": 133601200798
+        },
+        {
+          "name": "Ian Maatsen",
+          "position": "DEF",
+          "api_id": 133601442302
+        },
+        {
+          "name": "Lamare Bogarde",
+          "position": "DEF",
+          "api_id": 133601516597
+        },
+        {
+          "name": "Leon Routh",
+          "position": "DEF",
+          "api_id": 133601665015
+        },
+        {
+          "name": "Lino da Cruz Sousa",
+          "position": "DEF",
+          "api_id": 133601515315
+        },
+        {
+          "name": "Lucas Digne",
+          "position": "DEF",
+          "api_id": 133601102188
+        },
+        {
+          "name": "Matty Cash",
+          "position": "DEF",
+          "api_id": 133601200796
+        },
+        {
+          "name": "Pau Torres",
+          "position": "DEF",
+          "api_id": 133601245954
+        },
+        {
+          "name": "TJ Carroll",
+          "position": "DEF",
+          "api_id": 133601619027
+        },
+        {
+          "name": "Travis Patterson",
+          "position": "DEF",
+          "api_id": 133601535836
+        },
+        {
+          "name": "Triston Rowe",
+          "position": "DEF",
+          "api_id": 133601570577
+        },
+        {
+          "name": "Tyrone Mings",
+          "position": "DEF",
+          "api_id": 133601150484
+        },
+        {
+          "name": "Victor Lindelöf",
+          "position": "DEF",
+          "api_id": 133601185667
+        },
+        {
+          "name": "Yasin Özcan",
+          "position": "DEF",
+          "api_id": 133601588178
+        },
+        {
+          "name": "Álex Moreno Lopera",
+          "position": "DEF",
+          "api_id": 133601107468
+        },
+        {
+          "name": "Alysson Edward Franco da Rocha dos Santos",
+          "position": "MID",
+          "api_id": 133601654481
+        },
+        {
+          "name": "Amadou Onana",
+          "position": "MID",
+          "api_id": 133601450871
+        },
+        {
+          "name": "Ben Broggio",
+          "position": "MID",
+          "api_id": 133601578731
+        },
+        {
+          "name": "Boubacar Kamara",
+          "position": "MID",
+          "api_id": 133601227944
+        },
+        {
+          "name": "Bradley Burrowes",
+          "position": "MID",
+          "api_id": 133601646618
+        },
+        {
+          "name": "Donyell Malen",
+          "position": "MID",
+          "api_id": 133601205646
+        },
+        {
+          "name": "Douglas Luiz Soares de Paulo",
+          "position": "MID",
+          "api_id": 133601231046
+        },
+        {
+          "name": "Emiliano Buendía Stati",
+          "position": "MID",
+          "api_id": 133601196546
+        },
+        {
+          "name": "Enzo Barrenechea",
+          "position": "MID",
+          "api_id": 133601492287
+        },
+        {
+          "name": "George Hemmings",
+          "position": "MID",
+          "api_id": 133601578285
+        },
+        {
+          "name": "Harvey Elliott",
+          "position": "MID",
+          "api_id": 133601445884
+        },
+        {
+          "name": "Jadon Sancho",
+          "position": "MID",
+          "api_id": 133601210243
+        },
+        {
+          "name": "Jamaldeen Jimoh-Aloba",
+          "position": "MID",
+          "api_id": 133601560962
+        },
+        {
+          "name": "John McGinn",
+          "position": "MID",
+          "api_id": 133601123806
+        },
+        {
+          "name": "Kadan Young",
+          "position": "MID",
+          "api_id": 133601538403
+        },
+        {
+          "name": "Leander Dendoncker",
+          "position": "MID",
+          "api_id": 133601152589
+        },
+        {
+          "name": "Leon Bailey",
+          "position": "MID",
+          "api_id": 133601216711
+        },
+        {
+          "name": "Lewis Dobbin",
+          "position": "MID",
+          "api_id": 133601462421
+        },
+        {
+          "name": "Morgan Rogers",
+          "position": "MID",
+          "api_id": 133601245850
+        },
+        {
+          "name": "Ross Barkley",
+          "position": "MID",
+          "api_id": 13360189894
+        },
+        {
+          "name": "Samuel Iling-Junior",
+          "position": "MID",
+          "api_id": 133601470247
+        },
+        {
+          "name": "Youri Tielemans",
+          "position": "MID",
+          "api_id": 133601167989
+        },
+        {
+          "name": "Ollie Watkins",
+          "position": "FWD",
+          "api_id": 133601179301
+        },
+        {
+          "name": "Tammy Abraham",
+          "position": "FWD",
+          "api_id": 133601174879
+        },
+        {
+          "name": "Zépiqueno Redmond",
+          "position": "FWD",
+          "api_id": 133601577756
+        }
+      ]
+    },
+    {
+      "api_id": 193350,
+      "name": "Burnley",
+      "short_name": "BUR",
+      "players": [
+        {
+          "name": "Etienne Green",
+          "position": "GK",
+          "api_id": 193350490571
+        },
+        {
+          "name": "Martin Dúbravka",
+          "position": "GK",
+          "api_id": 19335068089
+        },
+        {
+          "name": "Max Weiß",
+          "position": "GK",
+          "api_id": 193350519030
+        },
+        {
+          "name": "Václav Hladký",
+          "position": "GK",
+          "api_id": 19335052943
+        },
+        {
+          "name": "Axel Tuanzebe",
+          "position": "DEF",
+          "api_id": 193350181804
+        },
+        {
+          "name": "Bashir Humphreys",
+          "position": "DEF",
+          "api_id": 193350462188
+        },
+        {
+          "name": "Connor Roberts",
+          "position": "DEF",
+          "api_id": 193350193290
+        },
+        {
+          "name": "Hannes Delcroix",
+          "position": "DEF",
+          "api_id": 193350248245
+        },
+        {
+          "name": "Hjalmar Ekdal",
+          "position": "DEF",
+          "api_id": 193350479969
+        },
+        {
+          "name": "Joe Worrall",
+          "position": "DEF",
+          "api_id": 193350209912
+        },
+        {
+          "name": "Jordan Beyer",
+          "position": "DEF",
+          "api_id": 193350242231
+        },
+        {
+          "name": "Kyle Walker",
+          "position": "DEF",
+          "api_id": 19335059621
+        },
+        {
+          "name": "Lucas Pires Silva",
+          "position": "DEF",
+          "api_id": 193350550329
+        },
+        {
+          "name": "Maxime Estève",
+          "position": "DEF",
+          "api_id": 193350478717
+        },
+        {
+          "name": "Oliver Sonne",
+          "position": "DEF",
+          "api_id": 193350520895
+        },
+        {
+          "name": "Owen Dodgson",
+          "position": "DEF",
+          "api_id": 193350462567
+        },
+        {
+          "name": "Quilindschy Hartman",
+          "position": "DEF",
+          "api_id": 193350495960
+        },
+        {
+          "name": "Shurandy Sambo",
+          "position": "DEF",
+          "api_id": 193350451072
+        },
+        {
+          "name": "Aaron Ramsey",
+          "position": "MID",
+          "api_id": 193350448715
+        },
+        {
+          "name": "Darko Churlinov",
+          "position": "MID",
+          "api_id": 193350251735
+        },
+        {
+          "name": "Enock Agyei",
+          "position": "MID",
+          "api_id": 193350579614
+        },
+        {
+          "name": "Florentino Ibrain Morris Luís",
+          "position": "MID",
+          "api_id": 193350217055
+        },
+        {
+          "name": "George Brierley",
+          "position": "MID",
+          "api_id": 193350705232
+        },
+        {
+          "name": "Hannibal Mejbri",
+          "position": "MID",
+          "api_id": 193350466527
+        },
+        {
+          "name": "Jacob Bruun Larsen",
+          "position": "MID",
+          "api_id": 193350180458
+        },
+        {
+          "name": "Jaidon Anthony",
+          "position": "MID",
+          "api_id": 193350445180
+        },
+        {
+          "name": "James Ward-Prowse",
+          "position": "MID",
+          "api_id": 193350102178
+        },
+        {
+          "name": "Jaydon Banel",
+          "position": "MID",
+          "api_id": 193350552206
+        },
+        {
+          "name": "Josh Cullen",
+          "position": "MID",
+          "api_id": 193350173567
+        },
+        {
+          "name": "Josh Laurent",
+          "position": "MID",
+          "api_id": 193350168887
+        },
+        {
+          "name": "Kian McMahon-Brown",
+          "position": "MID",
+          "api_id": 193350645593
+        },
+        {
+          "name": "Lesley Ugochukwu",
+          "position": "MID",
+          "api_id": 193350504714
+        },
+        {
+          "name": "Loum Tchaouna",
+          "position": "MID",
+          "api_id": 193350470272
+        },
+        {
+          "name": "Luca Koleosho",
+          "position": "MID",
+          "api_id": 193350488702
+        },
+        {
+          "name": "Manuel Benson Hedilazio",
+          "position": "MID",
+          "api_id": 193350184751
+        },
+        {
+          "name": "Marcus Edwards",
+          "position": "MID",
+          "api_id": 193350175592
+        },
+        {
+          "name": "Mike Trésor Ndayishimiye",
+          "position": "MID",
+          "api_id": 193350438748
+        },
+        {
+          "name": "Oliver Pimlott",
+          "position": "MID",
+          "api_id": 193350648960
+        },
+        {
+          "name": "Oluwaseun Adewumi",
+          "position": "MID",
+          "api_id": 193350577323
+        },
+        {
+          "name": "Armando Broja",
+          "position": "FWD",
+          "api_id": 193350441323
+        },
+        {
+          "name": "Ashley Barnes",
+          "position": "FWD",
+          "api_id": 19335045699
+        },
+        {
+          "name": "Lyle Foster",
+          "position": "FWD",
+          "api_id": 193350436973
+        },
+        {
+          "name": "Michael Obafemi",
+          "position": "FWD",
+          "api_id": 193350221598
+        },
+        {
+          "name": "Zeki Amdouni",
+          "position": "FWD",
+          "api_id": 193350493831
+        },
+        {
+          "name": "Zian Flemming",
+          "position": "FWD",
+          "api_id": 193350432639
+        }
+      ]
+    },
+    {
+      "api_id": 134301,
+      "name": "Bournemouth",
+      "short_name": "BOU",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/y08nak1534071116.png",
+      "players": [
+        {
+          "name": "Alex Paulsen",
+          "position": "GK",
+          "api_id": 134301496145
+        },
+        {
+          "name": "Callan McKenna",
+          "position": "GK",
+          "api_id": 134301569791
+        },
+        {
+          "name": "Christos Mandas",
+          "position": "GK",
+          "api_id": 134301437416
+        },
+        {
+          "name": "Fraser Forster",
+          "position": "GK",
+          "api_id": 13430141383
+        },
+        {
+          "name": "Norberto Murara Neto",
+          "position": "GK",
+          "api_id": 13430170752
+        },
+        {
+          "name": "Will Dennis",
+          "position": "GK",
+          "api_id": 134301445172
+        },
+        {
+          "name": "Đorđe Petrović",
+          "position": "GK",
+          "api_id": 134301458569
+        },
+        {
+          "name": "Adam Smith",
+          "position": "DEF",
+          "api_id": 13430155469
+        },
+        {
+          "name": "Adrien Truffert",
+          "position": "DEF",
+          "api_id": 134301495521
+        },
+        {
+          "name": "Bafodé Diakité",
+          "position": "DEF",
+          "api_id": 134301243882
+        },
+        {
+          "name": "Chris Mepham",
+          "position": "DEF",
+          "api_id": 134301224911
+        },
+        {
+          "name": "Illia Zabarnyi",
+          "position": "DEF",
+          "api_id": 134301478580
+        },
+        {
+          "name": "James Hill",
+          "position": "DEF",
+          "api_id": 134301464981
+        },
+        {
+          "name": "Julio Soler Barreto",
+          "position": "DEF",
+          "api_id": 134301576901
+        },
+        {
+          "name": "Julián Araujo Zúñiga",
+          "position": "DEF",
+          "api_id": 134301437893
+        },
+        {
+          "name": "Marcos Senesi Barón",
+          "position": "DEF",
+          "api_id": 134301222466
+        },
+        {
+          "name": "Matai Akinmboni",
+          "position": "DEF",
+          "api_id": 134301542462
+        },
+        {
+          "name": "Owen Bevan",
+          "position": "DEF",
+          "api_id": 134301519906
+        },
+        {
+          "name": "Veljko Milosavljevic",
+          "position": "DEF",
+          "api_id": 134301621487
+        },
+        {
+          "name": "Álex Jiménez Sánchez",
+          "position": "DEF",
+          "api_id": 134301552483
+        },
+        {
+          "name": "Alex Scott",
+          "position": "MID",
+          "api_id": 134301504139
+        },
+        {
+          "name": "Alex Tóth",
+          "position": "MID",
+          "api_id": 134301615574
+        },
+        {
+          "name": "Amine Adli",
+          "position": "MID",
+          "api_id": 134301490888
+        },
+        {
+          "name": "Ben Gannon-Doak",
+          "position": "MID",
+          "api_id": 134301497208
+        },
+        {
+          "name": "Ben Winterburn",
+          "position": "MID",
+          "api_id": 134301607775
+        },
+        {
+          "name": "Charlie Stevens",
+          "position": "MID",
+          "api_id": 134301659013
+        },
+        {
+          "name": "David Brooks",
+          "position": "MID",
+          "api_id": 134301112317
+        },
+        {
+          "name": "Dominic Sadi",
+          "position": "MID",
+          "api_id": 134301551596
+        },
+        {
+          "name": "Hamed Traorè",
+          "position": "MID",
+          "api_id": 134301425044
+        },
+        {
+          "name": "Justin Kluivert",
+          "position": "MID",
+          "api_id": 134301223683
+        },
+        {
+          "name": "Lewis Cook",
+          "position": "MID",
+          "api_id": 134301156408
+        },
+        {
+          "name": "Luis Sinisterra Lucumí",
+          "position": "MID",
+          "api_id": 134301225995
+        },
+        {
+          "name": "Malcom DaCosta",
+          "position": "MID",
+          "api_id": 134301679552
+        },
+        {
+          "name": "Marcus Tavernier",
+          "position": "MID",
+          "api_id": 134301202658
+        },
+        {
+          "name": "Philip Billing",
+          "position": "MID",
+          "api_id": 134301169991
+        },
+        {
+          "name": "Rayan Vitor Simplício Rocha",
+          "position": "MID",
+          "api_id": 134301500604
+        },
+        {
+          "name": "Remy Rees-Dottin",
+          "position": "MID",
+          "api_id": 134301607774
+        },
+        {
+          "name": "Romain Faivre",
+          "position": "MID",
+          "api_id": 134301442240
+        },
+        {
+          "name": "Ryan Christie",
+          "position": "MID",
+          "api_id": 134301159499
+        },
+        {
+          "name": "Tyler Adams",
+          "position": "MID",
+          "api_id": 134301201785
+        },
+        {
+          "name": "Zain Silcott-Duberry",
+          "position": "MID",
+          "api_id": 134301531121
+        },
+        {
+          "name": "Daniel Adu-Adjei",
+          "position": "FWD",
+          "api_id": 134301591760
+        },
+        {
+          "name": "Enes Ünal",
+          "position": "FWD",
+          "api_id": 134301169636
+        },
+        {
+          "name": "Francisco Evanilson de Lima Barbosa",
+          "position": "FWD",
+          "api_id": 134301445102
+        },
+        {
+          "name": "Junior Kroupi",
+          "position": "FWD",
+          "api_id": 134301561262
+        }
+      ]
+    },
+    {
+      "api_id": 134355,
+      "name": "Brentford",
+      "short_name": "BRE",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/grv1aw1546459692.png",
+      "players": [
+        {
+          "name": "Caoimhín Kelleher",
+          "position": "GK",
+          "api_id": 134355201720
+        },
+        {
+          "name": "Ellery Balcombe",
+          "position": "GK",
+          "api_id": 134355236448
+        },
+        {
+          "name": "Hákon Rafn Valdimarsson",
+          "position": "GK",
+          "api_id": 134355508433
+        },
+        {
+          "name": "Julian Eyestone",
+          "position": "GK",
+          "api_id": 134355536017
+        },
+        {
+          "name": "Matthew Cox",
+          "position": "GK",
+          "api_id": 134355504300
+        },
+        {
+          "name": "Aaron Hickey",
+          "position": "DEF",
+          "api_id": 134355473713
+        },
+        {
+          "name": "Benjamin Arthur",
+          "position": "DEF",
+          "api_id": 134355623536
+        },
+        {
+          "name": "Benjamin Fredrick",
+          "position": "DEF",
+          "api_id": 134355613534
+        },
+        {
+          "name": "Conor McManus",
+          "position": "DEF",
+          "api_id": 134355588433
+        },
+        {
+          "name": "Ethan Pinnock",
+          "position": "DEF",
+          "api_id": 134355232065
+        },
+        {
+          "name": "Jayden Meghoma",
+          "position": "DEF",
+          "api_id": 134355500717
+        },
+        {
+          "name": "Joshua Stephenson",
+          "position": "DEF",
+          "api_id": 134355650240
+        },
+        {
+          "name": "Keane Lewis-Potter",
+          "position": "DEF",
+          "api_id": 134355250231
+        },
+        {
+          "name": "Kim Ji-soo",
+          "position": "DEF",
+          "api_id": 134355571241
+        },
+        {
+          "name": "Kristoffer Ajer",
+          "position": "DEF",
+          "api_id": 134355192866
+        },
+        {
+          "name": "Mads Roerslev Rasmussen",
+          "position": "DEF",
+          "api_id": 134355227956
+        },
+        {
+          "name": "Michael Kayode",
+          "position": "DEF",
+          "api_id": 134355608464
+        },
+        {
+          "name": "Nathan Collins",
+          "position": "DEF",
+          "api_id": 134355433830
+        },
+        {
+          "name": "Ollie Shield",
+          "position": "DEF",
+          "api_id": 134355495556
+        },
+        {
+          "name": "Rico Henry",
+          "position": "DEF",
+          "api_id": 134355195010
+        },
+        {
+          "name": "Sepp van den Berg",
+          "position": "DEF",
+          "api_id": 134355445765
+        },
+        {
+          "name": "Antoni Milambo",
+          "position": "MID",
+          "api_id": 134355544295
+        },
+        {
+          "name": "Dango Ouattara",
+          "position": "MID",
+          "api_id": 134355534463
+        },
+        {
+          "name": "Frank Onyeka",
+          "position": "MID",
+          "api_id": 134355429580
+        },
+        {
+          "name": "Fábio Freitas Gouveia Carvalho",
+          "position": "MID",
+          "api_id": 134355245858
+        },
+        {
+          "name": "Gustavo Nunes Fernandes Gomes",
+          "position": "MID",
+          "api_id": 134355627464
+        },
+        {
+          "name": "Jordan Henderson",
+          "position": "MID",
+          "api_id": 13435557979
+        },
+        {
+          "name": "Josh Dasilva",
+          "position": "MID",
+          "api_id": 134355184656
+        },
+        {
+          "name": "Kevin Schade",
+          "position": "MID",
+          "api_id": 134355514418
+        },
+        {
+          "name": "Luka Bentt",
+          "position": "MID",
+          "api_id": 134355560610
+        },
+        {
+          "name": "Mathias Jensen",
+          "position": "MID",
+          "api_id": 134355208283
+        },
+        {
+          "name": "Mikkel Damsgaard",
+          "position": "MID",
+          "api_id": 134355441089
+        },
+        {
+          "name": "Myles Peart-Harris",
+          "position": "MID",
+          "api_id": 134355451539
+        },
+        {
+          "name": "Paris Maghoma",
+          "position": "MID",
+          "api_id": 134355221695
+        },
+        {
+          "name": "Reiss Nelson",
+          "position": "MID",
+          "api_id": 134355201641
+        },
+        {
+          "name": "Riley Owen",
+          "position": "MID",
+          "api_id": 134355548671
+        },
+        {
+          "name": "Romelle Donovan",
+          "position": "MID",
+          "api_id": 134355607689
+        },
+        {
+          "name": "Ryan Trevitt",
+          "position": "MID",
+          "api_id": 134355592357
+        },
+        {
+          "name": "Vitaly Janelt",
+          "position": "MID",
+          "api_id": 134355205580
+        },
+        {
+          "name": "Yehor Yarmoliuk",
+          "position": "MID",
+          "api_id": 134355509395
+        },
+        {
+          "name": "Yunus Emre Konak",
+          "position": "MID",
+          "api_id": 134355629204
+        },
+        {
+          "name": "Igor Thiago Nascimento Rodrigues",
+          "position": "FWD",
+          "api_id": 134355503500
+        },
+        {
+          "name": "Iwan Morgan",
+          "position": "FWD",
+          "api_id": 134355534710
+        },
+        {
+          "name": "Kaye Furo",
+          "position": "FWD",
+          "api_id": 134355594174
+        }
+      ]
+    },
+    {
+      "api_id": 133619,
+      "name": "Brighton & Hove Albion",
+      "short_name": "BHA",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/ywypts1448810904.png",
+      "players": [
+        {
+          "name": "Bart Verbruggen",
+          "position": "GK",
+          "api_id": 133619490639
+        },
+        {
+          "name": "Carl Rushworth",
+          "position": "GK",
+          "api_id": 133619473739
+        },
+        {
+          "name": "Jason Steele",
+          "position": "GK",
+          "api_id": 13361950262
+        },
+        {
+          "name": "Kjell Scherpen",
+          "position": "GK",
+          "api_id": 133619241514
+        },
+        {
+          "name": "Tom McGill",
+          "position": "GK",
+          "api_id": 133619210288
+        },
+        {
+          "name": "Adam Webster",
+          "position": "DEF",
+          "api_id": 133619111735
+        },
+        {
+          "name": "Charlie Tasker",
+          "position": "DEF",
+          "api_id": 133619548720
+        },
+        {
+          "name": "Diego Coppola",
+          "position": "DEF",
+          "api_id": 133619551090
+        },
+        {
+          "name": "Eiran Cashin",
+          "position": "DEF",
+          "api_id": 133619440135
+        },
+        {
+          "name": "Ferdi Kadıoğlu",
+          "position": "DEF",
+          "api_id": 133619232416
+        },
+        {
+          "name": "Freddie Simmonds",
+          "position": "DEF",
+          "api_id": 133619605988
+        },
+        {
+          "name": "Igor Julio dos Santos de Paulo",
+          "position": "DEF",
+          "api_id": 133619224434
+        },
+        {
+          "name": "Jacob Slater",
+          "position": "DEF",
+          "api_id": 133619590100
+        },
+        {
+          "name": "Jan Paul van Hecke",
+          "position": "DEF",
+          "api_id": 133619470142
+        },
+        {
+          "name": "Joël Veltman",
+          "position": "DEF",
+          "api_id": 133619112478
+        },
+        {
+          "name": "Lewis Dunk",
+          "position": "DEF",
+          "api_id": 13361984299
+        },
+        {
+          "name": "Maxim De Cuyper",
+          "position": "DEF",
+          "api_id": 133619466730
+        },
+        {
+          "name": "Olivier Boscagli",
+          "position": "DEF",
+          "api_id": 133619205120
+        },
+        {
+          "name": "Pervis Estupiñán Tenorio",
+          "position": "DEF",
+          "api_id": 133619205214
+        },
+        {
+          "name": "Tariq Lamptey",
+          "position": "DEF",
+          "api_id": 133619233792
+        },
+        {
+          "name": "Abdallah Sima",
+          "position": "MID",
+          "api_id": 133619517211
+        },
+        {
+          "name": "Adrian Mazilu",
+          "position": "MID",
+          "api_id": 133619551141
+        },
+        {
+          "name": "Andrew Moran",
+          "position": "MID",
+          "api_id": 133619514834
+        },
+        {
+          "name": "Brajan Gruda",
+          "position": "MID",
+          "api_id": 133619514433
+        },
+        {
+          "name": "Carlos Baleba",
+          "position": "MID",
+          "api_id": 133619536301
+        },
+        {
+          "name": "Diego Gómez Amarilla",
+          "position": "MID",
+          "api_id": 133619515254
+        },
+        {
+          "name": "Georginio Rutter",
+          "position": "MID",
+          "api_id": 133619464067
+        },
+        {
+          "name": "Harry Howell",
+          "position": "MID",
+          "api_id": 133619598320
+        },
+        {
+          "name": "Jack Hinshelwood",
+          "position": "MID",
+          "api_id": 133619533529
+        },
+        {
+          "name": "James Milner",
+          "position": "MID",
+          "api_id": 13361916157
+        },
+        {
+          "name": "Jeremy Sarmiento Morante",
+          "position": "MID",
+          "api_id": 133619442192
+        },
+        {
+          "name": "Joe Knight",
+          "position": "MID",
+          "api_id": 133619568121
+        },
+        {
+          "name": "Julio Enciso Espínola",
+          "position": "MID",
+          "api_id": 133619475120
+        },
+        {
+          "name": "Malick Yalcouyé",
+          "position": "MID",
+          "api_id": 133619612695
+        },
+        {
+          "name": "Mats Wieffer",
+          "position": "MID",
+          "api_id": 133619468779
+        },
+        {
+          "name": "Matt O'Riley",
+          "position": "MID",
+          "api_id": 133619220249
+        },
+        {
+          "name": "Mitoma Kaoru",
+          "position": "MID",
+          "api_id": 133619452340
+        },
+        {
+          "name": "Nehemiah Oriola",
+          "position": "MID",
+          "api_id": 133619557637
+        },
+        {
+          "name": "Pascal Groß",
+          "position": "MID",
+          "api_id": 13361961307
+        },
+        {
+          "name": "Solly March",
+          "position": "MID",
+          "api_id": 133619110345
+        },
+        {
+          "name": "Tom Watson",
+          "position": "MID",
+          "api_id": 133619550074
+        },
+        {
+          "name": "Yankuba Minteh",
+          "position": "MID",
+          "api_id": 133619593031
+        },
+        {
+          "name": "Yasin Ayari",
+          "position": "MID",
+          "api_id": 133619510416
+        },
+        {
+          "name": "Charalampos Kostoulas",
+          "position": "FWD",
+          "api_id": 133619648850
+        },
+        {
+          "name": "Danny Welbeck",
+          "position": "FWD",
+          "api_id": 13361951175
+        },
+        {
+          "name": "Evan Ferguson",
+          "position": "FWD",
+          "api_id": 133619488117
+        },
+        {
+          "name": "Stefanos Tzimas",
+          "position": "FWD",
+          "api_id": 133619609181
+        }
+      ]
+    },
+    {
+      "api_id": 133610,
+      "name": "Chelsea",
+      "short_name": "CHE",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/yvwvtu1448813215.png",
+      "players": [
+        {
+          "name": "Filip Jörgensen",
+          "position": "GK",
+          "api_id": 133610509479
+        },
+        {
+          "name": "Gabriel Słonina",
+          "position": "GK",
+          "api_id": 133610472798
+        },
+        {
+          "name": "Max Merrick",
+          "position": "GK",
+          "api_id": 133610519335
+        },
+        {
+          "name": "Mike Penders",
+          "position": "GK",
+          "api_id": 133610550939
+        },
+        {
+          "name": "Robert Lynch Sánchez",
+          "position": "GK",
+          "api_id": 133610216059
+        },
+        {
+          "name": "Teddy Sharman-Lowe",
+          "position": "GK",
+          "api_id": 133610500857
+        },
+        {
+          "name": "Aarón Anselmino",
+          "position": "DEF",
+          "api_id": 133610623758
+        },
+        {
+          "name": "Benoît Badiashile Mukinayi",
+          "position": "DEF",
+          "api_id": 133610243880
+        },
+        {
+          "name": "Jorrel Hato",
+          "position": "DEF",
+          "api_id": 133610552210
+        },
+        {
+          "name": "Josh Acheampong",
+          "position": "DEF",
+          "api_id": 133610578016
+        },
+        {
+          "name": "Levi Samuels Colwill",
+          "position": "DEF",
+          "api_id": 133610461028
+        },
+        {
+          "name": "Malo Gusto",
+          "position": "DEF",
+          "api_id": 133610483609
+        },
+        {
+          "name": "Mamadou Sarr",
+          "position": "DEF",
+          "api_id": 133610575458
+        },
+        {
+          "name": "Marc Cucurella Saseta",
+          "position": "DEF",
+          "api_id": 133610180268
+        },
+        {
+          "name": "Reece James",
+          "position": "DEF",
+          "api_id": 133610226796
+        },
+        {
+          "name": "Tosin Adarabioyo",
+          "position": "DEF",
+          "api_id": 133610110646
+        },
+        {
+          "name": "Trevoh Chalobah",
+          "position": "DEF",
+          "api_id": 133610181736
+        },
+        {
+          "name": "Wesley Fofana",
+          "position": "DEF",
+          "api_id": 133610445463
+        },
+        {
+          "name": "Alejandro Garnacho Ferreyra",
+          "position": "MID",
+          "api_id": 133610494105
+        },
+        {
+          "name": "Andrey Nascimento dos Santos",
+          "position": "MID",
+          "api_id": 133610533605
+        },
+        {
+          "name": "Christopher Nkunku",
+          "position": "MID",
+          "api_id": 133610214198
+        },
+        {
+          "name": "Cole Palmer",
+          "position": "MID",
+          "api_id": 133610245851
+        },
+        {
+          "name": "Dário Luís Essugo",
+          "position": "MID",
+          "api_id": 133610492007
+        },
+        {
+          "name": "Enzo Fernández",
+          "position": "MID",
+          "api_id": 133610449047
+        },
+        {
+          "name": "Estêvão Almeida de Oliveira Gonçalves",
+          "position": "MID",
+          "api_id": 133610625773
+        },
+        {
+          "name": "Jamie Bynoe-Gittens",
+          "position": "MID",
+          "api_id": 133610464936
+        },
+        {
+          "name": "Jesse Derry",
+          "position": "MID",
+          "api_id": 133610620734
+        },
+        {
+          "name": "Kendry Páez Andrade",
+          "position": "MID",
+          "api_id": 133610612134
+        },
+        {
+          "name": "Landon Emenalo",
+          "position": "MID",
+          "api_id": 133610612912
+        },
+        {
+          "name": "Mathis Eboué",
+          "position": "MID",
+          "api_id": 133610672606
+        },
+        {
+          "name": "Moisés Caicedo Corozo",
+          "position": "MID",
+          "api_id": 133610487672
+        },
+        {
+          "name": "Mykhailo Mudryk",
+          "position": "MID",
+          "api_id": 133610466920
+        },
+        {
+          "name": "Pedro Lomba Neto",
+          "position": "MID",
+          "api_id": 133610248632
+        },
+        {
+          "name": "Roméo Lavia",
+          "position": "MID",
+          "api_id": 133610515356
+        },
+        {
+          "name": "Ryan Kavuma-McQueen",
+          "position": "MID",
+          "api_id": 133610617286
+        },
+        {
+          "name": "João Pedro Junqueira de Jesus",
+          "position": "FWD",
+          "api_id": 133610476168
+        },
+        {
+          "name": "Liam Delap",
+          "position": "FWD",
+          "api_id": 133610464034
+        },
+        {
+          "name": "Marc Guiu Paz",
+          "position": "FWD",
+          "api_id": 133610500309
+        },
+        {
+          "name": "Nicolas Jackson",
+          "position": "FWD",
+          "api_id": 133610518052
+        },
+        {
+          "name": "Shumaira Mheuka",
+          "position": "FWD",
+          "api_id": 133610568119
+        }
+      ]
+    },
+    {
+      "api_id": 133632,
+      "name": "Crystal Palace",
+      "short_name": "CRY",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/ia6i3m1656014992.png",
+      "players": [
+        {
+          "name": "Dean Henderson",
+          "position": "GK",
+          "api_id": 133632173649
+        },
+        {
+          "name": "Remi Matthews",
+          "position": "GK",
+          "api_id": 133632170593
+        },
+        {
+          "name": "Walter Benítez",
+          "position": "GK",
+          "api_id": 133632122709
+        },
+        {
+          "name": "Borna Sosa",
+          "position": "DEF",
+          "api_id": 133632219364
+        },
+        {
+          "name": "Caleb Kporha",
+          "position": "DEF",
+          "api_id": 133632591012
+        },
+        {
+          "name": "Chadi Riad Dnanou",
+          "position": "DEF",
+          "api_id": 133632516621
+        },
+        {
+          "name": "Chris Richards",
+          "position": "DEF",
+          "api_id": 133632428623
+        },
+        {
+          "name": "Daniel Muñoz Mejía",
+          "position": "DEF",
+          "api_id": 133632248348
+        },
+        {
+          "name": "Danny Imray",
+          "position": "DEF",
+          "api_id": 133632503988
+        },
+        {
+          "name": "Dean Benamar",
+          "position": "DEF",
+          "api_id": 133632644426
+        },
+        {
+          "name": "George King",
+          "position": "DEF",
+          "api_id": 133632592384
+        },
+        {
+          "name": "Jaydee Canvot",
+          "position": "DEF",
+          "api_id": 133632652426
+        },
+        {
+          "name": "Maxence Lacroix",
+          "position": "DEF",
+          "api_id": 133632438499
+        },
+        {
+          "name": "Nathaniel Clyne",
+          "position": "DEF",
+          "api_id": 13363258328
+        },
+        {
+          "name": "Rob Holding",
+          "position": "DEF",
+          "api_id": 133632157074
+        },
+        {
+          "name": "Tyrick Mitchell",
+          "position": "DEF",
+          "api_id": 133632245723
+        },
+        {
+          "name": "Adam Wharton",
+          "position": "MID",
+          "api_id": 133632497221
+        },
+        {
+          "name": "Asher Agbinone",
+          "position": "MID",
+          "api_id": 133632580075
+        },
+        {
+          "name": "Brennan Johnson",
+          "position": "MID",
+          "api_id": 133632243898
+        },
+        {
+          "name": "Cheick Doucouré",
+          "position": "MID",
+          "api_id": 133632439464
+        },
+        {
+          "name": "Daichi Kamada",
+          "position": "MID",
+          "api_id": 133632210400
+        },
+        {
+          "name": "David Ozoh",
+          "position": "MID",
+          "api_id": 133632532989
+        },
+        {
+          "name": "Evann Guessand",
+          "position": "MID",
+          "api_id": 133632486337
+        },
+        {
+          "name": "Franco Umeh-Chibueze",
+          "position": "MID",
+          "api_id": 133632575398
+        },
+        {
+          "name": "Ismaïla Sarr",
+          "position": "MID",
+          "api_id": 133632233185
+        },
+        {
+          "name": "Jefferson Lerma Solís",
+          "position": "MID",
+          "api_id": 133632153551
+        },
+        {
+          "name": "Jesurun Rak-Sakyi",
+          "position": "MID",
+          "api_id": 133632451542
+        },
+        {
+          "name": "Joél Drakes-Thomas",
+          "position": "MID",
+          "api_id": 133632673492
+        },
+        {
+          "name": "Justin Devenny",
+          "position": "MID",
+          "api_id": 133632490706
+        },
+        {
+          "name": "Kaden Rodney",
+          "position": "MID",
+          "api_id": 133632531318
+        },
+        {
+          "name": "Malcolm Ebiowei",
+          "position": "MID",
+          "api_id": 133632451535
+        },
+        {
+          "name": "Matheus França de Oliveira",
+          "position": "MID",
+          "api_id": 133632537694
+        },
+        {
+          "name": "Naouirou Ahamada",
+          "position": "MID",
+          "api_id": 133632467117
+        },
+        {
+          "name": "Rio Cardines",
+          "position": "MID",
+          "api_id": 133632591014
+        },
+        {
+          "name": "Romain Esse",
+          "position": "MID",
+          "api_id": 133632607921
+        },
+        {
+          "name": "Will Hughes",
+          "position": "MID",
+          "api_id": 133632109413
+        },
+        {
+          "name": "Yéremy Pino Santos",
+          "position": "MID",
+          "api_id": 133632489024
+        },
+        {
+          "name": "Ben Casey",
+          "position": "FWD",
+          "api_id": 133632632106
+        },
+        {
+          "name": "Christantus Uche",
+          "position": "FWD",
+          "api_id": 133632661392
+        },
+        {
+          "name": "Eddie Nketiah",
+          "position": "FWD",
+          "api_id": 133632206533
+        },
+        {
+          "name": "Jean-Philippe Mateta",
+          "position": "FWD",
+          "api_id": 133632232747
+        },
+        {
+          "name": "Jørgen Strand Larsen",
+          "position": "FWD",
+          "api_id": 133632248412
+        },
+        {
+          "name": "Odsonne Édouard",
+          "position": "FWD",
+          "api_id": 133632200670
+        },
+        {
+          "name": "Zach Marsh",
+          "position": "FWD",
+          "api_id": 133632577980
+        }
+      ]
+    },
+    {
+      "api_id": 133615,
+      "name": "Everton",
+      "short_name": "EVE",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/eqayrf1523184794.png",
+      "players": [
+        {
+          "name": "Harry Tyrer",
+          "position": "GK",
+          "api_id": 133615448325
+        },
+        {
+          "name": "Jordan Pickford",
+          "position": "GK",
+          "api_id": 133615112234
+        },
+        {
+          "name": "Mark Travers",
+          "position": "GK",
+          "api_id": 133615230600
+        },
+        {
+          "name": "Tom King",
+          "position": "GK",
+          "api_id": 133615139001
+        },
+        {
+          "name": "Adam Aznou",
+          "position": "DEF",
+          "api_id": 133615500300
+        },
+        {
+          "name": "Elijah Campbell",
+          "position": "DEF",
+          "api_id": 133615492745
+        },
+        {
+          "name": "Jake O'Brien",
+          "position": "DEF",
+          "api_id": 133615513462
+        },
+        {
+          "name": "James Tarkowski",
+          "position": "DEF",
+          "api_id": 13361518761
+        },
+        {
+          "name": "Jarrad Branthwaite",
+          "position": "DEF",
+          "api_id": 133615481455
+        },
+        {
+          "name": "Michael Keane",
+          "position": "DEF",
+          "api_id": 133615107611
+        },
+        {
+          "name": "Nathan Patterson",
+          "position": "DEF",
+          "api_id": 133615244571
+        },
+        {
+          "name": "Reece Welch",
+          "position": "DEF",
+          "api_id": 133615475907
+        },
+        {
+          "name": "Roman Dixon",
+          "position": "DEF",
+          "api_id": 133615497178
+        },
+        {
+          "name": "Séamus Coleman",
+          "position": "DEF",
+          "api_id": 13361560949
+        },
+        {
+          "name": "Vitalii Mykolenko",
+          "position": "DEF",
+          "api_id": 133615225967
+        },
+        {
+          "name": "Callum Bates",
+          "position": "MID",
+          "api_id": 133615548801
+        },
+        {
+          "name": "Carlos Alcaraz Durán",
+          "position": "MID",
+          "api_id": 133615503697
+        },
+        {
+          "name": "Coby Ebere",
+          "position": "MID",
+          "api_id": 133615505296
+        },
+        {
+          "name": "Dwight McNeil",
+          "position": "MID",
+          "api_id": 133615434154
+        },
+        {
+          "name": "Harrison Armstrong",
+          "position": "MID",
+          "api_id": 133615610873
+        },
+        {
+          "name": "Idrissa Gana Gueye",
+          "position": "MID",
+          "api_id": 13361581801
+        },
+        {
+          "name": "Iliman Ndiaye",
+          "position": "MID",
+          "api_id": 133615441993
+        },
+        {
+          "name": "Isaac Heath",
+          "position": "MID",
+          "api_id": 133615497279
+        },
+        {
+          "name": "Jack Grealish",
+          "position": "MID",
+          "api_id": 133615115283
+        },
+        {
+          "name": "James Garner",
+          "position": "MID",
+          "api_id": 133615233928
+        },
+        {
+          "name": "Jenson Metcalfe",
+          "position": "MID",
+          "api_id": 133615492557
+        },
+        {
+          "name": "Kiernan Dewsbury-Hall",
+          "position": "MID",
+          "api_id": 133615216413
+        },
+        {
+          "name": "Merlin Röhl",
+          "position": "MID",
+          "api_id": 133615514466
+        },
+        {
+          "name": "Tim Iroegbunam",
+          "position": "MID",
+          "api_id": 133615491094
+        },
+        {
+          "name": "Tyler Dibling",
+          "position": "MID",
+          "api_id": 133615497661
+        },
+        {
+          "name": "Tyler Onyango",
+          "position": "MID",
+          "api_id": 133615462446
+        },
+        {
+          "name": "Tyrique George",
+          "position": "MID",
+          "api_id": 133615551615
+        },
+        {
+          "name": "Braiden Graham",
+          "position": "FWD",
+          "api_id": 133615630068
+        },
+        {
+          "name": "Martin Sherif",
+          "position": "FWD",
+          "api_id": 133615537241
+        },
+        {
+          "name": "Norberto Bercique Gomes Betuncal",
+          "position": "FWD",
+          "api_id": 133615487385
+        },
+        {
+          "name": "Thierno Barry",
+          "position": "FWD",
+          "api_id": 133615587309
+        },
+        {
+          "name": "Youssef Ramalho Chermiti",
+          "position": "FWD",
+          "api_id": 133615492012
+        }
+      ]
+    },
+    {
+      "api_id": 133600,
+      "name": "Fulham",
+      "short_name": "FUL",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/xwwvyt1448811086.png",
+      "players": [
+        {
+          "name": "Alfie McNally",
+          "position": "GK",
+          "api_id": 133600506079
+        },
+        {
+          "name": "Benjamin Lecomte",
+          "position": "GK",
+          "api_id": 13360087873
+        },
+        {
+          "name": "Bernd Leno",
+          "position": "GK",
+          "api_id": 13360081201
+        },
+        {
+          "name": "Steven Benda",
+          "position": "GK",
+          "api_id": 133600429971
+        },
+        {
+          "name": "Antonee Robinson",
+          "position": "DEF",
+          "api_id": 133600170528
+        },
+        {
+          "name": "Calvin Bassey",
+          "position": "DEF",
+          "api_id": 133600233892
+        },
+        {
+          "name": "Issa Diop",
+          "position": "DEF",
+          "api_id": 133600220924
+        },
+        {
+          "name": "Joachim Andersen",
+          "position": "DEF",
+          "api_id": 133600175874
+        },
+        {
+          "name": "Jorge Cuenca Barreno",
+          "position": "DEF",
+          "api_id": 133600247301
+        },
+        {
+          "name": "Kenny Tete",
+          "position": "DEF",
+          "api_id": 133600168074
+        },
+        {
+          "name": "Samuel Amissah",
+          "position": "DEF",
+          "api_id": 133600592385
+        },
+        {
+          "name": "Timothy Castagne",
+          "position": "DEF",
+          "api_id": 133600167477
+        },
+        {
+          "name": "Alex Iwobi",
+          "position": "MID",
+          "api_id": 133600154133
+        },
+        {
+          "name": "Andreas Hoelgebaum Pereira",
+          "position": "MID",
+          "api_id": 133600157689
+        },
+        {
+          "name": "Emile Smith Rowe",
+          "position": "MID",
+          "api_id": 133600210289
+        },
+        {
+          "name": "Harrison Reed",
+          "position": "MID",
+          "api_id": 133600154366
+        },
+        {
+          "name": "Harry Wilson",
+          "position": "MID",
+          "api_id": 133600154682
+        },
+        {
+          "name": "Josh King",
+          "position": "MID",
+          "api_id": 133600578725
+        },
+        {
+          "name": "Kevin Santos Lopes de Macedo",
+          "position": "MID",
+          "api_id": 133600561552
+        },
+        {
+          "name": "Luke Harris",
+          "position": "MID",
+          "api_id": 133600516024
+        },
+        {
+          "name": "Martial Godo",
+          "position": "MID",
+          "api_id": 133600574062
+        },
+        {
+          "name": "Oscar Bobb",
+          "position": "MID",
+          "api_id": 133600478555
+        },
+        {
+          "name": "Ryan Sessegnon",
+          "position": "MID",
+          "api_id": 133600185349
+        },
+        {
+          "name": "Samuel Chukwueze",
+          "position": "MID",
+          "api_id": 133600219328
+        },
+        {
+          "name": "Sander Berge",
+          "position": "MID",
+          "api_id": 133600208189
+        },
+        {
+          "name": "Saša Lukić",
+          "position": "MID",
+          "api_id": 133600213314
+        },
+        {
+          "name": "Seth Ridgeon",
+          "position": "MID",
+          "api_id": 133600620536
+        },
+        {
+          "name": "Tom Cairney",
+          "position": "MID",
+          "api_id": 13360077357
+        },
+        {
+          "name": "Jonah Kusi-Asare",
+          "position": "FWD",
+          "api_id": 133600632786
+        },
+        {
+          "name": "Raúl Jiménez Rodríguez",
+          "position": "FWD",
+          "api_id": 133600103057
+        },
+        {
+          "name": "Rodrigo Muniz Carvalho",
+          "position": "FWD",
+          "api_id": 133600245042
+        }
+      ]
+    },
+    {
+      "api_id": 198340,
+      "name": "Leeds United",
+      "short_name": "LEE",
+      "players": [
+        {
+          "name": "Alex Cairns",
+          "position": "GK",
+          "api_id": 19834098846
+        },
+        {
+          "name": "Illan Meslier",
+          "position": "GK",
+          "api_id": 198340438495
+        },
+        {
+          "name": "Karl Darlow",
+          "position": "GK",
+          "api_id": 19834060735
+        },
+        {
+          "name": "Lucas Estella Perri",
+          "position": "GK",
+          "api_id": 198340202595
+        },
+        {
+          "name": "Gabriel Gudmundsson",
+          "position": "DEF",
+          "api_id": 198340244526
+        },
+        {
+          "name": "Isaac Schmidt",
+          "position": "DEF",
+          "api_id": 198340493368
+        },
+        {
+          "name": "Jaka Bijol",
+          "position": "DEF",
+          "api_id": 198340435752
+        },
+        {
+          "name": "James Justin",
+          "position": "DEF",
+          "api_id": 198340221627
+        },
+        {
+          "name": "Jayden Bogle",
+          "position": "DEF",
+          "api_id": 198340227182
+        },
+        {
+          "name": "Jayden Lienou",
+          "position": "DEF",
+          "api_id": 198340644970
+        },
+        {
+          "name": "Joe Rodon",
+          "position": "DEF",
+          "api_id": 198340215225
+        },
+        {
+          "name": "Pascal Struijk",
+          "position": "DEF",
+          "api_id": 198340223694
+        },
+        {
+          "name": "Sam Byram",
+          "position": "DEF",
+          "api_id": 198340114564
+        },
+        {
+          "name": "Sebastiaan Bornauw",
+          "position": "DEF",
+          "api_id": 198340438738
+        },
+        {
+          "name": "Alfie Cresswell",
+          "position": "MID",
+          "api_id": 198340593740
+        },
+        {
+          "name": "Anton Stach",
+          "position": "MID",
+          "api_id": 198340467525
+        },
+        {
+          "name": "Brenden Aaronson",
+          "position": "MID",
+          "api_id": 198340428637
+        },
+        {
+          "name": "Charlie Crew",
+          "position": "MID",
+          "api_id": 198340537119
+        },
+        {
+          "name": "Daniel James",
+          "position": "MID",
+          "api_id": 198340201617
+        },
+        {
+          "name": "Darko Gyabi",
+          "position": "MID",
+          "api_id": 198340471294
+        },
+        {
+          "name": "Ethan Ampadu",
+          "position": "MID",
+          "api_id": 198340200598
+        },
+        {
+          "name": "Facundo Buonanotte",
+          "position": "MID",
+          "api_id": 198340537916
+        },
+        {
+          "name": "Ilia Gruev",
+          "position": "MID",
+          "api_id": 198340487520
+        },
+        {
+          "name": "Jack Harrison",
+          "position": "MID",
+          "api_id": 198340222399
+        },
+        {
+          "name": "Joe Gelhardt",
+          "position": "MID",
+          "api_id": 198340463635
+        },
+        {
+          "name": "Largie Ramazani",
+          "position": "MID",
+          "api_id": 198340434952
+        },
+        {
+          "name": "Noah Okafor",
+          "position": "MID",
+          "api_id": 198340436997
+        },
+        {
+          "name": "Rhys Chadwick",
+          "position": "MID",
+          "api_id": 198340578978
+        },
+        {
+          "name": "Sam Chambers",
+          "position": "MID",
+          "api_id": 198340566863
+        },
+        {
+          "name": "Sam Greenwood",
+          "position": "MID",
+          "api_id": 198340249937
+        },
+        {
+          "name": "Sean Longstaff",
+          "position": "MID",
+          "api_id": 198340181135
+        },
+        {
+          "name": "Tanaka Ao",
+          "position": "MID",
+          "api_id": 198340249056
+        },
+        {
+          "name": "Wilfried Gnonto",
+          "position": "MID",
+          "api_id": 198340493859
+        },
+        {
+          "name": "Dominic Calvert-Lewin",
+          "position": "FWD",
+          "api_id": 198340178815
+        },
+        {
+          "name": "Harry Gray",
+          "position": "FWD",
+          "api_id": 198340601882
+        },
+        {
+          "name": "Joël Piroe",
+          "position": "FWD",
+          "api_id": 198340236826
+        },
+        {
+          "name": "Lukas Nmecha",
+          "position": "FWD",
+          "api_id": 198340175594
+        },
+        {
+          "name": "Mateo Joseph Fernández-Regatillo",
+          "position": "FWD",
+          "api_id": 198340566297
+        },
+        {
+          "name": "Patrick Bamford",
+          "position": "FWD",
+          "api_id": 198340107617
+        }
+      ]
+    },
+    {
+      "api_id": 133602,
+      "name": "Liverpool",
+      "short_name": "LIV",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/kfaher1737969724.png",
+      "players": [
+        {
+          "name": "Alisson Becker",
+          "position": "GK",
+          "api_id": 133602117535
+        },
+        {
+          "name": "Freddie Woodman",
+          "position": "GK",
+          "api_id": 133602156503
+        },
+        {
+          "name": "Giorgi Mamardashvili",
+          "position": "GK",
+          "api_id": 133602450027
+        },
+        {
+          "name": "Ármin Pécsi",
+          "position": "GK",
+          "api_id": 133602587268
+        },
+        {
+          "name": "Amara Nallo",
+          "position": "DEF",
+          "api_id": 133602612926
+        },
+        {
+          "name": "Andrew Robertson",
+          "position": "DEF",
+          "api_id": 133602123798
+        },
+        {
+          "name": "Calvin Ramsay",
+          "position": "DEF",
+          "api_id": 133602490580
+        },
+        {
+          "name": "Conor Bradley",
+          "position": "DEF",
+          "api_id": 133602493777
+        },
+        {
+          "name": "Giovanni Leoni",
+          "position": "DEF",
+          "api_id": 133602648681
+        },
+        {
+          "name": "Ibrahima Konaté",
+          "position": "DEF",
+          "api_id": 133602205716
+        },
+        {
+          "name": "Jeremie Frimpong",
+          "position": "DEF",
+          "api_id": 133602217094
+        },
+        {
+          "name": "Joe Gomez",
+          "position": "DEF",
+          "api_id": 133602172287
+        },
+        {
+          "name": "Konstantinos Tsimikas",
+          "position": "DEF",
+          "api_id": 133602215285
+        },
+        {
+          "name": "Milos Kerkez",
+          "position": "DEF",
+          "api_id": 133602545877
+        },
+        {
+          "name": "Rhys Williams",
+          "position": "DEF",
+          "api_id": 133602220937
+        },
+        {
+          "name": "Talla Ndiaye",
+          "position": "DEF",
+          "api_id": 133602719875
+        },
+        {
+          "name": "Virgil van Dijk",
+          "position": "DEF",
+          "api_id": 13360298032
+        },
+        {
+          "name": "Wellity Lucky",
+          "position": "DEF",
+          "api_id": 133602520440
+        },
+        {
+          "name": "Alexis Mac Allister",
+          "position": "MID",
+          "api_id": 133602244016
+        },
+        {
+          "name": "Cody Gakpo",
+          "position": "MID",
+          "api_id": 133602244298
+        },
+        {
+          "name": "Curtis Jones",
+          "position": "MID",
+          "api_id": 133602207915
+        },
+        {
+          "name": "Dominik Szoboszlai",
+          "position": "MID",
+          "api_id": 133602425876
+        },
+        {
+          "name": "Endo Wataru",
+          "position": "MID",
+          "api_id": 133602159983
+        },
+        {
+          "name": "Federico Chiesa",
+          "position": "MID",
+          "api_id": 133602224541
+        },
+        {
+          "name": "Florian Wirtz",
+          "position": "MID",
+          "api_id": 133602495595
+        },
+        {
+          "name": "James McConnell",
+          "position": "MID",
+          "api_id": 133602492501
+        },
+        {
+          "name": "Kieran Morrison",
+          "position": "MID",
+          "api_id": 133602597042
+        },
+        {
+          "name": "Luis Díaz Marulanda",
+          "position": "MID",
+          "api_id": 133602245731
+        },
+        {
+          "name": "Mohamed Salah",
+          "position": "MID",
+          "api_id": 133602119748
+        },
+        {
+          "name": "Rio Ngumoha",
+          "position": "MID",
+          "api_id": 133602612922
+        },
+        {
+          "name": "Ryan Gravenberch",
+          "position": "MID",
+          "api_id": 133602442266
+        },
+        {
+          "name": "Stefan Bajčetić Maquieira",
+          "position": "MID",
+          "api_id": 133602536928
+        },
+        {
+          "name": "Trey Nyoni",
+          "position": "MID",
+          "api_id": 133602592386
+        },
+        {
+          "name": "Tyler Morton",
+          "position": "MID",
+          "api_id": 133602441148
+        },
+        {
+          "name": "Alexander Isak",
+          "position": "FWD",
+          "api_id": 133602220168
+        },
+        {
+          "name": "Darwin Núñez Ribeiro",
+          "position": "FWD",
+          "api_id": 133602448203
+        },
+        {
+          "name": "Hugo Ekitiké",
+          "position": "FWD",
+          "api_id": 133602511663
+        },
+        {
+          "name": "Jayden Danns",
+          "position": "FWD",
+          "api_id": 133602501058
+        },
+        {
+          "name": "Will Wright",
+          "position": "FWD",
+          "api_id": 133602678945
+        }
+      ]
+    },
+    {
+      "api_id": 133613,
+      "name": "Manchester City",
+      "short_name": "MCI",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/vwpvry1467462651.png",
+      "players": [
+        {
+          "name": "Ederson Santana de Moraes",
+          "position": "GK",
+          "api_id": 133613122160
+        },
+        {
+          "name": "Gianluigi Donnarumma",
+          "position": "GK",
+          "api_id": 133613205936
+        },
+        {
+          "name": "James Trafford",
+          "position": "GK",
+          "api_id": 133613433720
+        },
+        {
+          "name": "Marcus Bettinelli",
+          "position": "GK",
+          "api_id": 133613123074
+        },
+        {
+          "name": "Abdukodir Khusanov",
+          "position": "DEF",
+          "api_id": 133613579153
+        },
+        {
+          "name": "John Stones",
+          "position": "DEF",
+          "api_id": 13361398299
+        },
+        {
+          "name": "Joško Gvardiol",
+          "position": "DEF",
+          "api_id": 133613478424
+        },
+        {
+          "name": "Manuel Akanji",
+          "position": "DEF",
+          "api_id": 133613212975
+        },
+        {
+          "name": "Marc Guéhi",
+          "position": "DEF",
+          "api_id": 133613210036
+        },
+        {
+          "name": "Matheus Nunes",
+          "position": "DEF",
+          "api_id": 133613466351
+        },
+        {
+          "name": "Max Alleyne",
+          "position": "DEF",
+          "api_id": 133613495307
+        },
+        {
+          "name": "Nathan Aké",
+          "position": "DEF",
+          "api_id": 133613127184
+        },
+        {
+          "name": "Nico O'Reilly",
+          "position": "DEF",
+          "api_id": 133613473769
+        },
+        {
+          "name": "Rayan Aït-Nouri",
+          "position": "DEF",
+          "api_id": 133613449514
+        },
+        {
+          "name": "Rico Lewis",
+          "position": "DEF",
+          "api_id": 133613478064
+        },
+        {
+          "name": "Rúben dos Santos Gato Alves Dias",
+          "position": "DEF",
+          "api_id": 133613172314
+        },
+        {
+          "name": "Stephen Mfuni",
+          "position": "DEF",
+          "api_id": 133613567213
+        },
+        {
+          "name": "Vitor de Oliveira Nunes dos Reis",
+          "position": "DEF",
+          "api_id": 133613617222
+        },
+        {
+          "name": "Antoine Semenyo",
+          "position": "MID",
+          "api_id": 133613438730
+        },
+        {
+          "name": "Bernardo Mota Veiga de Carvalho e Silva",
+          "position": "MID",
+          "api_id": 133613166809
+        },
+        {
+          "name": "Charlie Gray",
+          "position": "MID",
+          "api_id": 133613517234
+        },
+        {
+          "name": "Claudio Echeverri",
+          "position": "MID",
+          "api_id": 133613576204
+        },
+        {
+          "name": "Divine Mukasa",
+          "position": "MID",
+          "api_id": 133613591039
+        },
+        {
+          "name": "Jérémy Doku",
+          "position": "MID",
+          "api_id": 133613249875
+        },
+        {
+          "name": "Kalvin Phillips",
+          "position": "MID",
+          "api_id": 133613156405
+        },
+        {
+          "name": "Mateo Kovačić",
+          "position": "MID",
+          "api_id": 13361392651
+        },
+        {
+          "name": "Nico González Iglesias",
+          "position": "MID",
+          "api_id": 133613466694
+        },
+        {
+          "name": "Omar Marmoush",
+          "position": "MID",
+          "api_id": 133613439234
+        },
+        {
+          "name": "Phil Foden",
+          "position": "MID",
+          "api_id": 133613210244
+        },
+        {
+          "name": "Rayan Cherki",
+          "position": "MID",
+          "api_id": 133613467052
+        },
+        {
+          "name": "Reigan Heskey",
+          "position": "MID",
+          "api_id": 133613581921
+        },
+        {
+          "name": "Rodrigo 'Rodri' Hernandez Cascante",
+          "position": "MID",
+          "api_id": 133613221566
+        },
+        {
+          "name": "Ryan McAidoo",
+          "position": "MID",
+          "api_id": 133613617288
+        },
+        {
+          "name": "Sverre Nypan",
+          "position": "MID",
+          "api_id": 133613567164
+        },
+        {
+          "name": "Sávio Moreira de Oliveira",
+          "position": "MID",
+          "api_id": 133613511281
+        },
+        {
+          "name": "Tijjani Reijnders",
+          "position": "MID",
+          "api_id": 133613434036
+        },
+        {
+          "name": "İlkay Gündoğan",
+          "position": "MID",
+          "api_id": 13361360859
+        },
+        {
+          "name": "Erling Haaland",
+          "position": "FWD",
+          "api_id": 133613224094
+        }
+      ]
+    },
+    {
+      "api_id": 133612,
+      "name": "Manchester United",
+      "short_name": "MUN",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/xzqdr11517660252.png",
+      "players": [
+        {
+          "name": "Altay Bayındır",
+          "position": "GK",
+          "api_id": 133612452302
+        },
+        {
+          "name": "André Onana",
+          "position": "GK",
+          "api_id": 133612203641
+        },
+        {
+          "name": "Dermot Mee",
+          "position": "GK",
+          "api_id": 133612462537
+        },
+        {
+          "name": "Elyh Harrison",
+          "position": "GK",
+          "api_id": 133612589555
+        },
+        {
+          "name": "Senne Lammens",
+          "position": "GK",
+          "api_id": 133612466247
+        },
+        {
+          "name": "Tom Heaton",
+          "position": "GK",
+          "api_id": 13361222205
+        },
+        {
+          "name": "Ayden Heaven",
+          "position": "DEF",
+          "api_id": 133612607745
+        },
+        {
+          "name": "Diego León Blanco",
+          "position": "DEF",
+          "api_id": 133612662712
+        },
+        {
+          "name": "Diogo Dalot Teixeira",
+          "position": "DEF",
+          "api_id": 133612217051
+        },
+        {
+          "name": "Godwill Kukonki",
+          "position": "DEF",
+          "api_id": 133612577637
+        },
+        {
+          "name": "Harry Amass",
+          "position": "DEF",
+          "api_id": 133612578974
+        },
+        {
+          "name": "Harry Maguire",
+          "position": "DEF",
+          "api_id": 13361296658
+        },
+        {
+          "name": "Leny Yoro",
+          "position": "DEF",
+          "api_id": 133612551864
+        },
+        {
+          "name": "Lisandro Martínez",
+          "position": "DEF",
+          "api_id": 133612222820
+        },
+        {
+          "name": "Luke Shaw",
+          "position": "DEF",
+          "api_id": 133612107760
+        },
+        {
+          "name": "Matthijs de Ligt",
+          "position": "DEF",
+          "api_id": 133612210365
+        },
+        {
+          "name": "Noussair Mazraoui",
+          "position": "DEF",
+          "api_id": 133612231001
+        },
+        {
+          "name": "Patrick Dorgu",
+          "position": "DEF",
+          "api_id": 133612597777
+        },
+        {
+          "name": "Tyler Fredricson",
+          "position": "DEF",
+          "api_id": 133612548676
+        },
+        {
+          "name": "Tyrell Malacia",
+          "position": "DEF",
+          "api_id": 133612223690
+        },
+        {
+          "name": "Amad Diallo",
+          "position": "MID",
+          "api_id": 133612494250
+        },
+        {
+          "name": "Antony dos Santos",
+          "position": "MID",
+          "api_id": 133612468169
+        },
+        {
+          "name": "Bendito Mantato",
+          "position": "MID",
+          "api_id": 133612577620
+        },
+        {
+          "name": "Bruno Borges Fernandes",
+          "position": "MID",
+          "api_id": 133612142746
+        },
+        {
+          "name": "Bryan Mbeumo",
+          "position": "MID",
+          "api_id": 133612447008
+        },
+        {
+          "name": "Carlos Henrique Casimiro",
+          "position": "MID",
+          "api_id": 13361262256
+        },
+        {
+          "name": "Jack Fletcher",
+          "position": "MID",
+          "api_id": 133612548037
+        },
+        {
+          "name": "Jack Moorhouse",
+          "position": "MID",
+          "api_id": 133612560684
+        },
+        {
+          "name": "Jayce Fitzgerald",
+          "position": "MID",
+          "api_id": 133612557639
+        },
+        {
+          "name": "Jim Thwaites",
+          "position": "MID",
+          "api_id": 133612577634
+        },
+        {
+          "name": "Kobbie Mainoo",
+          "position": "MID",
+          "api_id": 133612517895
+        },
+        {
+          "name": "Manuel Ugarte Ribeiro",
+          "position": "MID",
+          "api_id": 133612233112
+        },
+        {
+          "name": "Marcus Rashford",
+          "position": "MID",
+          "api_id": 133612177297
+        },
+        {
+          "name": "Mason Mount",
+          "position": "MID",
+          "api_id": 133612185341
+        },
+        {
+          "name": "Matheus Santos Carneiro da Cunha",
+          "position": "MID",
+          "api_id": 133612431871
+        },
+        {
+          "name": "Shea Lacey",
+          "position": "MID",
+          "api_id": 133612577628
+        },
+        {
+          "name": "Sékou Koné",
+          "position": "MID",
+          "api_id": 133612619873
+        },
+        {
+          "name": "Toby Collyer",
+          "position": "MID",
+          "api_id": 133612491881
+        },
+        {
+          "name": "Tyler Fletcher",
+          "position": "MID",
+          "api_id": 133612520913
+        },
+        {
+          "name": "Benjamin Sesko",
+          "position": "FWD",
+          "api_id": 133612486711
+        },
+        {
+          "name": "Chido Obi",
+          "position": "FWD",
+          "api_id": 133612597047
+        },
+        {
+          "name": "Ethan Wheatley",
+          "position": "FWD",
+          "api_id": 133612576034
+        },
+        {
+          "name": "Joshua Zirkzee",
+          "position": "FWD",
+          "api_id": 133612459249
+        },
+        {
+          "name": "Rasmus Højlund",
+          "position": "FWD",
+          "api_id": 133612498894
+        }
+      ]
+    },
+    {
+      "api_id": 133636,
+      "name": "Newcastle United",
+      "short_name": "NEW",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/lhwuiz1621593302.png",
+      "players": [
+        {
+          "name": "Aaron Ramsdale",
+          "position": "GK",
+          "api_id": 133636226321
+        },
+        {
+          "name": "John Ruddy",
+          "position": "GK",
+          "api_id": 13363620236
+        },
+        {
+          "name": "Mark Gillespie",
+          "position": "GK",
+          "api_id": 13363682441
+        },
+        {
+          "name": "Nick Pope",
+          "position": "GK",
+          "api_id": 13363699747
+        },
+        {
+          "name": "Odysseas Vlachodimos",
+          "position": "GK",
+          "api_id": 133636112452
+        },
+        {
+          "name": "Alex Murphy",
+          "position": "DEF",
+          "api_id": 133636546477
+        },
+        {
+          "name": "Dan Burn",
+          "position": "DEF",
+          "api_id": 13363679916
+        },
+        {
+          "name": "Emil Krafth",
+          "position": "DEF",
+          "api_id": 133636112773
+        },
+        {
+          "name": "Fabian Schär",
+          "position": "DEF",
+          "api_id": 133636120471
+        },
+        {
+          "name": "Harrison Ashby",
+          "position": "DEF",
+          "api_id": 133636442024
+        },
+        {
+          "name": "Jamaal Lascelles",
+          "position": "DEF",
+          "api_id": 133636102148
+        },
+        {
+          "name": "Kieran Trippier",
+          "position": "DEF",
+          "api_id": 13363678794
+        },
+        {
+          "name": "Leo Shahar",
+          "position": "DEF",
+          "api_id": 133636554746
+        },
+        {
+          "name": "Lewis Hall",
+          "position": "DEF",
+          "api_id": 133636488838
+        },
+        {
+          "name": "Malick Thiaw",
+          "position": "DEF",
+          "api_id": 133636466642
+        },
+        {
+          "name": "Matt Targett",
+          "position": "DEF",
+          "api_id": 133636170359
+        },
+        {
+          "name": "Miodrag Pivaš",
+          "position": "DEF",
+          "api_id": 133636579512
+        },
+        {
+          "name": "Sven Botman",
+          "position": "DEF",
+          "api_id": 133636221237
+        },
+        {
+          "name": "Tino Livramento",
+          "position": "DEF",
+          "api_id": 133636442191
+        },
+        {
+          "name": "Anthony Elanga",
+          "position": "MID",
+          "api_id": 133636450434
+        },
+        {
+          "name": "Anthony Gordon",
+          "position": "MID",
+          "api_id": 133636233826
+        },
+        {
+          "name": "Antoñito Cordero Campillo",
+          "position": "MID",
+          "api_id": 133636641108
+        },
+        {
+          "name": "Bruno Guimarães Rodriguez Moura",
+          "position": "MID",
+          "api_id": 133636209706
+        },
+        {
+          "name": "Garang Kuol",
+          "position": "MID",
+          "api_id": 133636565510
+        },
+        {
+          "name": "Harvey Barnes",
+          "position": "MID",
+          "api_id": 133636202666
+        },
+        {
+          "name": "Isaac Hayden",
+          "position": "MID",
+          "api_id": 133636154127
+        },
+        {
+          "name": "Jacob Murphy",
+          "position": "MID",
+          "api_id": 133636115243
+        },
+        {
+          "name": "Jacob Ramsey",
+          "position": "MID",
+          "api_id": 133636233653
+        },
+        {
+          "name": "Joe White",
+          "position": "MID",
+          "api_id": 133636462484
+        },
+        {
+          "name": "Joe Willock",
+          "position": "MID",
+          "api_id": 133636201089
+        },
+        {
+          "name": "Joelinton Cássio Apolinário de Lira",
+          "position": "MID",
+          "api_id": 133636181974
+        },
+        {
+          "name": "Lewis Miley",
+          "position": "MID",
+          "api_id": 133636548719
+        },
+        {
+          "name": "Sam Alabi",
+          "position": "MID",
+          "api_id": 133636667607
+        },
+        {
+          "name": "Sandro Tonali",
+          "position": "MID",
+          "api_id": 133636433422
+        },
+        {
+          "name": "Seung-Soo Park",
+          "position": "MID",
+          "api_id": 133636624110
+        },
+        {
+          "name": "Nick Woltemade",
+          "position": "FWD",
+          "api_id": 133636471313
+        },
+        {
+          "name": "Sean Neave",
+          "position": "FWD",
+          "api_id": 133636600303
+        },
+        {
+          "name": "William Osula",
+          "position": "FWD",
+          "api_id": 133636539207
+        },
+        {
+          "name": "Yoane Wissa",
+          "position": "FWD",
+          "api_id": 133636217646
+        }
+      ]
+    },
+    {
+      "api_id": 133631,
+      "name": "Nottingham Forest",
+      "short_name": "NFO",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/bk4qjs1546440351.png",
+      "players": [
+        {
+          "name": "Angus Gunn",
+          "position": "GK",
+          "api_id": 133631108265
+        },
+        {
+          "name": "Carlos Miguel dos Santos Pereira",
+          "position": "GK",
+          "api_id": 133631476123
+        },
+        {
+          "name": "John Victor Maciel Furtado",
+          "position": "GK",
+          "api_id": 133631222389
+        },
+        {
+          "name": "Matt Turner",
+          "position": "GK",
+          "api_id": 133631225068
+        },
+        {
+          "name": "Matz Sels",
+          "position": "GK",
+          "api_id": 13363186633
+        },
+        {
+          "name": "Stefan Ortega Moreno",
+          "position": "GK",
+          "api_id": 13363189248
+        },
+        {
+          "name": "David Mota Veiga Teixeira do Carmo",
+          "position": "DEF",
+          "api_id": 133631452432
+        },
+        {
+          "name": "Felipe Rodrigues da Silva",
+          "position": "DEF",
+          "api_id": 133631486047
+        },
+        {
+          "name": "Jair Paula da Cunha Filho",
+          "position": "DEF",
+          "api_id": 133631576458
+        },
+        {
+          "name": "Luca Netz",
+          "position": "DEF",
+          "api_id": 133631471315
+        },
+        {
+          "name": "Luis Eduardo Soares da Silva",
+          "position": "DEF",
+          "api_id": 133631561441
+        },
+        {
+          "name": "Murillo Costa dos Santos",
+          "position": "DEF",
+          "api_id": 133631576476
+        },
+        {
+          "name": "Neco Williams",
+          "position": "DEF",
+          "api_id": 133631216136
+        },
+        {
+          "name": "Nicolò Savona",
+          "position": "DEF",
+          "api_id": 133631501151
+        },
+        {
+          "name": "Nikola Milenković",
+          "position": "DEF",
+          "api_id": 133631228444
+        },
+        {
+          "name": "Ola Aina",
+          "position": "DEF",
+          "api_id": 133631160506
+        },
+        {
+          "name": "Oleksandr Zinchenko",
+          "position": "DEF",
+          "api_id": 133631207325
+        },
+        {
+          "name": "Omar Richards",
+          "position": "DEF",
+          "api_id": 133631205822
+        },
+        {
+          "name": "Willy Boly",
+          "position": "DEF",
+          "api_id": 13363191585
+        },
+        {
+          "name": "Zach Abbott",
+          "position": "DEF",
+          "api_id": 133631550067
+        },
+        {
+          "name": "Archie Whitehall",
+          "position": "MID",
+          "api_id": 133631569159
+        },
+        {
+          "name": "Callum Hudson-Odoi",
+          "position": "MID",
+          "api_id": 133631210046
+        },
+        {
+          "name": "Dan Ndoye",
+          "position": "MID",
+          "api_id": 133631457512
+        },
+        {
+          "name": "Dilane Bakwa",
+          "position": "MID",
+          "api_id": 133631477887
+        },
+        {
+          "name": "Elliot Anderson",
+          "position": "MID",
+          "api_id": 133631216379
+        },
+        {
+          "name": "Eric da Silva Moreira",
+          "position": "MID",
+          "api_id": 133631570014
+        },
+        {
+          "name": "Ibrahim Sangaré",
+          "position": "MID",
+          "api_id": 133631211462
+        },
+        {
+          "name": "James McAtee",
+          "position": "MID",
+          "api_id": 133631433714
+        },
+        {
+          "name": "Jimmy Sinclair",
+          "position": "MID",
+          "api_id": 133631591040
+        },
+        {
+          "name": "João Pedro Ferreira da Silva",
+          "position": "MID",
+          "api_id": 133631511500
+        },
+        {
+          "name": "Lewis O'Brien",
+          "position": "MID",
+          "api_id": 133631244345
+        },
+        {
+          "name": "Marko Stamenić",
+          "position": "MID",
+          "api_id": 133631496161
+        },
+        {
+          "name": "Morgan Gibbs-White",
+          "position": "MID",
+          "api_id": 133631223531
+        },
+        {
+          "name": "Nicolás Domínguez",
+          "position": "MID",
+          "api_id": 133631251199
+        },
+        {
+          "name": "Omari Hutchinson",
+          "position": "MID",
+          "api_id": 133631504301
+        },
+        {
+          "name": "Ryan Yates",
+          "position": "MID",
+          "api_id": 133631205968
+        },
+        {
+          "name": "Arnaud Kalimuendo",
+          "position": "FWD",
+          "api_id": 133631466680
+        },
+        {
+          "name": "Chris Wood",
+          "position": "FWD",
+          "api_id": 13363161689
+        },
+        {
+          "name": "Igor Jesus Maciel da Cruz",
+          "position": "FWD",
+          "api_id": 133631483973
+        },
+        {
+          "name": "Lamin Sillah",
+          "position": "FWD",
+          "api_id": 133631688076
+        },
+        {
+          "name": "Lorenzo Lucca",
+          "position": "FWD",
+          "api_id": 133631470130
+        },
+        {
+          "name": "Taiwo Awoniyi",
+          "position": "FWD",
+          "api_id": 133631211156
+        }
+      ]
+    },
+    {
+      "api_id": 198244,
+      "name": "Sunderland",
+      "short_name": "SUN",
+      "players": [
+        {
+          "name": "Anthony Patterson",
+          "position": "GK",
+          "api_id": 198244233571
+        },
+        {
+          "name": "Blondy Nna Noukeu",
+          "position": "GK",
+          "api_id": 198244491000
+        },
+        {
+          "name": "Melker Ellborg",
+          "position": "GK",
+          "api_id": 198244516046
+        },
+        {
+          "name": "Robin Roefs",
+          "position": "GK",
+          "api_id": 198244499016
+        },
+        {
+          "name": "Simon Moore",
+          "position": "GK",
+          "api_id": 19824475854
+        },
+        {
+          "name": "Aji Alese",
+          "position": "DEF",
+          "api_id": 198244221684
+        },
+        {
+          "name": "Arthur Masuaku",
+          "position": "DEF",
+          "api_id": 198244106717
+        },
+        {
+          "name": "Daniel Ballard",
+          "position": "DEF",
+          "api_id": 198244224827
+        },
+        {
+          "name": "Dennis Cirkin",
+          "position": "DEF",
+          "api_id": 198244462195
+        },
+        {
+          "name": "Jenson Jones",
+          "position": "DEF",
+          "api_id": 198244233356
+        },
+        {
+          "name": "Jenson Seelt",
+          "position": "DEF",
+          "api_id": 198244520634
+        },
+        {
+          "name": "Joe Anderson",
+          "position": "DEF",
+          "api_id": 198244233820
+        },
+        {
+          "name": "Leo Fuhr Hjelde",
+          "position": "DEF",
+          "api_id": 198244478547
+        },
+        {
+          "name": "Luke O'Nien",
+          "position": "DEF",
+          "api_id": 198244168512
+        },
+        {
+          "name": "Lutsharel Geertruida",
+          "position": "DEF",
+          "api_id": 198244248955
+        },
+        {
+          "name": "Niall Huggins",
+          "position": "DEF",
+          "api_id": 198244493066
+        },
+        {
+          "name": "Nordi Mukiele",
+          "position": "DEF",
+          "api_id": 198244201834
+        },
+        {
+          "name": "Omar Alderete",
+          "position": "DEF",
+          "api_id": 198244202895
+        },
+        {
+          "name": "Reinildo Mandava",
+          "position": "DEF",
+          "api_id": 198244435399
+        },
+        {
+          "name": "Timothée Pembélé",
+          "position": "DEF",
+          "api_id": 198244466702
+        },
+        {
+          "name": "Trai Hume",
+          "position": "DEF",
+          "api_id": 198244488676
+        },
+        {
+          "name": "Zak Johnson",
+          "position": "DEF",
+          "api_id": 198244515613
+        },
+        {
+          "name": "Abdoullah Ba",
+          "position": "MID",
+          "api_id": 198244478851
+        },
+        {
+          "name": "Alan Browne",
+          "position": "MID",
+          "api_id": 198244172422
+        },
+        {
+          "name": "Bertrand Traoré",
+          "position": "MID",
+          "api_id": 198244111504
+        },
+        {
+          "name": "Chemsdine Talbi",
+          "position": "MID",
+          "api_id": 198244550912
+        },
+        {
+          "name": "Chris Rigg",
+          "position": "MID",
+          "api_id": 198244555197
+        },
+        {
+          "name": "Dan Neil",
+          "position": "MID",
+          "api_id": 198244224336
+        },
+        {
+          "name": "Djiamgone Jocelin Ta Bi",
+          "position": "MID",
+          "api_id": 198244700989
+        },
+        {
+          "name": "Enzo Le Fée",
+          "position": "MID",
+          "api_id": 198244485420
+        },
+        {
+          "name": "Granit Xhaka",
+          "position": "MID",
+          "api_id": 19824485450
+        },
+        {
+          "name": "Habib Diarra",
+          "position": "MID",
+          "api_id": 198244548027
+        },
+        {
+          "name": "Harrison Jones",
+          "position": "MID",
+          "api_id": 198244548410
+        },
+        {
+          "name": "Ian Poveda-Ocampo",
+          "position": "MID",
+          "api_id": 198244216460
+        },
+        {
+          "name": "Jack Whittaker",
+          "position": "MID",
+          "api_id": 198244571929
+        },
+        {
+          "name": "Jay Matete",
+          "position": "MID",
+          "api_id": 198244494837
+        },
+        {
+          "name": "Jaydon Jones",
+          "position": "MID",
+          "api_id": 198244572087
+        },
+        {
+          "name": "Milan Aleksić",
+          "position": "MID",
+          "api_id": 198244627844
+        },
+        {
+          "name": "Nectarios Triantis",
+          "position": "MID",
+          "api_id": 198244501696
+        },
+        {
+          "name": "Nilson Angulo",
+          "position": "MID",
+          "api_id": 198244537661
+        },
+        {
+          "name": "Noah Sadiki",
+          "position": "MID",
+          "api_id": 198244578669
+        },
+        {
+          "name": "Patrick Roberts",
+          "position": "MID",
+          "api_id": 198244125165
+        },
+        {
+          "name": "Pierre Ekwah Elimby",
+          "position": "MID",
+          "api_id": 198244459297
+        },
+        {
+          "name": "Romaine Mundle",
+          "position": "MID",
+          "api_id": 198244462199
+        },
+        {
+          "name": "Simon Adingra",
+          "position": "MID",
+          "api_id": 198244536818
+        },
+        {
+          "name": "Tymur Tutierov",
+          "position": "MID",
+          "api_id": 198244605211
+        },
+        {
+          "name": "Ahmed Abdullahi",
+          "position": "FWD",
+          "api_id": 198244612975
+        },
+        {
+          "name": "Brian Brobbey",
+          "position": "FWD",
+          "api_id": 198244442264
+        },
+        {
+          "name": "Eliezer Mayenda Dossou",
+          "position": "FWD",
+          "api_id": 198244565406
+        },
+        {
+          "name": "Luís Hemir Silva Semedo",
+          "position": "FWD",
+          "api_id": 198244552153
+        },
+        {
+          "name": "Nazarii Rusyn",
+          "position": "FWD",
+          "api_id": 198244441955
+        },
+        {
+          "name": "Wilson Isidor",
+          "position": "FWD",
+          "api_id": 198244438505
+        }
+      ]
+    },
+    {
+      "api_id": 133616,
+      "name": "Tottenham Hotspur",
+      "short_name": "TOT",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/dfyfhl1604094109.png",
+      "players": [
+        {
+          "name": "Antonín Kinský",
+          "position": "GK",
+          "api_id": 133616486055
+        },
+        {
+          "name": "Brandon Austin",
+          "position": "GK",
+          "api_id": 133616215572
+        },
+        {
+          "name": "Guglielmo Vicario",
+          "position": "GK",
+          "api_id": 133616185254
+        },
+        {
+          "name": "Ashley Phillips",
+          "position": "DEF",
+          "api_id": 133616549308
+        },
+        {
+          "name": "Ben Davies",
+          "position": "DEF",
+          "api_id": 133616116556
+        },
+        {
+          "name": "Cristian Romero",
+          "position": "DEF",
+          "api_id": 133616222632
+        },
+        {
+          "name": "Destiny Udogie",
+          "position": "DEF",
+          "api_id": 133616488053
+        },
+        {
+          "name": "Djed Spence",
+          "position": "DEF",
+          "api_id": 133616233859
+        },
+        {
+          "name": "James Rowswell",
+          "position": "DEF",
+          "api_id": 133616500716
+        },
+        {
+          "name": "João Victor de Souza Menezes",
+          "position": "DEF",
+          "api_id": 133616617221
+        },
+        {
+          "name": "Jun'ai Byfield",
+          "position": "DEF",
+          "api_id": 133616641419
+        },
+        {
+          "name": "Kevin Danso",
+          "position": "DEF",
+          "api_id": 133616136720
+        },
+        {
+          "name": "Luka Vušković",
+          "position": "DEF",
+          "api_id": 133616611799
+        },
+        {
+          "name": "Micky van de Ven",
+          "position": "DEF",
+          "api_id": 133616492279
+        },
+        {
+          "name": "Pedro Porro Sauceda",
+          "position": "DEF",
+          "api_id": 133616442164
+        },
+        {
+          "name": "Radu Drăgușin",
+          "position": "DEF",
+          "api_id": 133616494125
+        },
+        {
+          "name": "Takai Kōta",
+          "position": "DEF",
+          "api_id": 133616554299
+        },
+        {
+          "name": "Archie Gray",
+          "position": "MID",
+          "api_id": 133616548701
+        },
+        {
+          "name": "Bryan Gil Salvatierra",
+          "position": "MID",
+          "api_id": 133616437234
+        },
+        {
+          "name": "Callum Olusesi",
+          "position": "MID",
+          "api_id": 133616500726
+        },
+        {
+          "name": "Conor Gallagher",
+          "position": "MID",
+          "api_id": 133616233787
+        },
+        {
+          "name": "Dejan Kulusevski",
+          "position": "MID",
+          "api_id": 133616446044
+        },
+        {
+          "name": "James Maddison",
+          "position": "MID",
+          "api_id": 133616173780
+        },
+        {
+          "name": "João Maria Lobo Alves Palhares Costa Palhinha Gonçalves",
+          "position": "MID",
+          "api_id": 133616155296
+        },
+        {
+          "name": "Lucas Bergvall",
+          "position": "MID",
+          "api_id": 133616571526
+        },
+        {
+          "name": "Lucá Williams-Barnett",
+          "position": "MID",
+          "api_id": 133616612917
+        },
+        {
+          "name": "Manor Solomon",
+          "position": "MID",
+          "api_id": 133616236674
+        },
+        {
+          "name": "Mathys Tel",
+          "position": "MID",
+          "api_id": 133616512499
+        },
+        {
+          "name": "Mikey Moore",
+          "position": "MID",
+          "api_id": 133616500721
+        },
+        {
+          "name": "Mohammed Kudus",
+          "position": "MID",
+          "api_id": 133616461842
+        },
+        {
+          "name": "Pape Matar Sarr",
+          "position": "MID",
+          "api_id": 133616483442
+        },
+        {
+          "name": "Rio Kyerematen",
+          "position": "MID",
+          "api_id": 133616537134
+        },
+        {
+          "name": "Rodrigo Bentancur",
+          "position": "MID",
+          "api_id": 133616203993
+        },
+        {
+          "name": "Son Heung-min",
+          "position": "MID",
+          "api_id": 13361686971
+        },
+        {
+          "name": "Wilson Odobert",
+          "position": "MID",
+          "api_id": 133616551839
+        },
+        {
+          "name": "Xavi Simons",
+          "position": "MID",
+          "api_id": 133616494362
+        },
+        {
+          "name": "Yang Min-hyeok",
+          "position": "MID",
+          "api_id": 133616624095
+        },
+        {
+          "name": "Yusuf Akhamrich",
+          "position": "MID",
+          "api_id": 133616591035
+        },
+        {
+          "name": "Yves Bissouma",
+          "position": "MID",
+          "api_id": 133616228127
+        },
+        {
+          "name": "Dane Scarlett",
+          "position": "FWD",
+          "api_id": 133616491145
+        },
+        {
+          "name": "Dominic Solanke-Mitchell",
+          "position": "FWD",
+          "api_id": 133616155566
+        },
+        {
+          "name": "James Wilson",
+          "position": "FWD",
+          "api_id": 133616614232
+        },
+        {
+          "name": "Randal Kolo Muani",
+          "position": "FWD",
+          "api_id": 133616248693
+        },
+        {
+          "name": "Richarlison de Andrade",
+          "position": "FWD",
+          "api_id": 133616213319
+        },
+        {
+          "name": "Will Lankshear",
+          "position": "FWD",
+          "api_id": 133616553427
+        }
+      ]
+    },
+    {
+      "api_id": 133614,
+      "name": "West Ham United",
+      "short_name": "WHU",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/yutyxs1467459956.png",
+      "players": [
+        {
+          "name": "Alphonse Areola",
+          "position": "GK",
+          "api_id": 13361485182
+        },
+        {
+          "name": "Finlay Herrick",
+          "position": "GK",
+          "api_id": 133614554742
+        },
+        {
+          "name": "Krisztián Hegyi",
+          "position": "GK",
+          "api_id": 133614484364
+        },
+        {
+          "name": "Lukasz Fabianski",
+          "position": "GK",
+          "api_id": 13361438096
+        },
+        {
+          "name": "Mads Hermansen",
+          "position": "GK",
+          "api_id": 133614468189
+        },
+        {
+          "name": "Wes Foderingham",
+          "position": "GK",
+          "api_id": 13361483143
+        },
+        {
+          "name": "Aaron Wan-Bissaka",
+          "position": "DEF",
+          "api_id": 133614215590
+        },
+        {
+          "name": "Airidas Golambeckis",
+          "position": "DEF",
+          "api_id": 133614644473
+        },
+        {
+          "name": "Axel Disasi",
+          "position": "DEF",
+          "api_id": 133614221362
+        },
+        {
+          "name": "El Hadji Malick Diouf",
+          "position": "DEF",
+          "api_id": 133614614804
+        },
+        {
+          "name": "Emerson Palmieri dos Santos",
+          "position": "DEF",
+          "api_id": 133614110533
+        },
+        {
+          "name": "Ezra Mayers",
+          "position": "DEF",
+          "api_id": 133614603903
+        },
+        {
+          "name": "Jean-Clair Todibo",
+          "position": "DEF",
+          "api_id": 133614463116
+        },
+        {
+          "name": "Kaelan Casey",
+          "position": "DEF",
+          "api_id": 133614519438
+        },
+        {
+          "name": "Konstantinos Mavropanos",
+          "position": "DEF",
+          "api_id": 133614234963
+        },
+        {
+          "name": "Kyle Walker-Peters",
+          "position": "DEF",
+          "api_id": 133614159534
+        },
+        {
+          "name": "Maximilian Kilman",
+          "position": "DEF",
+          "api_id": 133614215048
+        },
+        {
+          "name": "Nayef Aguerd",
+          "position": "DEF",
+          "api_id": 133614211494
+        },
+        {
+          "name": "Ollie Scarles",
+          "position": "DEF",
+          "api_id": 133614537109
+        },
+        {
+          "name": "Adama Traoré Diarra",
+          "position": "MID",
+          "api_id": 133614160533
+        },
+        {
+          "name": "Andy Irving",
+          "position": "MID",
+          "api_id": 133614230384
+        },
+        {
+          "name": "Crysencio Summerville",
+          "position": "MID",
+          "api_id": 133614451070
+        },
+        {
+          "name": "Edson Álvarez Velázquez",
+          "position": "MID",
+          "api_id": 133614214999
+        },
+        {
+          "name": "Freddie Potts",
+          "position": "MID",
+          "api_id": 133614491142
+        },
+        {
+          "name": "George Earthy",
+          "position": "MID",
+          "api_id": 133614491885
+        },
+        {
+          "name": "Guido Rodríguez",
+          "position": "MID",
+          "api_id": 133614198024
+        },
+        {
+          "name": "Keiber Lamadrid",
+          "position": "MID",
+          "api_id": 133614573702
+        },
+        {
+          "name": "Lewis Orford",
+          "position": "MID",
+          "api_id": 133614519442
+        },
+        {
+          "name": "Lucas Tolentino Coelho de Lima",
+          "position": "MID",
+          "api_id": 133614225024
+        },
+        {
+          "name": "Luis Guilherme Lira dos Santos",
+          "position": "MID",
+          "api_id": 133614578114
+        },
+        {
+          "name": "Mateus Gonçalo Espanha Fernandes",
+          "position": "MID",
+          "api_id": 133614552226
+        },
+        {
+          "name": "Maxwel Cornet",
+          "position": "MID",
+          "api_id": 133614150519
+        },
+        {
+          "name": "Mohamadou Kanté",
+          "position": "MID",
+          "api_id": 133614631699
+        },
+        {
+          "name": "Soungoutou Magassa",
+          "position": "MID",
+          "api_id": 133614565940
+        },
+        {
+          "name": "Tomáš Souček",
+          "position": "MID",
+          "api_id": 133614216439
+        },
+        {
+          "name": "Callum Marshall",
+          "position": "FWD",
+          "api_id": 133614566431
+        },
+        {
+          "name": "Callum Wilson",
+          "position": "FWD",
+          "api_id": 13361476115
+        },
+        {
+          "name": "Jarrod Bowen",
+          "position": "FWD",
+          "api_id": 133614179186
+        },
+        {
+          "name": "Niclas Füllkrug",
+          "position": "FWD",
+          "api_id": 13361492889
+        },
+        {
+          "name": "Pablo Felipe Pereira de Jesus",
+          "position": "FWD",
+          "api_id": 133614531335
+        },
+        {
+          "name": "Valentín Castellanos",
+          "position": "FWD",
+          "api_id": 133614248670
+        }
+      ]
+    },
+    {
+      "api_id": 133607,
+      "name": "Wolverhampton Wanderers",
+      "short_name": "WOL",
+      "logo": "https://r2.thesportsdb.com/images/media/team/badge/u9qr031621593327.png",
+      "players": [
+        {
+          "name": "Alfie Brooks",
+          "position": "GK",
+          "api_id": 133607492460
+        },
+        {
+          "name": "Daniel Bentley",
+          "position": "GK",
+          "api_id": 13360780602
+        },
+        {
+          "name": "Josh Gracey",
+          "position": "GK",
+          "api_id": 133607628888
+        },
+        {
+          "name": "José Malheiro de Sá",
+          "position": "GK",
+          "api_id": 133607150065
+        },
+        {
+          "name": "Sam Johnstone",
+          "position": "GK",
+          "api_id": 133607102982
+        },
+        {
+          "name": "Alfie Pond",
+          "position": "DEF",
+          "api_id": 133607518179
+        },
+        {
+          "name": "Bastien Meupiyou Menadjou",
+          "position": "DEF",
+          "api_id": 133607561248
+        },
+        {
+          "name": "David Møller Wolfe",
+          "position": "DEF",
+          "api_id": 133607498949
+        },
+        {
+          "name": "Emmanuel Agbadou",
+          "position": "DEF",
+          "api_id": 133607517939
+        },
+        {
+          "name": "Hugo Bueno López",
+          "position": "DEF",
+          "api_id": 133607491721
+        },
+        {
+          "name": "Jackson Tchatchoua",
+          "position": "DEF",
+          "api_id": 133607524705
+        },
+        {
+          "name": "Ki-Jana Hoever",
+          "position": "DEF",
+          "api_id": 133607442271
+        },
+        {
+          "name": "Ladislav Krejcí",
+          "position": "DEF",
+          "api_id": 133607432248
+        },
+        {
+          "name": "Matt Doherty",
+          "position": "DEF",
+          "api_id": 13360788835
+        },
+        {
+          "name": "Pedro Cardoso de Lima",
+          "position": "DEF",
+          "api_id": 133607642221
+        },
+        {
+          "name": "Rodrigo Martins Gomes",
+          "position": "DEF",
+          "api_id": 133607484081
+        },
+        {
+          "name": "Saheed Olagunju",
+          "position": "DEF",
+          "api_id": 133607602956
+        },
+        {
+          "name": "Santiago Ignacio Bueno",
+          "position": "DEF",
+          "api_id": 133607232480
+        },
+        {
+          "name": "Toti Gomes",
+          "position": "DEF",
+          "api_id": 133607511362
+        },
+        {
+          "name": "Yerson Mosquera Valdelamar",
+          "position": "DEF",
+          "api_id": 133607502837
+        },
+        {
+          "name": "André Trindade da Costa Neto",
+          "position": "MID",
+          "api_id": 133607510291
+        },
+        {
+          "name": "Angel Gomes",
+          "position": "MID",
+          "api_id": 133607210041
+        },
+        {
+          "name": "Boubacar Traoré",
+          "position": "MID",
+          "api_id": 133607477502
+        },
+        {
+          "name": "Enso González Medina",
+          "position": "MID",
+          "api_id": 133607594001
+        },
+        {
+          "name": "Ethan Sutherland",
+          "position": "MID",
+          "api_id": 133607590121
+        },
+        {
+          "name": "Fer López González",
+          "position": "MID",
+          "api_id": 133607644135
+        },
+        {
+          "name": "Gonçalo Manuel Ganchinho Guedes",
+          "position": "MID",
+          "api_id": 133607182284
+        },
+        {
+          "name": "Hwang Hee-chan",
+          "position": "MID",
+          "api_id": 133607185754
+        },
+        {
+          "name": "Jean-Ricner Bellegarde",
+          "position": "MID",
+          "api_id": 133607232057
+        },
+        {
+          "name": "Jerome Abbey",
+          "position": "MID",
+          "api_id": 133607686628
+        },
+        {
+          "name": "Jhon Arias",
+          "position": "MID",
+          "api_id": 133607231376
+        },
+        {
+          "name": "Joe Hodge",
+          "position": "MID",
+          "api_id": 133607241299
+        },
+        {
+          "name": "João Victor Gomes da Silva",
+          "position": "MID",
+          "api_id": 133607449089
+        },
+        {
+          "name": "Luke Rawlings",
+          "position": "MID",
+          "api_id": 133607606319
+        },
+        {
+          "name": "Marshall Munetsi",
+          "position": "MID",
+          "api_id": 133607434312
+        },
+        {
+          "name": "Tawanda Chirewa",
+          "position": "MID",
+          "api_id": 133607498606
+        },
+        {
+          "name": "Temple Ojinnaka",
+          "position": "MID",
+          "api_id": 133607515362
+        },
+        {
+          "name": "Tom Edozie",
+          "position": "MID",
+          "api_id": 133607597054
+        },
+        {
+          "name": "Adam Armstrong",
+          "position": "FWD",
+          "api_id": 133607156511
+        },
+        {
+          "name": "Fábio Soares Silva",
+          "position": "FWD",
+          "api_id": 133607450988
+        },
+        {
+          "name": "Leon Chiwome",
+          "position": "FWD",
+          "api_id": 133607590507
+        },
+        {
+          "name": "Mateus Mané",
+          "position": "FWD",
+          "api_id": 133607648671
+        },
+        {
+          "name": "Nathan Fraser",
+          "position": "FWD",
+          "api_id": 133607532363
+        },
+        {
+          "name": "Saša Kalajdžić",
+          "position": "FWD",
+          "api_id": 133607430414
+        },
+        {
+          "name": "Tolu Arokodare",
+          "position": "FWD",
+          "api_id": 133607489213
+        }
+      ]
+    }
   ]
 }

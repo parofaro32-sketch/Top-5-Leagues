@@ -102,18 +102,43 @@ class ActiveMatchSession:
             if self.home_manager_id is None and not self.state.home_break_decision_done and self.state.pending_break:
                 actions = decide_ai_break_actions(self.state, "home")
                 for sub in actions.get("substitutions", []):
-                    evs.append(self.engine.apply_substitution("home", int(sub["off_player_id"]), int(sub["on_player_id"]), reason=sub.get("reason")))
-                if actions.get("tactics_updates"):
-                    evs.append(self.engine.apply_tactical_change("home", actions["tactics_updates"], summary="AI tactical adjustment"))
+                    try:
+                        evs.append(self.engine.apply_substitution("home", int(sub["off_player_id"]), int(sub["on_player_id"]), reason=sub.get("reason") or "tactical/freshness"))
+                    except Exception:
+                        pass
+                if actions.get("tactics_updates") or actions.get("notes"):
+                    try:
+                        notes = actions.get("notes") or []
+                        base = ", ".join(notes) if notes else "AI tactical adjustment"
+                        if actions.get("tactics_updates"):
+                            summary = f"AI tactical adjustment ({base})" if notes else "AI tactical adjustment"
+                        else:
+                            summary = f"AI assessment ({base})"
+                        evs.append(self.engine.apply_tactical_change("home", actions.get("tactics_updates") or {}, summary=summary))
+                    except Exception:
+                        pass
                 self.engine.mark_break_decision("home", True)
             if self.away_manager_id is None and not self.state.away_break_decision_done and self.state.pending_break:
                 actions = decide_ai_break_actions(self.state, "away")
                 for sub in actions.get("substitutions", []):
-                    evs.append(self.engine.apply_substitution("away", int(sub["off_player_id"]), int(sub["on_player_id"]), reason=sub.get("reason")))
-                if actions.get("tactics_updates"):
-                    evs.append(self.engine.apply_tactical_change("away", actions["tactics_updates"], summary="AI tactical adjustment"))
+                    try:
+                        evs.append(self.engine.apply_substitution("away", int(sub["off_player_id"]), int(sub["on_player_id"]), reason=sub.get("reason") or "tactical/freshness"))
+                    except Exception:
+                        pass
+                if actions.get("tactics_updates") or actions.get("notes"):
+                    try:
+                        notes = actions.get("notes") or []
+                        base = ", ".join(notes) if notes else "AI tactical adjustment"
+                        if actions.get("tactics_updates"):
+                            summary = f"AI tactical adjustment ({base})" if notes else "AI tactical adjustment"
+                        else:
+                            summary = f"AI assessment ({base})"
+                        evs.append(self.engine.apply_tactical_change("away", actions.get("tactics_updates") or {}, summary=summary))
+                    except Exception:
+                        pass
                 self.engine.mark_break_decision("away", True)
-            await self.append_events(evs)
+            if evs:
+                await self.append_events(evs)
             await self.save()
             return evs
 
