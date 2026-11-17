@@ -624,10 +624,13 @@ class SimCog(commands.Cog):
         for ev in events:
             text = ev.get("commentary")
             payload = ev.get("payload") or {}
+            et = ev.get("event_type")
             if not text:
-                text = payload.get("detail") or payload.get("summary") or ""
+                # CHANCE events are intentionally paired with rich outcome narratives; avoid duplicate display
+                if et != "chance":
+                    text = payload.get("detail") or payload.get("summary") or ""
             if not text:
-                # fallback: skip silent internal events but keep pacing sane
+                # fallback: skip silent/internal events but keep pacing sane
                 if delay > 0:
                     await asyncio.sleep(delay)
                 continue
