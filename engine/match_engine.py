@@ -221,7 +221,13 @@ class MatchEngine:
         self.state.status = "running"
         self.state.phase = "first_half"
         self.state.minute = 0
-        return [self._emit(E.KICKOFF, self.state.possession_side, payload={"detail": f"Kick-off! {self.state.home.team.name} get us underway against {self.state.away.team.name}."})]
+        evs = [self._emit(E.KICKOFF, self.state.possession_side, payload={"detail": f"Kick-off! {self.state.home.team.name} get us underway against {self.state.away.team.name}."})]
+        try:
+            import logging as _logging
+            _logging.getLogger(__name__).info("ENGINE start match_id=%s minute=%s phase=%s status=%s", getattr(self.state, 'id', None), self.state.minute, self.state.phase, self.state.status)
+        except Exception:
+            pass
+        return evs
 
     def resume_after_break(self) -> list[dict[str, Any]]:
         br = self.state.pending_break
@@ -243,6 +249,11 @@ class MatchEngine:
         elif br == "break_75":
             self.state.minute = 75; self.state.extra_minute = 0; self.state.phase = "second_half"
             evs.append(self._emit(E.BREAK_RESUME, payload={"detail":"Play resumes after the 75th-minute tactical break."}))
+        try:
+            import logging as _logging
+            _logging.getLogger(__name__).info("ENGINE resume_after_break match_id=%s from=%s minute=%s phase=%s status=%s", getattr(self.state, 'id', None), br, self.state.minute, self.state.phase, self.state.status)
+        except Exception:
+            pass
         return evs
 
     # --- changes ---
@@ -321,10 +332,20 @@ class MatchEngine:
     # --- simulation ---
     def simulate_until_break_or_end(self, max_minutes: int = 200) -> StepResult:
         produced: list[dict[str, Any]] = []
-        for _ in range(max_minutes):
-            if self.state.status == "finished": return StepResult(produced, finished=True)
-            if self.is_waiting_for_break_decisions(): return StepResult(produced, break_reached=self.state.pending_break)
-            if self.state.status == "setup": produced.extend(self.start()); continue
+        try:
+            import logging as _logging
+            _log = _logging.getLogger(__name__)
+        except Exception:
+            _log = None
+        for i in range(max_minutes):
+            if self.state.status == "finished":
+                if _log: _log.info("ENGINE sim_exit finished match_id=%s minute=%s phase=%s produced=%s iter=%s", getattr(self.state,'id',None), self.state.minute, self.state.phase, len(produced), i)
+                return StepResult(produced, finished=True)
+            if self.is_waiting_for_break_decisions():
+                if _log: _log.info("ENGINE sim_exit waiting_break match_id=%s minute=%s phase=%s break=%s produced=%s iter=%s", getattr(self.state,'id',None), self.state.minute, self.state.phase, self.state.pending_break, len(produced), i)
+                return StepResult(produced, break_reached=self.state.pending_break)
+            if self.state.status == "setup":
+                produced.extend(self.start()); continue
             # First-half stoppage time
             if self.state.phase == "first_half_stoppage":
                 self.state.extra_minute += 1
@@ -334,6 +355,7 @@ class MatchEngine:
                     self.state.pending_break = "halftime"; self.state.status = "halftime"; self.state.phase = "halftime"
                     self.state.home_break_decision_done = False; self.state.away_break_decision_done = False
                     produced.append(self._emit(E.TACTICAL_BREAK, payload={"label": "Half-time", "break": "halftime", "detail": "Half-time. The match is paused for tactical decisions."}))
+                    if _log: _log.info("ENGINE halftime_break match_id=%s minute=%s st1=%s produced=%s", getattr(self.state,'id',None), self.state.minute, self.state.stoppage_time_1, len(produced))
                     return StepResult(produced, break_reached="halftime")
                 continue
             # Second-half stoppage time
@@ -343,11 +365,13 @@ class MatchEngine:
                 if self.state.extra_minute >= self.state.stoppage_time_2:
                     self.state.status = "finished"; self.state.phase = "finished"; finalize_all(self.state)
                     produced.append(self._emit(E.FULL_TIME, payload={"detail": f"Full-time! {self.state.scoreline()}"}))
+                    if _log: _log.info("ENGINE full_time match_id=%s minute=%s st2=%s produced=%s", getattr(self.state,'id',None), self.state.minute, self.state.stoppage_time_2, len(produced))
                     return StepResult(produced, finished=True)
                 continue
             # Transition into second-half stoppage at end of 90'
             if self.state.minute >= 90 and self.state.phase == "second_half":
                 self.state.phase = "second_half_stoppage"; self.state.extra_minute = 0
+                if _log: _log.info("ENGINE enter_second_half_stoppage match_id=%s minute=%s st2=%s", getattr(self.state,'id',None), self.state.minute, self.state.stoppage_time_2)
                 produced.append(self._emit(E.STOPPAGE_TIME, payload={"minutes": self.state.stoppage_time_2, "half": "the second half", "detail": f"The referee indicates {self.state.stoppage_time_2} minute(s) of stoppage time at the end of the second half."}))
                 continue
 
@@ -358,6 +382,7 @@ class MatchEngine:
             # End of first half regulation -> stoppage then halftime break
             if self.state.phase == "first_half" and self.state.minute == 45:
                 self.state.phase = "first_half_stoppage"; self.state.extra_minute = 0
+                if _log: _log.info("ENGINE enter_first_half_stoppage match_id=%s minute=%s st1=%s", getattr(self.state,'id',None), self.state.minute, self.state.stoppage_time_1)
                 produced.append(self._emit(E.STOPPAGE_TIME, payload={"minutes": self.state.stoppage_time_1, "half": "the first half", "detail": f"The referee indicates {self.state.stoppage_time_1} minute(s) of stoppage time at the end of the first half."}))
                 continue
             # Mandatory tactical breaks in second half
@@ -365,12 +390,15 @@ class MatchEngine:
                 self.state.pending_break = "break_60"; self.state.status = "break"; self.state.phase = "break_60"
                 self.state.home_break_decision_done = False; self.state.away_break_decision_done = False
                 produced.append(self._emit(E.TACTICAL_BREAK, payload={"label": "60th-minute tactical break", "break": "break_60", "detail": "60th-minute tactical break. The match is paused for tactical decisions."}))
+                if _log: _log.info("ENGINE break_60 match_id=%s minute=%s produced=%s", getattr(self.state,'id',None), self.state.minute, len(produced))
                 return StepResult(produced, break_reached="break_60")
             if self.state.phase == "second_half" and self.state.minute == 75:
                 self.state.pending_break = "break_75"; self.state.status = "break"; self.state.phase = "break_75"
                 self.state.home_break_decision_done = False; self.state.away_break_decision_done = False
                 produced.append(self._emit(E.TACTICAL_BREAK, payload={"label": "75th-minute tactical break", "break": "break_75", "detail": "75th-minute tactical break. The match is paused for tactical decisions."}))
+                if _log: _log.info("ENGINE break_75 match_id=%s minute=%s produced=%s", getattr(self.state,'id',None), self.state.minute, len(produced))
                 return StepResult(produced, break_reached="break_75")
+        if _log: _log.warning("ENGINE sim_exit max_iterations match_id=%s status=%s phase=%s minute=%s pending=%s produced=%s", getattr(self.state,'id',None), self.state.status, self.state.phase, self.state.minute, self.state.pending_break, len(produced))
         return StepResult(produced, finished=self.state.status=="finished")
 
     def _minute(self) -> list[dict[str, Any]]:

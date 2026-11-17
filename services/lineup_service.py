@@ -184,16 +184,24 @@ def validate_lineup(*, team_api_id: int, team_name: str, formation: str, starter
         seen_ids: dict[int, int] = {}
         seen_names: set[str] = set()
         out = []
+        dropped = 0
         for pl in players:
             pid = int(pl["api_id"])
             nkey = _norm_name(pl.get("name"))
             if pid in seen_ids or (nkey and nkey in seen_names):
                 # duplicate player - skip to avoid repeated names/entries
+                dropped += 1
                 continue
             seen_ids[pid] = 1
             if nkey:
                 seen_names.add(nkey)
             out.append(pl)
+        if dropped:
+            try:
+                import logging as _logging
+                _logging.getLogger(__name__).warning("LINEUP_DEDUPE label=%s team=%s dropped=%s in=%s out=%s", label, team_name, dropped, len(players), len(out))
+            except Exception:
+                pass
         return out
 
     s = _dedupe(s, "starters")
@@ -248,6 +256,16 @@ def validate_lineup(*, team_api_id: int, team_name: str, formation: str, starter
         out = next((e for e in starters_entries if e.position != "GK"), starters_entries[0])
         captain_player_id = out.player_api_id
     lu = Lineup(team_api_id=team_api_id, team_name=team_name, formation=formation, starters=starters_entries, bench=bench_entries, captain_player_id=int(captain_player_id), goalkeeper_player_id=int(goalkeeper_player_id))
+    try:
+        import logging as _logging
+        s_ids = [e.player_api_id for e in starters_entries]
+        s_names = [_norm_name(e.name) for e in starters_entries]
+        _logging.getLogger(__name__).info(
+            "LINEUP_VALIDATED team=%s formation=%s starters=%s bench=%s unique_ids=%s unique_names=%s",
+            team_name, formation, len(starters_entries), len(bench_entries), len(set(s_ids)), len(set(s_names)),
+        )
+    except Exception:
+        pass
     if return_custom:
         return lu, custom_players
     return lu

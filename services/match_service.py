@@ -180,11 +180,26 @@ class MatchService:
                              home_tactics: dict[str, Any] | None = None, away_tactics: dict[str, Any] | None = None,
                              home_manager_id: int | None = None, away_manager_id: int | None = None,
                              home_custom_players: list[dict[str, Any]] | None = None, away_custom_players: list[dict[str, Any]] | None = None) -> ActiveMatchSession:
+        import logging
+        _log = logging.getLogger(__name__)
         rng = random.Random()
         ht = Team(api_id=int(home_team["api_id"]), name=home_team.get("name", "Home"), league_id=home_team.get("league_id"), league_name=home_team.get("league_name"), country=home_team.get("country"), logo=home_team.get("logo"), short_name=home_team.get("short_name") or home_team.get("code"))
         at = Team(api_id=int(away_team["api_id"]), name=away_team.get("name", "Away"), league_id=away_team.get("league_id"), league_name=away_team.get("league_name"), country=away_team.get("country"), logo=away_team.get("logo"), short_name=away_team.get("short_name") or away_team.get("code"))
         hl = home_lineup or generate_ai_lineup(ht.api_id, ht.name, home_squad, rng)
         al = away_lineup or generate_ai_lineup(at.api_id, at.name, away_squad, rng)
+
+        def _lu_diag(label: str, lu: Lineup):
+            try:
+                ids = [int(e.player_api_id) for e in (lu.starters or [])]
+                names = [str(e.name).strip().lower() for e in (lu.starters or [])]
+                dup_ids = [x for i, x in enumerate(ids) if x in ids[:i]]
+                dup_names = [x for i, x in enumerate(names) if x and x in names[:i]]
+                _log.info("SESSION_LINEUP %s formation=%s starters=%s bench=%s dup_ids=%s dup_names=%s", label, lu.formation, len(lu.starters or []), len(lu.bench or []), dup_ids[:5], dup_names[:5])
+            except Exception:
+                _log.exception("SESSION_LINEUP diag failed %s", label)
+        _lu_diag(f"home:{ht.name}", hl)
+        _lu_diag(f"away:{at.name}", al)
+
         htac = home_tactics or (generate_ai_tactics(rng) if home_manager_id is None else default_tactics())
         atac = away_tactics or (generate_ai_tactics(rng) if away_manager_id is None else default_tactics())
         home_players = self._players_from_squad(home_squad, ht.api_id) + self._players_from_squad(home_custom_players or [], ht.api_id)

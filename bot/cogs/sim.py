@@ -874,108 +874,185 @@ class SimCog(commands.Cog):
             return
 
         st = session.state
-        await channel.send(_clamp(
-            f"**Match Starting**\n{st.home.team.name} vs {st.away.team.name}\n"
-            f"Match ID: `{st.id}` | Mode: {st.mode.replace('_', ' ').title()}"
-        ))
+        logger.info(
+            "MATCH_FLOW start match_id=%s status=%s phase=%s minute=%s mode=%s home=%s away=%s home_mgr=%s away_mgr=%s",
+            st.id, st.status, st.phase, st.minute, st.mode, st.home.team.name, st.away.team.name,
+            session.home_manager_id, session.away_manager_id,
+        )
 
-        # Starting lineups
-        try:
-            await channel.send(_format_lineup(st, "home"))
-            await channel.send(_format_lineup(st, "away"))
-        except Exception:
-            logger.exception("Failed to send starting lineups")
+        def _log_state(prefix: str) -> None:
+            s = session.state
+            logger.info(
+                "MATCH_FLOW %s match_id=%s status=%s phase=%s minute=%s extra=%s pending_break=%s home_ready=%s away_ready=%s score=%s st1=%s st2=%s",
+                prefix, s.id, s.status, s.phase, s.minute, getattr(s, "extra_minute", 0),
+                s.pending_break, s.home_break_decision_done, s.away_break_decision_done,
+                s.scoreline(), getattr(s, "stoppage_time_1", None), getattr(s, "stoppage_time_2", None),
+            )
 
-        # Main loop: always drive simulation forward until full time
-        while session.state.status != "finished":
+        async def _lineup_diag(side: str) -> None:
             try:
-                # If we're in a pending break, handle it and resume to next segment
-                if session.state.pending_break and session.engine.is_waiting_for_break_decisions():
-                    pending = session.state.pending_break
-                    await self._handle_break(channel, session)
-                    # Ensure decisions are ready; force AI resolution if still stuck
-                    if session.state.pending_break and not session.is_ready_to_resume():
-                        try:
-                            await session.auto_resolve_ai_sides_if_ready()
-                            await session.save()
-                        except Exception:
-                            logger.exception("Failed to force-resolve break decisions")
-                    if session.state.pending_break and not session.is_ready_to_resume():
-                        await asyncio.sleep(1)
-                        continue
-                    # Resume into next interval segment
-                    next_msg = _next_interval_text(pending, session.state)
-                    if next_msg:
-                        try:
-                            await channel.send(next_msg)
-                        except Exception:
-                            logger.exception("Failed to send next interval announcement")
-                    evs = await session.continue_after_break()
-                    await self._send_events_live(channel, evs, delay=3.0, state=session.state)
-                    continue
-
-                # Start or simulate next segment (setup/normal)
-                interval_msg = _interval_text_for_state(session.state)
-                if interval_msg:
-                    try:
-                        await channel.send(interval_msg)
-                    except Exception:
-                        logger.exception("Failed to send interval announcement")
-
-                if session.state.status == "setup":
-                    evs = await session.start_and_simulate_until_break()
-                elif session.state.status == "finished":
-                    break
-                else:
-                    # Not in break and not finished: continue simulation to break/end
-                    try:
-                        evs = await session.continue_after_break()
-                    except Exception:
-                        evs = []
-                    if not evs and session.state.status != "finished":
-                        step = session.engine.simulate_until_break_or_end()
-                        evs = step.events
-                        await session.append_events(evs)
-                        await session.save()
-
-                if evs:
-                    await self._send_events_live(channel, evs, delay=3.0, state=session.state)
-                elif session.state.status != "finished" and not session.state.pending_break:
-                    # Safety: avoid tight loop if nothing produced unexpectedly
-                    await asyncio.sleep(0.5)
+                lu = session.state.team(side).lineup
+                ids = [int(e.player_api_id) for e in lu.starters]
+                names = [str(e.name).strip().lower() for e in lu.starters]
+                dup_ids = [x for i, x in enumerate(ids) if x in ids[:i]]
+                dup_names = [x for i, x in enumerate(names) if x and x in names[:i]]
+                logger.info(
+                    "MATCH_LINEUP match_id=%s side=%s formation=%s starters=%s unique_ids=%s unique_names=%s dup_ids=%s dup_names=%s",
+                    session.state.id, side, lu.formation, len(ids), len(set(ids)), len(set(names)), dup_ids[:5], dup_names[:5],
+                )
             except Exception:
-                logger.exception("Match flow iteration failed; attempting recovery")
-                try:
-                    if session.state.status != "finished" and not session.state.pending_break:
-                        step = session.engine.simulate_until_break_or_end()
-                        if step.events:
-                            await session.append_events(step.events)
-                            await session.save()
-                            await self._send_events_live(channel, step.events, delay=3.0, state=session.state)
-                    await asyncio.sleep(0.5)
-                except Exception:
-                    logger.exception("Match flow recovery failed")
-                    await asyncio.sleep(1)
+                logger.exception("MATCH_LINEUP diag failed match_id=%s side=%s", getattr(session.state, "id", None), side)
 
-        # Full-time interval marker + report (stat sheet, injuries, physical condition, then summary/details/ratings/analysis)
         try:
-            st = session.state
-            h = st.home.team.name
-            a = st.away.team.name
-            end = f"90'+{st.stoppage_time_2}" if st.stoppage_time_2 else "90'"
-            await channel.send(_clamp(f"⏸️ **INTERVAL {h} vs {a} — Interval 4 (Minutes 76' to {end})**"))
-        except Exception:
-            pass
-        try:
-            await self._send_tactical_break_sheets(channel, session, is_full_time=True)
-            rep = session.report()
-            for msg in _format_report(rep):
-                await channel.send(_clamp(msg, 1900))
-                await asyncio.sleep(0.5)
-        except Exception:
-            logger.exception("Failed to send full-time report")
+            await channel.send(_clamp(
+                f"**Match Starting**\n{st.home.team.name} vs {st.away.team.name}\n"
+                f"Match ID: `{st.id}` | Mode: {st.mode.replace('_', ' ').title()}"
+            ))
+
+            # Starting lineups
             try:
-                await channel.send(_clamp(f"Full-time: {session.state.scoreline()}"))
+                await _lineup_diag("home")
+                await _lineup_diag("away")
+                await channel.send(_format_lineup(st, "home"))
+                await channel.send(_format_lineup(st, "away"))
+            except Exception:
+                logger.exception("Failed to send starting lineups")
+
+            # Main loop: always drive simulation forward until full time
+            loop_guard = 0
+            while session.state.status != "finished":
+                loop_guard += 1
+                if loop_guard % 5 == 1 or session.state.pending_break or session.state.status == "setup":
+                    _log_state(f"loop#{loop_guard}")
+                if loop_guard > 5000:
+                    logger.error("MATCH_FLOW loop guard tripped match_id=%s; aborting to avoid infinite loop", session.state.id)
+                    try:
+                        await channel.send(_clamp(f"⚠️ Match flow stopped unexpectedly (safety guard). Match ID: `{session.state.id}`. Please check logs."))
+                    except Exception:
+                        pass
+                    return
+                try:
+                    # If we're in a pending break, handle it and resume to next segment
+                    if session.state.pending_break and session.engine.is_waiting_for_break_decisions():
+                        pending = session.state.pending_break
+                        _log_state(f"handling_break:{pending}")
+                        await self._handle_break(channel, session)
+                        _log_state(f"after_handle_break:{pending}")
+                        # Ensure decisions are ready; force AI resolution if still stuck
+                        if session.state.pending_break and not session.is_ready_to_resume():
+                            try:
+                                await session.auto_resolve_ai_sides_if_ready()
+                                await session.save()
+                            except Exception:
+                                logger.exception("Failed to force-resolve break decisions")
+                            _log_state(f"after_force_resolve:{pending}")
+                        if session.state.pending_break and not session.is_ready_to_resume():
+                            logger.info("MATCH_FLOW waiting for break decisions match_id=%s break=%s", session.state.id, session.state.pending_break)
+                            await asyncio.sleep(1)
+                            continue
+                        # Resume into next interval segment
+                        next_msg = _next_interval_text(pending, session.state)
+                        if next_msg:
+                            try:
+                                await channel.send(next_msg)
+                            except Exception:
+                                logger.exception("Failed to send next interval announcement")
+                        evs = await session.continue_after_break()
+                        logger.info(
+                            "MATCH_FLOW resumed_after_break match_id=%s from=%s events=%s new_status=%s new_phase=%s minute=%s pending=%s",
+                            session.state.id, pending, len(evs or []), session.state.status, session.state.phase, session.state.minute, session.state.pending_break,
+                        )
+                        await self._send_events_live(channel, evs, delay=3.0, state=session.state)
+                        continue
+
+                    # Start or simulate next segment (setup/normal)
+                    interval_msg = _interval_text_for_state(session.state)
+                    if interval_msg:
+                        try:
+                            await channel.send(interval_msg)
+                        except Exception:
+                            logger.exception("Failed to send interval announcement")
+
+                    if session.state.status == "setup":
+                        evs = await session.start_and_simulate_until_break()
+                        logger.info(
+                            "MATCH_FLOW started match_id=%s events=%s status=%s phase=%s minute=%s pending=%s",
+                            session.state.id, len(evs or []), session.state.status, session.state.phase, session.state.minute, session.state.pending_break,
+                        )
+                    elif session.state.status == "finished":
+                        break
+                    else:
+                        # Not in break and not finished: continue simulation to break/end
+                        try:
+                            evs = await session.continue_after_break()
+                        except Exception:
+                            logger.exception("MATCH_FLOW continue_after_break failed in running state match_id=%s", session.state.id)
+                            evs = []
+                        if not evs and session.state.status != "finished":
+                            step = session.engine.simulate_until_break_or_end()
+                            evs = step.events
+                            await session.append_events(evs)
+                            await session.save()
+                        logger.info(
+                            "MATCH_FLOW progressed match_id=%s events=%s status=%s phase=%s minute=%s pending=%s",
+                            session.state.id, len(evs or []), session.state.status, session.state.phase, session.state.minute, session.state.pending_break,
+                        )
+
+                    if evs:
+                        await self._send_events_live(channel, evs, delay=3.0, state=session.state)
+                    elif session.state.status != "finished" and not session.state.pending_break:
+                        # Safety: avoid tight loop if nothing produced unexpectedly
+                        logger.warning("MATCH_FLOW no events produced and not finished/break match_id=%s; sleeping", session.state.id)
+                        await asyncio.sleep(0.5)
+                except Exception:
+                    logger.exception("Match flow iteration failed; attempting recovery match_id=%s", session.state.id)
+                    _log_state("recovery")
+                    try:
+                        if session.state.status != "finished" and not session.state.pending_break:
+                            step = session.engine.simulate_until_break_or_end()
+                            if step.events:
+                                await session.append_events(step.events)
+                                await session.save()
+                                await self._send_events_live(channel, step.events, delay=3.0, state=session.state)
+                        await asyncio.sleep(0.5)
+                    except Exception:
+                        logger.exception("Match flow recovery failed match_id=%s", session.state.id)
+                        await asyncio.sleep(1)
+
+            # Full-time interval marker + report (stat sheet, injuries, physical condition, then summary/details/ratings/analysis)
+            _log_state("finished_loop_exit")
+            try:
+                st = session.state
+                h = st.home.team.name
+                a = st.away.team.name
+                end = f"90'+{st.stoppage_time_2}" if st.stoppage_time_2 else "90'"
+                await channel.send(_clamp(f"⏸️ **INTERVAL {h} vs {a} — Interval 4 (Minutes 76' to {end})**"))
+            except Exception:
+                pass
+            try:
+                await self._send_tactical_break_sheets(channel, session, is_full_time=True)
+                rep = session.report()
+                for msg in _format_report(rep):
+                    await channel.send(_clamp(msg, 1900))
+                    await asyncio.sleep(0.5)
+                logger.info("MATCH_FLOW full-time report sent match_id=%s score=%s", session.state.id, session.state.scoreline())
+            except Exception:
+                logger.exception("Failed to send full-time report match_id=%s", session.state.id)
+                try:
+                    await channel.send(_clamp(f"Full-time: {session.state.scoreline()}"))
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("MATCH_FLOW fatal unhandled error match_id=%s", getattr(getattr(session, 'state', None), 'id', None))
+            try:
+                _log_state("fatal")
+            except Exception:
+                pass
+            try:
+                await channel.send(_clamp(
+                    f"⚠️ Match simulation encountered a fatal error and stopped (Match ID: `{getattr(getattr(session,'state',None),'id','?')}`). "
+                    "Please check Railway logs for `MATCH_FLOW fatal`."
+                ))
             except Exception:
                 pass
 
