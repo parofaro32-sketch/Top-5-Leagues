@@ -486,18 +486,18 @@ class MatchEngine:
             return evs
 
         # progression/chance based on tactical matchup, attributes, momentum, pressure chain
-        prog = (att_s["attack"] * 0.5 + att_s["midfield"] * 0.35 + att_s.get("transition_attack", 50) * 0.15) / max(25.0, def_s["defense"] * 0.65 + def_s.get("compactness", 1.0) * 22 + def_s.get("transition_defense", 50) * 0.15)
-        chance_p = 0.07 + (prog - 1.0) * 0.13
-        chance_p += self._pressure_chain * 0.018
-        chance_p += (self._momentum.get(att, 50.0) - 50.0) * 0.0015
+        prog = (att_s["attack"] * 0.5 + att_s["midfield"] * 0.35 + att_s.get("transition_attack", 50) * 0.15) / max(25.0, def_s["defense"] * 0.62 + def_s.get("compactness", 1.0) * 20 + def_s.get("transition_defense", 50) * 0.15)
+        chance_p = 0.11 + (prog - 1.0) * 0.16
+        chance_p += self._pressure_chain * 0.022
+        chance_p += (self._momentum.get(att, 50.0) - 50.0) * 0.002
         # game state: chasing team creates more but can be vulnerable
         if (att == "home" and self.state.home.score < self.state.away.score) or (att == "away" and self.state.away.score < self.state.home.score):
-            if self.state.minute >= 65:
-                chance_p *= 1.10
+            if self.state.minute >= 60:
+                chance_p *= 1.12
         if (att == "home" and self.state.home.score > self.state.away.score) or (att == "away" and self.state.away.score > self.state.home.score):
-            if self.state.minute >= 75:
-                chance_p *= 0.92  # protect lead a bit
-        chance_p = max(0.03, min(0.45, chance_p))
+            if self.state.minute >= 78:
+                chance_p *= 0.94  # protect lead a bit late
+        chance_p = max(0.05, min(0.52, chance_p))
         if self.rng.random() < chance_p:
             evs.extend(self._attack(att, deff, att_s, def_s))
         return evs
@@ -563,11 +563,15 @@ class MatchEngine:
             stat_key(self.state, att, creator.player_api_id)
             rating_key(self.state, att, creator.player_api_id)
 
-        xg = max(0.02, min(0.85, 0.08 + (((att_s["attack"] * (1.05 if is_counter else 1.0)) / max(25, def_s["defense"] * 0.85 + self._gk_str(deff) * 0.15)) - 1.0) * 0.18 + (0.06 if is_counter else 0.0)))
-        if is_counter and def_s.get("line_height", 1.0) > 1.1:
-            xg += 0.04
+        xg = max(0.03, min(0.88, 0.11 + (((att_s["attack"] * (1.08 if is_counter else 1.0)) / max(25, def_s["defense"] * 0.82 + self._gk_str(deff) * 0.12)) - 1.0) * 0.22 + (0.07 if is_counter else 0.0)))
+        if is_counter and def_s.get("line_height", 1.0) > 1.08:
+            xg += 0.05
+        # sustained pressure / quality buildup creates better chances
+        if self._pressure_chain >= 2:
+            xg += min(0.06, 0.02 * self._pressure_chain)
+        xg = max(0.03, min(0.90, xg))
 
-        block_p = 0.18 + def_s["defense"] * 0.0015
+        block_p = 0.16 + def_s["defense"] * 0.0012
         if self.rng.random() < block_p:
             blocker = defender or self.pick(deff, "def")
             stat_shot(self.state, att, finisher.player_api_id, False, xg * 0.3)
@@ -575,7 +579,7 @@ class MatchEngine:
             if blocker:
                 stat_tackle(self.state, deff, blocker.player_api_id)
                 record_tackle(self.state, deff, blocker.player_api_id)
-            corner = self.rng.random() < 0.35
+            corner = self.rng.random() < 0.32
             detail = self._compose_chance_outcome(intro, finisher, gk, "blocked", corner=corner)
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.append(self._emit(E.BLOCK, deff, blocker.player_api_id if blocker else None, {"detail": detail}))
@@ -584,30 +588,27 @@ class MatchEngine:
                 evs.append(self._emit(E.CORNER, att, {"detail": f"The block deflects behind, and {an} will have a corner."}, commentary=""))
             return evs
 
-        on_target_p = max(0.18, min(0.65, 0.34 + xg * 0.5))
+        on_target_p = max(0.22, min(0.72, 0.38 + xg * 0.55))
         on_target = self.rng.random() < on_target_p
         stat_shot(self.state, att, finisher.player_api_id, on_target, xg)
         rating_shot(self.state, att, finisher.player_api_id, on_target, big_chance=xg > 0.22)
 
         if not on_target:
-            miss_kind = self.rng.choices(["wide", "over", "post", "off"], weights=[0.45, 0.35, 0.10, 0.10], k=1)[0]
+            miss_kind = self.rng.choices(["wide", "over", "post", "off"], weights=[0.46, 0.34, 0.10, 0.10], k=1)[0]
             detail = self._compose_chance_outcome(intro, finisher, gk, f"missed_{miss_kind}")
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.append(self._emit(E.SHOT, att, finisher.player_api_id, {"outcome": "off_target", "detail": detail, "xg": round(xg, 3)}))
-            if xg > 0.28 and self.rng.random() < 0.6:
+            if xg > 0.30 and self.rng.random() < 0.55:
                 record_missed_big(self.state, att, finisher.player_api_id)
             return evs
 
         gprob = self._goal_prob(att, deff, finisher, gk, xg, att_s, def_s, is_counter)
         if self.rng.random() < gprob:
-            # Score goal with rich narrative
-            score_now = f"{self.state.home.team.name} {self.state.home.score}–{self.state.away.score} {self.state.away.team.name}"
             narrative = self._compose_chance_outcome(intro, finisher, gk, "goal")
             narrative = f"CHANCE! {narrative}" if not narrative.upper().startswith("CHANCE") else narrative
-            # _score_goal will record and append GOAL event; we pass narrative to include full play
             evs.extend(self._score_goal(att, deff, finisher, creator, xg, is_counter=is_counter, narrative=narrative))
         else:
-            corner = self.rng.random() < (0.35 if xg > 0.18 else 0.22)
+            corner = self.rng.random() < (0.32 if xg > 0.20 else 0.20)
             detail = self._compose_chance_outcome(intro, finisher, gk, "saved", corner=corner)
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.extend(self._save_event(att, deff, finisher, gk, xg, narrative=detail))
@@ -623,16 +624,27 @@ class MatchEngine:
         if not p: return 55.0
         return (p.attributes.goalkeeping*0.7 + p.attributes.positioning*0.15 + p.attributes.composure*0.15)*(0.6+0.4*g.stamina/100.0)
 
-    def _goal_prob(self, att,deff,finisher,gk,xg,att_s,def_s,is_counter):
-        fp=self.state.players_index.get(self.state.player_key(att,finisher.player_api_id))
-        fs=60.0
-        if fp: fs=(fp.attributes.finishing*0.5+fp.attributes.composure*0.3+fp.attributes.shooting*0.2)*(0.55+0.45*finisher.stamina/100.0)
-        gks=self._gk_str(deff)
-        base=xg*(0.55+fs/160.0)*(1.15-gks/180.0)
-        if is_counter: base*=1.05
-        men_a=len(self.on_pitch(att)); men_d=len(self.on_pitch(deff))
-        if men_a>men_d: base*=1.0+0.05*(men_a-men_d)
-        return max(0.03,min(0.80,base))
+    def _goal_prob(self, att, deff, finisher, gk, xg, att_s, def_s, is_counter):
+        fp = self.state.players_index.get(self.state.player_key(att, finisher.player_api_id))
+        fs = 62.0
+        if fp:
+            fs = (fp.attributes.finishing * 0.5 + fp.attributes.composure * 0.3 + fp.attributes.shooting * 0.2) * (0.55 + 0.45 * finisher.stamina / 100.0)
+        gks = self._gk_str(deff)
+        # More realistic conversion: a decent on-target chance should score fairly often
+        quality = (0.75 + fs / 170.0) * (1.18 - gks / 210.0)
+        base = (0.10 + xg * 0.95) * quality
+        if is_counter:
+            base *= 1.08
+        # big chances / close range feel
+        if xg >= 0.35:
+            base *= 1.08
+        men_a = len(self.on_pitch(att))
+        men_d = len(self.on_pitch(deff))
+        if men_a > men_d:
+            base *= 1.0 + 0.06 * (men_a - men_d)
+        elif men_d > men_a:
+            base *= 0.97
+        return max(0.06, min(0.88, base))
 
     # --- rich play-by-play helpers ---
     def _pick_pass_type(self, is_counter: bool = False, wide: bool = False) -> str:
