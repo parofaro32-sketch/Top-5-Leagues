@@ -88,7 +88,6 @@ def _find_player_in_report(report: dict[str, Any], name: str | None, team_name: 
     ratings = report.get("player_ratings") or {}
     pools = []
     if team_name:
-        # try to match side by team name
         fs = report.get("final_score", {})
         if str(fs.get("home_team", "")).strip().lower() == str(team_name).strip().lower():
             pools = [ratings.get("home", [])]
@@ -115,7 +114,6 @@ def _motm_reason(report: dict[str, Any], motm: dict[str, Any] | None) -> str:
     key_passes = int(p.get("key_passes") or 0)
     tackles = int(p.get("tackles") or 0)
     interceptions = int(p.get("interceptions") or 0)
-    shots = int(p.get("shots") or 0)
     shots_on_target = int(p.get("shots_on_target") or 0)
     pos = str(p.get("position") or "").upper()
     rating = motm.get("rating", p.get("rating"))
@@ -147,7 +145,6 @@ def _motm_reason(report: dict[str, Any], motm: dict[str, Any] | None) -> str:
             parts.append("tested the goalkeeper repeatedly with quality efforts")
 
     if not parts:
-        # fallback by rating/role
         try:
             r = float(rating)
         except Exception:
@@ -161,7 +158,6 @@ def _motm_reason(report: dict[str, Any], motm: dict[str, Any] | None) -> str:
         else:
             parts.append("made a telling impact in important phases of the game")
 
-    # keep it concise and readable
     if len(parts) == 1:
         reason = parts[0]
     elif len(parts) == 2:
@@ -176,6 +172,148 @@ def _motm_reason(report: dict[str, Any], motm: dict[str, Any] | None) -> str:
     return reason
 
 
+def _interval_text_for_state(state) -> str | None:
+    # Determine which interval is about to be simulated based on current state
+    if state.status == "setup":
+        return "⚡ *Simulating Interval 1 (0' - 45' Half-Time) with Match Intelligence Engine...*"
+    if state.pending_break == "halftime":
+        return "⚡ *Simulating Interval 2 (46' - 60') with Match Intelligence Engine...*"
+    if state.pending_break == "break_60":
+        return "⚡ *Simulating Interval 3 (61' - 75') with Match Intelligence Engine...*"
+    if state.pending_break == "break_75":
+        st2 = getattr(state, "stoppage_time_2", 0) or 0
+        end = f"90'+{st2}" if st2 else "90'+"
+        return f"⚡ *Simulating Interval 4 (76' - {end} Full Time) with Match Intelligence Engine...*"
+    return None
+
+
+def _player_brief_note(p: dict[str, Any], goals_conceded: int | None = None, is_live: bool = True) -> str:
+    notes: list[str] = []
+    pos = str(p.get("position") or "").upper()
+    goals = int(p.get("goals") or 0)
+    assists = int(p.get("assists") or 0)
+    shots = int(p.get("shots") or 0)
+    sot = int(p.get("shots_on_target") or 0)
+    key_passes = int(p.get("key_passes") or 0)
+    tackles = int(p.get("tackles") or 0)
+    interceptions = int(p.get("interceptions") or 0)
+    saves = int(p.get("saves") or 0)
+    yc = int(p.get("yellow_cards") or 0)
+    rc = bool(p.get("red_card"))
+    mins = int(p.get("minutes_played") or 0)
+    injured = bool(p.get("injured"))
+
+    if goals > 0:
+        notes.append(f"Goals: {goals}")
+    if assists > 0:
+        notes.append(f"Assists: {assists}")
+    if key_passes > 0:
+        notes.append(f"Key Passes: {key_passes}")
+    if saves > 0:
+        notes.append(f"Saves: {saves}")
+    if tackles >= 2:
+        notes.append(f"Crucial tackles won: {tackles}")
+    elif tackles == 1:
+        notes.append("Crucial tackles won: 1")
+    if interceptions >= 2:
+        notes.append(f"Interceptions: {interceptions}")
+    if sot >= 2 and goals == 0:
+        notes.append(f"Shots on target: {sot}")
+    elif shots >= 3 and goals == 0 and sot == 0 and pos in {"FWD", "MID"}:
+        notes.append(f"Attempts: {shots}")
+    if yc > 0:
+        notes.append(f"Yellow Card: {yc}")
+    if rc:
+        notes.append("Red Card: 1")
+    if injured:
+        sev = p.get("injury_severity") or "injury"
+        notes.append(f"Injured ({sev})")
+    if goals_conceded is not None and pos == "GK":
+        if goals_conceded == 0:
+            notes.append("Clean sheet so far" if is_live else "Clean sheet")
+        else:
+            notes.append(f"Goals Conceded: {goals_conceded}")
+
+    # Qualitative fallback from rating/contributions
+    try:
+        rating = float(p.get("rating") or 6.0)
+    except Exception:
+        rating = 6.0
+    contribs = [str(c).lower() for c in (p.get("contributions") or [])]
+    if not notes:
+        if "important save" in contribs or "save" in contribs:
+            notes.append("Made key interventions when called upon")
+        elif "key pass" in contribs and assists == 0:
+            notes.append("Created openings in the final third")
+        elif "tackle" in contribs or "interception" in contribs:
+            notes.append("Worked hard defensively throughout")
+        elif rating >= 7.5:
+            notes.append("Influential performance with strong all-round impact")
+        elif rating >= 6.8:
+            notes.append("Solid and composed contribution")
+        elif rating >= 6.2:
+            notes.append("Steady shift for the team")
+        elif mins > 0:
+            notes.append("Found it difficult to make a decisive impact")
+        else:
+            notes.append("Limited involvement")
+
+    # Ensure at least one note
+    if not notes:
+        notes.append("Contributed to the team effort")
+
+    # Keep concise (2-4 items)
+    return ", ".join(notes[:4])
+
+
+def _format_live_player_ratings_block(home_name: str, away_name: str, home_players: list[dict[str, Any]], away_players: list[dict[str, Any]], home_score: int, away_score: int, is_live: bool = True) -> list[str]:
+    # home conceded = away_score, away conceded = home_score
+    header = "⭐️Live Player Ratings"
+
+    def sort_players(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Show participants, roughly starters/on-pitch first then bench used, by minutes desc
+        ps = [p for p in (players or []) if (p.get("minutes_played", 0) > 0 or p.get("on_pitch") or p.get("substituted_in_minute") is not None)]
+        if not ps:
+            ps = list(players or [])
+        def key(p):
+            return (0 if p.get("on_pitch") else 1, -int(p.get("minutes_played") or 0), str(p.get("name") or ""))
+        return sorted(ps, key=key)
+
+    def line(team_name: str, p: dict[str, Any], conceded: int) -> str:
+        pos = p.get("slot") or p.get("position") or "POS"
+        rating = p.get("rating")
+        try:
+            rating_txt = f"{float(rating):.1f}" if rating is not None else "-"
+        except Exception:
+            rating_txt = str(rating)
+        note = _player_brief_note(p, goals_conceded=conceded, is_live=is_live)
+        name = p.get("name") or "Unknown"
+        return f"**{team_name}:** {name} ({pos}): {rating_txt} — Brief Note: {note}"
+
+    lines = [header, ""]
+    for p in sort_players(home_players):
+        lines.append(line(home_name, p, away_score))
+    for p in sort_players(away_players):
+        lines.append(line(away_name, p, home_score))
+
+    # Chunk to Discord-safe messages
+    msgs: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for ln in lines:
+        add = len(ln) + 1
+        if cur and cur_len + add > 1850:
+            msgs.append("\n".join(cur))
+            cur = [ln]
+            cur_len = len(ln) + 1
+        else:
+            cur.append(ln)
+            cur_len += add
+    if cur:
+        msgs.append("\n".join(cur))
+    return msgs
+
+
 def _format_report(report: dict[str, Any]) -> list[str]:
     fs = report.get("final_score", {})
     stats = report.get("statistics", {})
@@ -186,7 +324,6 @@ def _format_report(report: dict[str, Any]) -> list[str]:
     scoreline = fs.get('scoreline') or f"{fs.get('home_team','Home')} {fs.get('home_score',0)} - {fs.get('away_score',0)} {fs.get('away_team','Away')}"
     goals = report.get("goalscorers", []) or []
 
-    # Requested full-time summary format
     summary_lines = [
         "🏆 MATCH SUMMARY (Full-Time Only)",
         scoreline,
@@ -213,7 +350,6 @@ def _format_report(report: dict[str, Any]) -> list[str]:
     summary_block = "🏆 **Match Summary & Post-Match Wrap-Up**\n```\n" + "\n".join(summary_lines) + "\n```"
     msgs.append(_clamp(summary_block, 1900))
 
-    # Detailed statistics and records (kept for completeness)
     detail_lines = [
         f"**Full-Time Details: {scoreline}**",
         "",
@@ -228,33 +364,15 @@ def _format_report(report: dict[str, Any]) -> list[str]:
     ]
     msgs.append(_clamp("\n".join(detail_lines)))
 
-    # Ratings summary per team
-    def fmt_team(side_key: str, label: str) -> str:
-        players = (report.get('player_ratings') or {}).get(side_key, [])
-        parts = [f"**{label} — Player Ratings**"]
-        shown = 0
-        for p in players:
-            if p.get('minutes_played', 0) <= 0 and not p.get('on_pitch'):
-                continue
-            tag = []
-            if p.get('goals'): tag.append(f"{p['goals']}G")
-            if p.get('assists'): tag.append(f"{p['assists']}A")
-            if p.get('red_card'): tag.append("RC")
-            elif p.get('yellow_cards'): tag.append(f"{p['yellow_cards']}Y")
-            if p.get('injured'): tag.append("INJ")
-            extra = f" ({', '.join(tag)})" if tag else ""
-            parts.append(f"- {p.get('name')} [{p.get('position')}] {p.get('rating')}★ | {p.get('minutes_played')}' | STA {p.get('stamina')}{extra}")
-            shown += 1
-            if shown >= 18:
-                break
-        if shown == 0:
-            parts.append("- No participants recorded")
-        return _clamp("\n".join(parts))
+    # Live player ratings format (requested for full time as well)
+    ratings = report.get("player_ratings") or {}
+    msgs.extend(_format_live_player_ratings_block(
+        fs.get('home_team', 'Home'), fs.get('away_team', 'Away'),
+        ratings.get('home', []), ratings.get('away', []),
+        int(fs.get('home_score', 0) or 0), int(fs.get('away_score', 0) or 0),
+        is_live=False,
+    ))
 
-    msgs.append(fmt_team('home', fs.get('home_team', 'Home')))
-    msgs.append(fmt_team('away', fs.get('away_team', 'Away')))
-
-    # Notes/analysis
     extra_lines = []
     ta = report.get('tactical_analysis')
     if ta:
@@ -302,7 +420,37 @@ class SimCog(commands.Cog):
             if delay > 0:
                 await asyncio.sleep(delay)
 
+    async def _send_live_ratings(self, channel: discord.abc.Messageable, session) -> None:
+        try:
+            bs = session.break_status() if session.state.status != "finished" else session.report()
+            if "players" in bs:
+                home_players = (bs.get("players") or {}).get("home", [])
+                away_players = (bs.get("players") or {}).get("away", [])
+                score = bs.get("score") or {}
+                home_name = session.state.home.team.name
+                away_name = session.state.away.team.name
+                home_score = int(score.get("home", session.state.home.score))
+                away_score = int(score.get("away", session.state.away.score))
+            else:
+                # full report shape
+                fs = bs.get("final_score", {})
+                ratings = bs.get("player_ratings") or {}
+                home_players = ratings.get("home", [])
+                away_players = ratings.get("away", [])
+                home_name = fs.get("home_team", session.state.home.team.name)
+                away_name = fs.get("away_team", session.state.away.team.name)
+                home_score = int(fs.get("home_score", session.state.home.score) or 0)
+                away_score = int(fs.get("away_score", session.state.away.score) or 0)
+            msgs = _format_live_player_ratings_block(home_name, away_name, home_players, away_players, home_score, away_score, is_live=(session.state.status != "finished"))
+            for msg in msgs:
+                await channel.send(_clamp(msg, 1900))
+        except Exception:
+            logger.exception("Failed to send live player ratings")
+
     async def _handle_break(self, channel: discord.abc.Messageable, session) -> None:
+        # Show live player ratings at tactical break
+        await self._send_live_ratings(channel, session)
+
         # Auto-resolve AI sides immediately
         await session.auto_resolve_ai_sides_if_ready()
         await session.save()
@@ -312,7 +460,6 @@ class SimCog(commands.Cog):
 
         if not has_human:
             # Bot vs Bot: brief message and continue smoothly
-            await channel.send(_format_break_status(bs))
             await channel.send(_clamp(f"Tactical break: both AI managers make adjustments. {session.state.scoreline()} — play will resume shortly."))
             await asyncio.sleep(1)
             return
@@ -370,6 +517,14 @@ class SimCog(commands.Cog):
             if session.state.status == "finished":
                 break
 
+            # Announce interval before simulating/streaming its segment
+            interval_msg = _interval_text_for_state(session.state)
+            if interval_msg:
+                try:
+                    await channel.send(interval_msg)
+                except Exception:
+                    logger.exception("Failed to send interval announcement")
+
             if session.state.status == "setup":
                 evs = await session.start_and_simulate_until_break()
             elif session.state.pending_break and session.engine.is_waiting_for_break_decisions():
@@ -393,23 +548,14 @@ class SimCog(commands.Cog):
             # Handle tactical/halftime break
             if session.state.pending_break and session.engine.is_waiting_for_break_decisions():
                 await self._handle_break(channel, session)
-                # Resume when ready (continue_after_break resumes and simulates next segment)
+                # If still waiting (rare), loop back
                 if session.state.pending_break and session.engine.is_waiting_for_break_decisions():
-                    # still waiting (should be rare), loop back to wait handling
                     await asyncio.sleep(1)
                     continue
-                # If ready, resume and simulate next segment
+                # If ready, resume in next loop iteration (which will announce interval and stream)
                 if session.is_ready_to_resume() and session.state.pending_break:
-                    # mark decisions done for any AI sides again defensively
                     await session.auto_resolve_ai_sides_if_ready()
-                if session.state.pending_break:
-                    evs = await session.continue_after_break()
-                    await channel.send(_clamp(f"▶️ Play resumes. {session.state.scoreline()}"))
-                    await self._send_events_live(channel, evs, delay=3.0)
-                    if session.state.status == "finished":
-                        break
-                    # loop to check for next break/finish
-                    continue
+                continue
 
             await asyncio.sleep(0)
 
@@ -417,7 +563,7 @@ class SimCog(commands.Cog):
         try:
             rep = session.report()
             for msg in _format_report(rep):
-                await channel.send(msg)
+                await channel.send(_clamp(msg, 1900))
                 await asyncio.sleep(0.5)
         except Exception:
             logger.exception("Failed to send full-time report")
