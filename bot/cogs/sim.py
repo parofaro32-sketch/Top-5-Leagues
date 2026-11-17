@@ -271,7 +271,6 @@ def _format_live_player_ratings_block(home_name: str, away_name: str, home_playe
     header = "⭐️Live Player Ratings"
 
     def sort_players(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # Show participants, roughly starters/on-pitch first then bench used, by minutes desc
         ps = [p for p in (players or []) if (p.get("minutes_played", 0) > 0 or p.get("on_pitch") or p.get("substituted_in_minute") is not None)]
         if not ps:
             ps = list(players or [])
@@ -296,7 +295,153 @@ def _format_live_player_ratings_block(home_name: str, away_name: str, home_playe
     for p in sort_players(away_players):
         lines.append(line(away_name, p, home_score))
 
-    # Chunk to Discord-safe messages
+    msgs: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for ln in lines:
+        add = len(ln) + 1
+        if cur and cur_len + add > 1850:
+            msgs.append("\n".join(cur))
+            cur = [ln]
+            cur_len = len(ln) + 1
+        else:
+            cur.append(ln)
+            cur_len += add
+    if cur:
+        msgs.append("\n".join(cur))
+    return msgs
+
+
+def _format_minute_label(minute: int, phase: str | None = None, extra: int = 0, is_full_time: bool = False) -> str:
+    if is_full_time:
+        if extra:
+            return f"Minute {minute}+{extra} (Full Time)"
+        return f"Minute {minute} (Full Time)"
+    if phase == "halftime" or minute == 45:
+        return "Minute 45 (Half-Time)"
+    return f"Minute {minute}"
+
+
+def _format_match_stat_sheet(home_name: str, away_name: str, home_stats: dict[str, Any], away_stats: dict[str, Any], home_score: int, away_score: int, minute_label: str) -> str:
+    def pct(v):
+        try:
+            return f"{int(round(float(v)))}%"
+        except Exception:
+            return f"{v}%"
+    def num(v):
+        try:
+            fv = float(v)
+            if abs(fv - round(fv)) < 1e-9:
+                return str(int(round(fv)))
+            return f"{fv:.2f}".rstrip('0').rstrip('.')
+        except Exception:
+            return str(v)
+    def xg(v):
+        try:
+            return f"{float(v):.2f}"
+        except Exception:
+            return str(v)
+
+    h_pos = pct(home_stats.get("possession", 0))
+    a_pos = pct(away_stats.get("possession", 0))
+    h_pass = home_stats.get("passes_attempted", home_stats.get("passes_completed", 0))
+    a_pass = away_stats.get("passes_attempted", away_stats.get("passes_completed", 0))
+    h_cards = int(home_stats.get("yellow_cards", 0) or 0) + int(home_stats.get("red_cards", 0) or 0)
+    a_cards = int(away_stats.get("yellow_cards", 0) or 0) + int(away_stats.get("red_cards", 0) or 0)
+
+    rows = [
+        ("**Possession %**", h_pos, a_pos),
+        ("**Shots**", num(home_stats.get("shots", 0)), num(away_stats.get("shots", 0))),
+        ("**Shots on Target**", num(home_stats.get("shots_on_target", 0)), num(away_stats.get("shots_on_target", 0))),
+        ("**xG**", xg(home_stats.get("xg", 0)), xg(away_stats.get("xg", 0))),
+        ("**Passes**", num(h_pass), num(a_pass)),
+        ("**Pass Accuracy %**", pct(home_stats.get("pass_accuracy", 0)), pct(away_stats.get("pass_accuracy", 0))),
+        ("**Fouls**", num(home_stats.get("fouls", 0)), num(away_stats.get("fouls", 0))),
+        ("**Cards**", str(h_cards), str(a_cards)),
+        ("**Goals**", str(home_score), str(away_score)),
+        ("**Corners**", num(home_stats.get("corners", 0)), num(away_stats.get("corners", 0))),
+        ("**Offsides**", num(home_stats.get("offsides", 0)), num(away_stats.get("offsides", 0))),
+    ]
+    lines = [
+        f"📊 Match Stat Sheet ({minute_label})",
+        f"| Statistic | {home_name} | {away_name} |",
+        "|---|---|---|",
+    ]
+    for label, hv, av in rows:
+        lines.append(f"| {label} | {hv} | {av} |")
+    return "\n".join(lines)
+
+
+def _format_injury_consistency(injuries: list[dict[str, Any]]) -> str:
+    lines = ["", "### 🚑 INJURY CONSISTENCY (MANDATORY)"]
+    if not injuries:
+        lines.append("- No injuries occurred.")
+        return "\n".join(lines)
+    # de-duplicate roughly by player+minute
+    seen = set()
+    for inj in injuries:
+        minute = inj.get("minute", 0)
+        ex = inj.get("extra_minute", 0)
+        mtxt = f"{minute}+{ex}'" if ex else f"{minute}'"
+        player = inj.get("player") or inj.get("player_name") or "Unknown"
+        team = inj.get("team") or ""
+        sev = inj.get("severity") or "knock"
+        continued = inj.get("continued")
+        substituted = inj.get("substituted")
+        key = (mtxt, player, team, sev)
+        if key in seen:
+            continue
+        seen.add(key)
+        if continued:
+            status = "continued after treatment"
+        elif substituted:
+            status = "substituted off"
+        else:
+            status = "unable to continue"
+        team_txt = f" ({team})" if team else ""
+        lines.append(f"- {mtxt} {player}{team_txt} — {sev}, {status}.")
+    if len(lines) == 2:
+        lines.append("- No injuries occurred.")
+    return "\n".join(lines)
+
+
+def _format_physical_condition_sheet(home_name: str, away_name: str, home_players: list[dict[str, Any]], away_players: list[dict[str, Any]], minute_label: str) -> list[str]:
+    header = [f"### 🔋 Physical Condition Sheet ({minute_label})"]
+
+    def sort_players(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ps = [p for p in (players or []) if (p.get("minutes_played", 0) > 0 or p.get("on_pitch") or p.get("substituted_in_minute") is not None or p.get("is_starter"))]
+        if not ps:
+            ps = list(players or [])
+        pos_order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
+        def key(p):
+            pos = str(p.get("position") or "MID").upper()
+            return (0 if p.get("on_pitch") else 1, pos_order.get(pos, 2), -int(p.get("minutes_played") or 0), str(p.get("name") or ""))
+        return sorted(ps, key=key)
+
+    def line(team_name: str, p: dict[str, Any]) -> str:
+        pos = p.get("slot") or p.get("position") or "POS"
+        name = p.get("name") or "Unknown"
+        try:
+            stamina = int(round(max(0.0, min(100.0, float(p.get("stamina", 100))))))
+        except Exception:
+            stamina = 100
+        injured = bool(p.get("injured"))
+        continued = bool(p.get("continued") or p.get("injury_continued"))
+        if injured and not continued and not p.get("on_pitch", False):
+            fitness = max(40, min(85, stamina))
+        elif injured:
+            fitness = max(70, min(95, stamina + 5))
+        else:
+            fitness = 100
+        return f"**{team_name}:** {name} ({pos}) — Stamina: {stamina}% | Fitness: {fitness}%"
+
+    lines = list(header)
+    for p in sort_players(home_players):
+        lines.append(line(home_name, p))
+    for p in sort_players(away_players):
+        lines.append(line(away_name, p))
+
+    # chunk
     msgs: list[str] = []
     cur: list[str] = []
     cur_len = 0
@@ -432,7 +577,6 @@ class SimCog(commands.Cog):
                 home_score = int(score.get("home", session.state.home.score))
                 away_score = int(score.get("away", session.state.away.score))
             else:
-                # full report shape
                 fs = bs.get("final_score", {})
                 ratings = bs.get("player_ratings") or {}
                 home_players = ratings.get("home", [])
@@ -447,8 +591,59 @@ class SimCog(commands.Cog):
         except Exception:
             logger.exception("Failed to send live player ratings")
 
+    async def _send_tactical_break_sheets(self, channel: discord.abc.Messageable, session, *, is_full_time: bool = False) -> None:
+        try:
+            st = session.state
+            if is_full_time or st.status == "finished":
+                rep = session.report()
+                fs = rep.get("final_score", {})
+                mstats = rep.get("statistics") or {}
+                home_stats = mstats.get("home", {})
+                away_stats = mstats.get("away", {})
+                ratings = rep.get("player_ratings") or {}
+                home_players = ratings.get("home", [])
+                away_players = ratings.get("away", [])
+                home_name = fs.get("home_team", st.home.team.name)
+                away_name = fs.get("away_team", st.away.team.name)
+                home_score = int(fs.get("home_score", st.home.score) or 0)
+                away_score = int(fs.get("away_score", st.away.score) or 0)
+                minute = int(mstats.get("minute", st.minute) or st.minute)
+                extra = int(st.extra_minute or 0)
+                injuries = rep.get("injuries") or []
+                minute_label = _format_minute_label(minute, st.phase, extra, is_full_time=True)
+            else:
+                bs = session.break_status()
+                score = bs.get("score") or {}
+                mstats = bs.get("statistics") or {}
+                home_stats = mstats.get("home", {})
+                away_stats = mstats.get("away", {})
+                players = bs.get("players") or {}
+                home_players = players.get("home", [])
+                away_players = players.get("away", [])
+                home_name = st.home.team.name
+                away_name = st.away.team.name
+                home_score = int(score.get("home", st.home.score) or 0)
+                away_score = int(score.get("away", st.away.score) or 0)
+                minute = int(bs.get("minute", st.minute) or st.minute)
+                injuries = []
+                from engine.report import injuries as _inj
+                try:
+                    injuries = _inj(st)
+                except Exception:
+                    injuries = []
+                minute_label = _format_minute_label(minute, st.phase, is_full_time=False)
+
+            sheet = _format_match_stat_sheet(home_name, away_name, home_stats, away_stats, home_score, away_score, minute_label)
+            injury_block = _format_injury_consistency(injuries)
+            await channel.send(_clamp(sheet + "\n" + injury_block, 1900))
+            for msg in _format_physical_condition_sheet(home_name, away_name, home_players, away_players, minute_label):
+                await channel.send(_clamp(msg, 1900))
+        except Exception:
+            logger.exception("Failed to send tactical break/full-time sheets")
+
     async def _handle_break(self, channel: discord.abc.Messageable, session) -> None:
-        # Show live player ratings at tactical break
+        # Tactical break reports (stat sheet, injuries, physical condition, live ratings)
+        await self._send_tactical_break_sheets(channel, session, is_full_time=False)
         await self._send_live_ratings(channel, session)
 
         # Auto-resolve AI sides immediately
@@ -467,7 +662,7 @@ class SimCog(commands.Cog):
         # Manager mode: show break status and controls, wait for readiness
         view = BreakControlView(session.state.id, session)
         try:
-            await channel.send(_format_break_status(bs) + "\n\nManagers: confirm ready or apply AI-suggested adjustments for your side.", view=view)
+            await channel.send(_clamp("Managers: confirm ready or apply AI-suggested adjustments for your side."), view=view)
         except Exception:
             await channel.send(_format_break_status(bs))
 
@@ -559,8 +754,9 @@ class SimCog(commands.Cog):
 
             await asyncio.sleep(0)
 
-        # Full-time report
+        # Full-time report (stat sheet, injuries, physical condition, then summary/details/ratings/analysis)
         try:
+            await self._send_tactical_break_sheets(channel, session, is_full_time=True)
             rep = session.report()
             for msg in _format_report(rep):
                 await channel.send(_clamp(msg, 1900))
