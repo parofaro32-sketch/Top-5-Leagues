@@ -57,20 +57,83 @@ def _derive_attributes(player: dict[str, Any]) -> dict[str, float]:
     return base
 
 
+def _split_name(name: str) -> tuple[str | None, str | None]:
+    parts = [x for x in str(name or "").strip().split() if x]
+    if not parts:
+        return None, None
+    if len(parts) == 1:
+        return parts[0], parts[0]
+    return " ".join(parts[:-1]), parts[-1]
+
+
+def _estimate_overall_potential(player: dict[str, Any]) -> tuple[float, float]:
+    attrs = player.get("attributes") or {}
+    pos = (player.get("position") or "MID").upper()
+    vals = [float(v) for v in attrs.values() if isinstance(v, (int, float))]
+    if vals:
+        overall = sum(vals) / len(vals)
+    else:
+        overall = 68.0
+    # Position-weighted nudge from key attrs
+    key_map = {
+        "GK": ["goalkeeping", "positioning", "composure", "decision_making"],
+        "DEF": ["tackling", "interceptions", "defensive_awareness", "strength", "positioning"],
+        "MID": ["passing", "decision_making", "creativity", "stamina", "dribbling"],
+        "FWD": ["finishing", "shooting", "pace", "positioning", "dribbling", "composure"],
+    }
+    keys = key_map.get(pos, key_map["MID"])
+    key_vals = [float(attrs[k]) for k in keys if isinstance(attrs.get(k), (int, float))]
+    if key_vals:
+        overall = overall * 0.45 + (sum(key_vals) / len(key_vals)) * 0.55
+    overall = max(55.0, min(95.0, overall))
+    age = player.get("age")
+    try:
+        age_i = int(age) if age is not None else 25
+    except Exception:
+        age_i = 25
+    # Potential: younger players can grow, older players near/at overall
+    if age_i <= 21:
+        ceiling = min(95.0, overall + 12 + max(0, 22 - age_i) * 0.6)
+    elif age_i <= 24:
+        ceiling = min(94.0, overall + 7)
+    elif age_i <= 28:
+        ceiling = min(93.0, overall + 3)
+    elif age_i <= 31:
+        ceiling = min(92.0, overall + 1)
+    else:
+        ceiling = overall
+    potential = max(overall, min(95.0, ceiling))
+    return round(overall, 1), round(potential, 1)
+
+
 def normalize_player(player: dict[str, Any], team_api_id: int) -> dict[str, Any]:
     p = dict(player)
     p["api_id"] = int(p.get("api_id") or p.get("id") or 0)
     p["team_api_id"] = int(team_api_id)
-    p["name"] = p.get("name") or "Unknown"
+    p["name"] = str(p.get("name") or "Unknown").strip()
+    # clean wiki disambiguation like "Name (footballer)"
+    import re as _re
+    p["name"] = _re.sub(r"\s*\([^)]*footballer[^)]*\)\s*", "", p["name"], flags=_re.IGNORECASE).strip()
+    p["name"] = _re.sub(r"\s*\([^)]*born\s+\d{4}[^)]*\)\s*", "", p["name"], flags=_re.IGNORECASE).strip()
+    p["name"] = _re.sub(r"\s+", " ", p["name"]).strip() or "Unknown"
     p["position"] = (p.get("position") or "MID").upper()
     if p["position"] not in {"GK", "DEF", "MID", "FWD"}:
-        # try infer
         pos = (p.get("position") or "").lower()
-        if "goal" in pos or pos == "g": p["position"] = "GK"
-        elif "def" in pos or "back" in pos: p["position"] = "DEF"
-        elif "att" in pos or "forw" in pos or "strik" in pos or "wing" in pos: p["position"] = "FWD"
+        if "goal" in pos or pos in {"g", "gk", "keeper"}: p["position"] = "GK"
+        elif "def" in pos or "back" in pos or pos in {"cb", "lb", "rb", "lwb", "rwb"}: p["position"] = "DEF"
+        elif "att" in pos or "forw" in pos or "strik" in pos or "wing" in pos or pos in {"f", "st", "fw", "cf", "lw", "rw"}: p["position"] = "FWD"
         else: p["position"] = "MID"
+    fn, ln = _split_name(p["name"])
+    p.setdefault("firstname", p.get("firstname") or fn)
+    p.setdefault("lastname", p.get("lastname") or ln)
     p["attributes"] = p.get("attributes") or _derive_attributes(p)
+    ovr, pot = _estimate_overall_potential(p)
+    if p.get("overall") is None:
+        p["overall"] = ovr
+    if p.get("potential") is None:
+        p["potential"] = pot
+    p.setdefault("status", "active")
+    p.setdefault("injured", False)
     return p
 
 
@@ -85,7 +148,7 @@ class FootballDataService:
 
     async def ensure_seeded(self) -> None:
         # Seed bundled teams/players into DB for fast lookup and persistence
-        seed_key = "bundled_seed_v5"
+        seed_key = "bundled_seed_v7_2026_27_upgrade"
         meta = await self.db.get_cache_meta(seed_key)
         if meta:
             return
@@ -141,6 +204,42 @@ class FootballDataService:
             return out
         players = [normalize_player(p, team_api_id) for p in get_team_players(team_api_id)]
         return players
+
+    async def search_players(self, query: str, limit: int = 25) -> list[dict[str, Any]]:
+        await self.ensure_seeded()
+        q = (query or "").strip()
+        if not q:
+            return []
+        rows = await self.db.search_players(q, self.season, limit=limit)
+        if rows:
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["attributes"] = self.db.loads(d.get("attributes_json")) or {}
+                out.append(d)
+            return out
+        # Fallback: search bundled data
+        ql = q.lower()
+        results = []
+        for league_key in list_league_keys():
+            for t in list_all_teams(league_key):
+                for p in get_team_players(t["api_id"], league_key):
+                    name = str(p.get("name") or "")
+                    fn = str(p.get("firstname") or "")
+                    ln = str(p.get("lastname") or "")
+                    if ql in name.lower() or ql in fn.lower() or ql in ln.lower():
+                        d = normalize_player(p, t["api_id"])
+                        d["team_name"] = t.get("name")
+                        d["league_name"] = t.get("league_name")
+                        results.append(d)
+                        if len(results) >= limit:
+                            break
+                if len(results) >= limit:
+                    break
+            if len(results) >= limit:
+                break
+        results.sort(key=lambda x: (-(x.get("overall") or 0), x.get("name") or ""))
+        return results[:limit]
 
     def list_leagues(self) -> list[dict[str, str]]:
         return [{"key": k, "name": LEAGUE_DISPLAY_NAMES.get(k, k)} for k in list_league_keys()]

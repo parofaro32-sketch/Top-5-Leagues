@@ -36,12 +36,19 @@ CREATE TABLE IF NOT EXISTS players (
     firstname TEXT,
     lastname TEXT,
     age INTEGER,
+    dob TEXT,
     nationality TEXT,
     photo TEXT,
     position TEXT,
     detailed_position TEXT,
     number INTEGER,
     injured INTEGER NOT NULL DEFAULT 0,
+    height_cm INTEGER,
+    weight_kg INTEGER,
+    preferred_foot TEXT,
+    overall REAL,
+    potential REAL,
+    status TEXT DEFAULT 'active',
     attributes_json TEXT,
     statistics_json TEXT,
     raw_json TEXT,
@@ -49,6 +56,71 @@ CREATE TABLE IF NOT EXISTS players (
     PRIMARY KEY (api_id, team_api_id, season)
 );
 CREATE INDEX IF NOT EXISTS idx_players_team_season ON players(team_api_id, season);
+CREATE INDEX IF NOT EXISTS idx_players_api_season ON players(api_id, season);
+
+CREATE TABLE IF NOT EXISTS player_career_stats (
+    player_api_id INTEGER PRIMARY KEY,
+    name TEXT,
+    current_team_api_id INTEGER,
+    matches_played INTEGER NOT NULL DEFAULT 0,
+    starts INTEGER NOT NULL DEFAULT 0,
+    minutes_played INTEGER NOT NULL DEFAULT 0,
+    goals INTEGER NOT NULL DEFAULT 0,
+    assists INTEGER NOT NULL DEFAULT 0,
+    yellow_cards INTEGER NOT NULL DEFAULT 0,
+    red_cards INTEGER NOT NULL DEFAULT 0,
+    clean_sheets INTEGER NOT NULL DEFAULT 0,
+    saves INTEGER NOT NULL DEFAULT 0,
+    rating_sum REAL NOT NULL DEFAULT 0,
+    rating_count INTEGER NOT NULL DEFAULT 0,
+    avg_rating REAL NOT NULL DEFAULT 0,
+    potm_awards INTEGER NOT NULL DEFAULT 0,
+    trophies INTEGER NOT NULL DEFAULT 0,
+    current_ovr REAL,
+    current_pot REAL,
+    previous_ovr REAL,
+    rating_progression_json TEXT,
+    career_history_json TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS player_match_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_api_id INTEGER NOT NULL,
+    match_id TEXT NOT NULL,
+    team_api_id INTEGER,
+    opponent_api_id INTEGER,
+    season INTEGER,
+    competition TEXT,
+    started INTEGER NOT NULL DEFAULT 0,
+    minutes_played INTEGER NOT NULL DEFAULT 0,
+    goals INTEGER NOT NULL DEFAULT 0,
+    assists INTEGER NOT NULL DEFAULT 0,
+    yellow_cards INTEGER NOT NULL DEFAULT 0,
+    red_cards INTEGER NOT NULL DEFAULT 0,
+    clean_sheets INTEGER NOT NULL DEFAULT 0,
+    saves INTEGER NOT NULL DEFAULT 0,
+    rating REAL,
+    motm INTEGER NOT NULL DEFAULT 0,
+    result TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(player_api_id, match_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pmh_player ON player_match_history(player_api_id);
+CREATE INDEX IF NOT EXISTS idx_pmh_match ON player_match_history(match_id);
+
+CREATE TABLE IF NOT EXISTS player_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_api_id INTEGER NOT NULL,
+    from_team_api_id INTEGER,
+    to_team_api_id INTEGER,
+    season INTEGER,
+    transfer_date TEXT,
+    transfer_type TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pt_player ON player_transfers(player_api_id);
 
 CREATE TABLE IF NOT EXISTS lineup_submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,8 +232,31 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA foreign_keys=ON;")
 
+    async def _ensure_column(self, table: str, column: str, col_def: str) -> None:
+        rows = await self.fetchall(f"PRAGMA table_info({table})")
+        existing = {str(r["name"]) for r in rows}
+        if column not in existing:
+            await self.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+
     async def initialize(self) -> None:
         await self.require_conn().executescript(SCHEMA)
+        # lightweight migrations for existing DBs
+        for col, defn in [
+            ("dob", "TEXT"), ("height_cm", "INTEGER"), ("weight_kg", "INTEGER"),
+            ("preferred_foot", "TEXT"), ("overall", "REAL"), ("potential", "REAL"),
+            ("status", "TEXT DEFAULT 'active'"),
+        ]:
+            try:
+                await self._ensure_column("players", col, defn)
+            except Exception:
+                pass
+        for col, defn in [
+            ("submission_deadline_at", "TEXT"), ("submission_state_json", "TEXT"),
+        ]:
+            try:
+                await self._ensure_column("matches", col, defn)
+            except Exception:
+                pass
         await self.require_conn().commit()
 
     def require_conn(self) -> aiosqlite.Connection:
@@ -220,19 +315,24 @@ class Database:
     async def upsert_players(self, players: list[dict[str, Any]], team_api_id: int, season: int) -> None:
         if not players:
             return
-        rows = [(
-            int(p["api_id"]), season, team_api_id, p.get("name") or "", p.get("firstname"), p.get("lastname"),
-            p.get("age"), p.get("nationality"), p.get("photo"), p.get("position"), p.get("detailed_position"),
-            p.get("number"), 1 if p.get("injured") else 0, self.dumps(p.get("attributes") or {}),
-            self.dumps(p.get("statistics") or {}), self.dumps(p.get("raw") or p), utc_now_iso(),
-        ) for p in players]
+        rows = []
+        for p in players:
+            rows.append((
+                int(p["api_id"]), season, team_api_id, p.get("name") or "", p.get("firstname"), p.get("lastname"),
+                p.get("age"), p.get("dob"), p.get("nationality"), p.get("photo"), p.get("position"), p.get("detailed_position"),
+                p.get("number"), 1 if p.get("injured") else 0, p.get("height_cm"), p.get("weight_kg"), p.get("preferred_foot"),
+                p.get("overall"), p.get("potential"), p.get("status") or "active",
+                self.dumps(p.get("attributes") or {}), self.dumps(p.get("statistics") or {}), self.dumps(p.get("raw") or p), utc_now_iso(),
+            ))
         await self.executemany(
-            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,nationality,photo,position,detailed_position,number,injured,attributes_json,statistics_json,raw_json,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,dob,nationality,photo,position,detailed_position,number,injured,height_cm,weight_kg,preferred_foot,overall,potential,status,attributes_json,statistics_json,raw_json,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(api_id,team_api_id,season) DO UPDATE SET
-               name=excluded.name,firstname=excluded.firstname,lastname=excluded.lastname,age=excluded.age,nationality=excluded.nationality,
+               name=excluded.name,firstname=excluded.firstname,lastname=excluded.lastname,age=excluded.age,dob=excluded.dob,nationality=excluded.nationality,
                photo=excluded.photo,position=excluded.position,detailed_position=excluded.detailed_position,number=excluded.number,
-               injured=excluded.injured,attributes_json=excluded.attributes_json,statistics_json=excluded.statistics_json,raw_json=excluded.raw_json,updated_at=excluded.updated_at""", rows)
+               injured=excluded.injured,height_cm=excluded.height_cm,weight_kg=excluded.weight_kg,preferred_foot=excluded.preferred_foot,
+               overall=excluded.overall,potential=excluded.potential,status=excluded.status,
+               attributes_json=excluded.attributes_json,statistics_json=excluded.statistics_json,raw_json=excluded.raw_json,updated_at=excluded.updated_at""", rows)
 
     async def get_teams(self, season: int, query: str | None = None, limit: int = 25) -> list[aiosqlite.Row]:
         if query:
@@ -321,3 +421,84 @@ class Database:
 
     async def get_match_events(self, match_id: str, after_seq: int = -1) -> list[aiosqlite.Row]:
         return await self.fetchall("SELECT * FROM match_events WHERE match_id=? AND seq>? ORDER BY seq ASC", (match_id, after_seq))
+
+    async def search_players(self, query: str, season: int, limit: int = 25) -> list[aiosqlite.Row]:
+        like = f"%{(query or '').strip()}%"
+        return await self.fetchall(
+            """SELECT p.*, t.name as team_name, t.league_name
+               FROM players p LEFT JOIN teams t ON t.api_id=p.team_api_id AND t.season=p.season
+               WHERE p.season=? AND (p.name LIKE ? OR p.firstname LIKE ? OR p.lastname LIKE ?)
+               ORDER BY p.overall DESC NULLS LAST, p.name LIMIT ?""",
+            (season, like, like, like, limit),
+        )
+
+    async def upsert_player_career_stats(self, player_api_id: int, patch: dict[str, Any]) -> None:
+        row = await self.fetchone("SELECT * FROM player_career_stats WHERE player_api_id=?", (player_api_id,))
+        if not row:
+            await self.execute(
+                """INSERT INTO player_career_stats(player_api_id,name,current_team_api_id,matches_played,starts,minutes_played,goals,assists,yellow_cards,red_cards,clean_sheets,saves,rating_sum,rating_count,avg_rating,potm_awards,trophies,current_ovr,current_pot,previous_ovr,rating_progression_json,career_history_json,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    player_api_id, patch.get("name"), patch.get("current_team_api_id"),
+                    int(patch.get("matches_played", 0)), int(patch.get("starts", 0)), int(patch.get("minutes_played", 0)),
+                    int(patch.get("goals", 0)), int(patch.get("assists", 0)), int(patch.get("yellow_cards", 0)), int(patch.get("red_cards", 0)),
+                    int(patch.get("clean_sheets", 0)), int(patch.get("saves", 0)),
+                    float(patch.get("rating_sum", 0.0)), int(patch.get("rating_count", 0)), float(patch.get("avg_rating", 0.0)),
+                    int(patch.get("potm_awards", 0)), int(patch.get("trophies", 0)),
+                    patch.get("current_ovr"), patch.get("current_pot"), patch.get("previous_ovr"),
+                    self.dumps(patch.get("rating_progression") or []), self.dumps(patch.get("career_history") or []), utc_now_iso(),
+                ),
+            )
+            return
+        cur = dict(row)
+        rating_progression = self.loads(cur.get("rating_progression_json")) or []
+        career_history = self.loads(cur.get("career_history_json")) or []
+        # apply increments
+        for k in ["matches_played","starts","minutes_played","goals","assists","yellow_cards","red_cards","clean_sheets","saves","rating_count","potm_awards","trophies"]:
+            if k in patch:
+                cur[k] = int(cur.get(k) or 0) + int(patch.get(k) or 0)
+        if "rating_sum" in patch:
+            cur["rating_sum"] = float(cur.get("rating_sum") or 0.0) + float(patch.get("rating_sum") or 0.0)
+        if cur.get("rating_count", 0) > 0:
+            cur["avg_rating"] = float(cur.get("rating_sum", 0.0)) / float(cur["rating_count"])
+        if patch.get("name"):
+            cur["name"] = patch["name"]
+        if patch.get("current_team_api_id") is not None:
+            cur["current_team_api_id"] = patch["current_team_api_id"]
+        if patch.get("current_ovr") is not None:
+            cur["previous_ovr"] = cur.get("current_ovr")
+            cur["current_ovr"] = patch["current_ovr"]
+        if patch.get("current_pot") is not None:
+            cur["current_pot"] = patch["current_pot"]
+        if patch.get("rating_progression_entry"):
+            rating_progression.append(patch["rating_progression_entry"])
+            rating_progression = rating_progression[-200:]
+        if patch.get("career_history_entry"):
+            career_history.append(patch["career_history_entry"])
+            career_history = career_history[-500:]
+        await self.execute(
+            """UPDATE player_career_stats SET name=?,current_team_api_id=?,matches_played=?,starts=?,minutes_played=?,goals=?,assists=?,yellow_cards=?,red_cards=?,clean_sheets=?,saves=?,rating_sum=?,rating_count=?,avg_rating=?,potm_awards=?,trophies=?,current_ovr=?,current_pot=?,previous_ovr=?,rating_progression_json=?,career_history_json=?,updated_at=?
+               WHERE player_api_id=?""",
+            (
+                cur.get("name"), cur.get("current_team_api_id"), int(cur.get("matches_played") or 0), int(cur.get("starts") or 0), int(cur.get("minutes_played") or 0),
+                int(cur.get("goals") or 0), int(cur.get("assists") or 0), int(cur.get("yellow_cards") or 0), int(cur.get("red_cards") or 0),
+                int(cur.get("clean_sheets") or 0), int(cur.get("saves") or 0), float(cur.get("rating_sum") or 0.0), int(cur.get("rating_count") or 0), float(cur.get("avg_rating") or 0.0),
+                int(cur.get("potm_awards") or 0), int(cur.get("trophies") or 0), cur.get("current_ovr"), cur.get("current_pot"), cur.get("previous_ovr"),
+                self.dumps(rating_progression), self.dumps(career_history), utc_now_iso(), player_api_id,
+            ),
+        )
+
+    async def record_player_match_history(self, row: dict[str, Any]) -> None:
+        await self.execute(
+            """INSERT OR REPLACE INTO player_match_history(player_api_id,match_id,team_api_id,opponent_api_id,season,competition,started,minutes_played,goals,assists,yellow_cards,red_cards,clean_sheets,saves,rating,motm,result)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                int(row["player_api_id"]), str(row["match_id"]), row.get("team_api_id"), row.get("opponent_api_id"), row.get("season"), row.get("competition"),
+                1 if row.get("started") else 0, int(row.get("minutes_played") or 0), int(row.get("goals") or 0), int(row.get("assists") or 0),
+                int(row.get("yellow_cards") or 0), int(row.get("red_cards") or 0), int(row.get("clean_sheets") or 0), int(row.get("saves") or 0),
+                row.get("rating"), 1 if row.get("motm") else 0, row.get("result"),
+            ),
+        )
+
+    async def get_player_career_stats(self, player_api_id: int) -> aiosqlite.Row | None:
+        return await self.fetchone("SELECT * FROM player_career_stats WHERE player_api_id=?", (player_api_id,))

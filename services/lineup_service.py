@@ -341,3 +341,110 @@ def auto_build_lineup(team_api_id: int, team_name: str, squad: list[dict[str, An
         gk = next(p for p in remaining if norm_pos(p["position"]) == "GK")
         bench.append(gk)
     return validate_lineup(team_api_id=team_api_id, team_name=team_name, formation=formation, starters=starters, bench=bench, squad=squad)
+
+
+def parse_lineup_text_block(text: str) -> list[str]:
+    raw = (text or "").replace(",", "\n")
+    out: list[str] = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        # strip leading numbering like "1. " or "- "
+        s = re.sub(r"^\s*(?:\d+[\).\-\:]\s*|[-*]\s*)", "", s).strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def resolve_player_ref(ref: str, squad: list[dict[str, Any]]) -> dict[str, Any] | None:
+    r = (ref or "").strip()
+    if not r:
+        return None
+    # by shirt number
+    if r.isdigit():
+        num = int(r)
+        for p in squad:
+            try:
+                if int(p.get("number") or -999) == num:
+                    return p
+            except Exception:
+                pass
+    rl = _norm_name(r)
+    # exact name
+    for p in squad:
+        if _norm_name(p.get("name")) == rl:
+            return p
+    # first+last token match / contains
+    for p in squad:
+        pn = _norm_name(p.get("name"))
+        if rl and (rl in pn or pn in rl):
+            return p
+    # match on last name token
+    r_parts = rl.split()
+    if r_parts:
+        last = r_parts[-1]
+        cands = [p for p in squad if _norm_name(p.get("name")).split()[-1:] == [last]]
+        if len(cands) == 1:
+            return cands[0]
+    return None
+
+
+def parse_lineup_submission(formation: str, starters_raw: str, bench_raw: str, squad: list[dict[str, Any]], team_api_id: int, team_name: str):
+    starter_refs = parse_lineup_text_block(starters_raw)
+    bench_refs = parse_lineup_text_block(bench_raw)
+    if len(starter_refs) != 11:
+        raise LineupValidationError(f"Starting XI must contain exactly 11 players (found {len(starter_refs)}).")
+    starters: list[dict[str, Any]] = []
+    missing: list[str] = []
+    used: set[int] = set()
+    for ref in starter_refs:
+        p = resolve_player_ref(ref, squad)
+        if not p:
+            missing.append(ref)
+            continue
+        pid = int(p.get("api_id") or 0)
+        if pid in used:
+            raise LineupValidationError(f"Duplicate player in starters: {p.get('name')}")
+        used.add(pid)
+        starters.append(p)
+    bench: list[dict[str, Any]] = []
+    for ref in bench_refs:
+        p = resolve_player_ref(ref, squad)
+        if not p:
+            missing.append(ref)
+            continue
+        pid = int(p.get("api_id") or 0)
+        if pid in used:
+            raise LineupValidationError(f"Duplicate player in lineup/bench: {p.get('name')}")
+        used.add(pid)
+        bench.append(p)
+    if missing:
+        raise LineupValidationError("Could not match players: " + ", ".join(missing[:8]) + ("..." if len(missing) > 8 else ""))
+    lu = validate_lineup(team_api_id=team_api_id, team_name=team_name, formation=formation.strip(), starters=starters, bench=bench, squad=squad)
+    return lu
+
+
+def format_squad_for_manager(squad: list[dict[str, Any]]) -> str:
+    pos_order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
+    rows = []
+    for p in squad:
+        pos = norm_pos(p.get("position"))
+        name = p.get("name") or "Unknown"
+        num = p.get("number")
+        ovr = p.get("overall")
+        age = p.get("age")
+        status = p.get("status") or "active"
+        injured = p.get("injured")
+        flag = " (injured)" if injured or str(status).lower() == "injured" else ""
+        num_s = f"#{num}" if num is not None else "#-"
+        ovr_s = f"{int(round(float(ovr)))}" if isinstance(ovr, (int, float)) else (f"{int(round(float(p.get('rating',0))))}" if p.get("rating") else "-")
+        age_s = f"{age}" if age is not None else "-"
+        rows.append((pos_order.get(pos, 9), pos, f"{num_s:>3} {name} [{pos}] OVR:{ovr_s} Age:{age_s}{flag}"))
+    rows.sort(key=lambda x: (x[0], x[2]))
+    lines = [r[2] for r in rows]
+    # chunk to fit discord
+    out = "\n".join(lines)
+    if len(out) > 1900:
+        out = "\n".join(lines[:40]) + f"\n... and {len(lines)-40} more"
+    return out

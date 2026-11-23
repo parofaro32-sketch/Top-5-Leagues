@@ -94,40 +94,12 @@ def man_of_the_match(state: MatchState):
     return best
 
 
-def tactical_analysis(state: MatchState) -> str:
-    h,a=state.home,state.away
-    lines=[]
-    def perf(side):
-        t=state.team(side); o=state.team(state.opp_side(side)); parts=[]
-        if t.xg>o.xg+0.35: parts.append("created the clearer chances")
-        elif o.xg>t.xg+0.35: parts.append("found it harder to generate high-quality chances")
-        else: parts.append("were closely matched in chance quality")
-        if t.possession_share>=55: parts.append("controlled more of the ball")
-        elif t.possession_share<=45: parts.append("had longer spells without possession")
-        return f"{t.team.name} {', '.join(parts)}."
-    lines.append(perf("home")); lines.append(perf("away"))
-    motm=man_of_the_match(state)
-    if motm: lines.append(f"Key performer: {motm['name']} ({motm['team']}) delivered a {motm['rating']} rating in influential moments.")
-    changes=[]
-    for side in ("home","away"):
-        t=state.team(side)
-        for ch in t.tactical_changes: changes.append((ch.get("minute",0), t.team.name, ch.get("summary") or "adjustment"))
-        for s in t.substitution_events[:3]: changes.append((s.get("minute",0), t.team.name, f"introduced {s.get('on_name')}"))
-    changes.sort()
-    if changes:
-        lines.append("Observable adjustments: " + "; ".join([f"{m}' {tm} {sm}" for m,tm,sm in changes[:5]]) + ". These shifts coincided with changes in pressure, control, or attacking threat.")
-    if h.score>a.score: lines.append(f"Why the result occurred: {h.team.name} managed the decisive moments more effectively, while {a.team.name} could not fully overturn key phases.")
-    elif a.score>h.score: lines.append(f"Why the result occurred: {a.team.name} managed the decisive moments more effectively, while {h.team.name} could not fully overturn key phases.")
-    else: lines.append("Why the result occurred: neither side established a decisive edge in the key moments and the match remained balanced.")
-    return "\n".join(f"- {l}" for l in lines)
-
-
 def full_time_report(state: MatchState) -> dict[str, Any]:
     finalize_all(state)
     return {"final_score":{"home_team":state.home.team.name,"away_team":state.away.team.name,"home_score":state.home.score,"away_score":state.away.score,"scoreline":state.scoreline()},
             "goalscorers":goalscorers(state), "statistics":match_stats(state), "discipline":discipline(state), "injuries":injuries(state),
             "substitutions":substitutions(state), "player_ratings":{"home":participating_players(state,"home"),"away":participating_players(state,"away")},
-            "man_of_the_match":man_of_the_match(state), "tactical_analysis":tactical_analysis(state)}
+            "man_of_the_match":man_of_the_match(state)}
 
 
 def break_status(state: MatchState) -> dict[str, Any]:

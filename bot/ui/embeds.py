@@ -126,12 +126,9 @@ def report_embeds(report: dict[str, Any]) -> list[discord.Embed]:
     ratings = discord.Embed(title="Player Ratings & Participation", color=color_primary())
     ratings.description = clamp_text(fmt_team('home', fs.get('home_team','Home')) + "\n\n" + fmt_team('away', fs.get('away_team','Away')), 3900)
 
-    # Tactical analysis, discipline, injuries, subs
-    extra = discord.Embed(title="Tactical Analysis & Match Notes", color=color_primary())
+    # Discipline, injuries, subs (no tactical analysis - tactics are private)
+    extra = discord.Embed(title="Match Notes", color=color_primary())
     blocks = []
-    ta = report.get('tactical_analysis')
-    if ta:
-        blocks.append(str(ta))
     disc = report.get('discipline') or []
     if disc:
         d = [f"• {x.get('minute')}' {x.get('player')} ({x.get('team')}) — {x.get('type').replace('_',' ')}" for x in disc[:12]]

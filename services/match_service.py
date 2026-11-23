@@ -67,6 +67,10 @@ class ActiveMatchSession:
 
     async def start_and_simulate_until_break(self, tick_callback: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None) -> list[dict[str, Any]]:
         async with self.lock:
+            if not self.is_setup_complete():
+                missing = ", ".join(self.missing_submissions()) or "unknown"
+                logger.info("MATCH_SERVICE start blocked - setup incomplete match_id=%s missing=%s", self.state.id, missing)
+                return []
             out = self.engine.start() if self.state.status == "setup" else []
             await self.append_events(out)
             if tick_callback and out:
@@ -173,6 +177,25 @@ class ActiveMatchSession:
             await self.save()
             return evs
 
+    def side_submission_complete(self, side: str) -> bool:
+        sub = self.state.submission or {}
+        return bool(sub.get(f"{side}_lineup_submitted")) and bool(sub.get(f"{side}_tactics_submitted"))
+
+    def is_setup_complete(self) -> bool:
+        # Bots are always complete; humans must submit lineup + tactics
+        home_ok = self.home_manager_id is None or self.side_submission_complete("home")
+        away_ok = self.away_manager_id is None or self.side_submission_complete("away")
+        return home_ok and away_ok
+
+    def missing_submissions(self) -> list[str]:
+        missing = []
+        for side, mgr in (("home", self.home_manager_id), ("away", self.away_manager_id)):
+            if mgr is None:
+                continue
+            if not self.side_submission_complete(side):
+                missing.append(side)
+        return missing
+
     def is_ready_to_resume(self) -> bool:
         if self.state.pending_break is None:
             return False
@@ -182,6 +205,84 @@ class ActiveMatchSession:
 
     def break_status(self) -> dict[str, Any]:
         return break_status(self.state)
+
+    async def persist_player_stats(self) -> bool:
+        """Persist player match/career stats once. Returns True if persisted now."""
+        sub = self.state.submission or {}
+        if sub.get("stats_persisted"):
+            return False
+        if self.state.status != "finished":
+            return False
+        from engine.report import man_of_the_match
+        motm = man_of_the_match(self.state) or {}
+        motm_name = motm.get("name")
+        comp = sub.get("competition") or self.state.home.team.league_name or "Friendly"
+        for side in ("home", "away"):
+            team = self.state.team(side)
+            opp = self.state.team(self.state.opp_side(side))
+            team_goals = team.score
+            opp_goals = opp.score
+            result = "D"
+            if team_goals > opp_goals: result = "W"
+            elif team_goals < opp_goals: result = "L"
+            clean_sheet = 1 if opp_goals == 0 else 0
+            for ps in self.state.player_states.values():
+                if ps.team_side != side:
+                    continue
+                if not (ps.on_pitch or ps.minutes_played > 0 or ps.substituted_in_minute is not None or ps.is_starter):
+                    continue
+                started = 1 if ps.is_starter else 0
+                minutes = int(ps.minutes_played or 0)
+                is_motm = 1 if motm_name and ps.name == motm_name else 0
+                cs = 1 if (clean_sheet and ps.position == "GK" and minutes > 0) else 0
+                row = {
+                    "player_api_id": int(ps.player_api_id),
+                    "match_id": self.state.id,
+                    "team_api_id": team.team.api_id,
+                    "opponent_api_id": opp.team.api_id,
+                    "season": None,
+                    "competition": comp,
+                    "started": started,
+                    "minutes_played": minutes,
+                    "goals": int(ps.goals or 0),
+                    "assists": int(ps.assists or 0),
+                    "yellow_cards": int(ps.yellow_cards or 0),
+                    "red_cards": 1 if ps.red_card else 0,
+                    "clean_sheets": cs,
+                    "saves": int(ps.saves or 0),
+                    "rating": float(ps.rating or 0.0),
+                    "motm": is_motm,
+                    "result": result,
+                }
+                try:
+                    await self.db.record_player_match_history(row)
+                except Exception:
+                    logger.exception("Failed to record player match history player=%s match=%s", ps.player_api_id, self.state.id)
+                try:
+                    patch = {
+                        "name": ps.name,
+                        "current_team_api_id": team.team.api_id,
+                        "matches_played": 1 if minutes > 0 or ps.on_pitch or ps.substituted_in_minute is not None or ps.is_starter else 0,
+                        "starts": started,
+                        "minutes_played": minutes,
+                        "goals": int(ps.goals or 0),
+                        "assists": int(ps.assists or 0),
+                        "yellow_cards": int(ps.yellow_cards or 0),
+                        "red_cards": 1 if ps.red_card else 0,
+                        "clean_sheets": cs,
+                        "saves": int(ps.saves or 0),
+                        "rating_sum": float(ps.rating or 0.0),
+                        "rating_count": 1 if minutes > 0 or ps.is_starter else 0,
+                        "potm_awards": is_motm,
+                        "rating_progression_entry": {"match_id": self.state.id, "rating": float(ps.rating or 0.0), "date": self.state.public_stats.get("finished_at")},
+                    }
+                    if patch["matches_played"] or patch["rating_count"]:
+                        await self.db.upsert_player_career_stats(int(ps.player_api_id), patch)
+                except Exception:
+                    logger.exception("Failed to upsert career stats player=%s match=%s", ps.player_api_id, self.state.id)
+        sub["stats_persisted"] = True
+        await self.save()
+        return True
 
     def report(self) -> dict[str, Any]:
         return full_time_report(self.state)
@@ -216,8 +317,25 @@ class MatchService:
         rng = random.Random()
         ht = Team(api_id=int(home_team["api_id"]), name=home_team.get("name", "Home"), league_id=home_team.get("league_id"), league_name=home_team.get("league_name"), country=home_team.get("country"), logo=home_team.get("logo"), short_name=home_team.get("short_name") or home_team.get("code"))
         at = Team(api_id=int(away_team["api_id"]), name=away_team.get("name", "Away"), league_id=away_team.get("league_id"), league_name=away_team.get("league_name"), country=away_team.get("country"), logo=away_team.get("logo"), short_name=away_team.get("short_name") or away_team.get("code"))
-        hl = home_lineup or generate_ai_lineup(ht.api_id, ht.name, home_squad, rng)
-        al = away_lineup or generate_ai_lineup(at.api_id, at.name, away_squad, rng)
+        from services.lineup_service import auto_build_lineup
+
+        home_needs_human = home_manager_id is not None and home_lineup is None
+        away_needs_human = away_manager_id is not None and away_lineup is None
+
+        # For human managers, build a temporary internal placeholder ONLY for engine init.
+        # It is never exposed and the match cannot start until the manager submits a real lineup.
+        if home_lineup is not None:
+            hl = home_lineup
+        elif home_needs_human:
+            hl = auto_build_lineup(ht.api_id, ht.name, home_squad, "4-3-3")
+        else:
+            hl = generate_ai_lineup(ht.api_id, ht.name, home_squad, rng)
+        if away_lineup is not None:
+            al = away_lineup
+        elif away_needs_human:
+            al = auto_build_lineup(at.api_id, at.name, away_squad, "4-3-3")
+        else:
+            al = generate_ai_lineup(at.api_id, at.name, away_squad, rng)
 
         def _lu_diag(label: str, lu: Lineup):
             try:
@@ -242,6 +360,22 @@ class MatchService:
             home_players=home_players, away_players=away_players,
         )
         session = ActiveMatchSession(state=engine.state, engine=engine, db=self.db, home_manager_id=home_manager_id, away_manager_id=away_manager_id)
+        # Submission / setup tracking
+        sub = session.state.submission
+        sub.setdefault("competition", "Friendly")
+        sub.setdefault("match_type", "Friendly")
+        sub.setdefault("stadium", home_team.get("venue_name") or home_team.get("venue") or f"{ht.name} Stadium")
+        sub.setdefault("timeout_policy", "cancel")  # configurable: cancel | forfeit | admin
+        sub.setdefault("home_lineup_submitted", not home_needs_human)
+        sub.setdefault("away_lineup_submitted", not away_needs_human)
+        sub.setdefault("home_tactics_submitted", home_manager_id is None)
+        sub.setdefault("away_tactics_submitted", away_manager_id is None)
+        sub.setdefault("home_submitted_at", None)
+        sub.setdefault("away_submitted_at", None)
+        sub.setdefault("deadline_at", None)
+        sub.setdefault("initial_deadline_seconds", 20 * 60)
+        sub.setdefault("extension_seconds", 10 * 60)
+        sub.setdefault("stats_persisted", False)
         self.sessions[engine.state.id] = session
         await session.save()
         return session
