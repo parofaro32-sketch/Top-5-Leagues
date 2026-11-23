@@ -57,20 +57,70 @@ def _derive_attributes(player: dict[str, Any]) -> dict[str, float]:
     return base
 
 
+DETAILED_TO_COARSE = {
+    "GK": "GK",
+    "CB": "DEF", "LB": "DEF", "RB": "DEF", "LWB": "DEF", "RWB": "DEF", "DEF": "DEF",
+    "CDM": "MID", "CM": "MID", "CAM": "MID", "LM": "MID", "RM": "MID", "MID": "MID",
+    "LW": "FWD", "RW": "FWD", "ST": "FWD", "CF": "FWD", "FWD": "FWD",
+}
+
+
+def _coarse_position(pos: str | None) -> str:
+    p = (pos or "MID").upper().strip()
+    if p in DETAILED_TO_COARSE:
+        return DETAILED_TO_COARSE[p]
+    pl = p.lower()
+    if "goal" in pl or pl == "g":
+        return "GK"
+    if any(x in pl for x in ("back", "def", "cb", "lb", "rb")):
+        return "DEF"
+    if any(x in pl for x in ("att", "forw", "strik", "wing", "st", "cf", "lw", "rw")):
+        return "FWD"
+    return "MID"
+
+
+def _derive_ratings(player: dict[str, Any]) -> tuple[int, int]:
+    seed = int(player.get("api_id") or 0) or sum(ord(c) for c in (player.get("name") or "x"))
+    rng = random.Random(seed ^ 0x9E3779B1)
+    attrs = player.get("attributes") or {}
+    if attrs:
+        vals = [float(v) for v in attrs.values() if isinstance(v, (int, float))]
+        base = sum(vals) / len(vals) if vals else 68.0
+        overall = int(max(55, min(94, round(base + rng.uniform(-2, 2)))))
+    else:
+        overall = int(max(58, min(90, round(68 + rng.uniform(-8, 14)))))
+    age = player.get("age")
+    try:
+        age_i = int(age) if age is not None else 26
+    except Exception:
+        age_i = 26
+    if age_i <= 21:
+        potential = min(95, overall + rng.randint(8, 18))
+    elif age_i <= 24:
+        potential = min(94, overall + rng.randint(4, 12))
+    elif age_i <= 28:
+        potential = min(93, overall + rng.randint(0, 5))
+    elif age_i <= 31:
+        potential = overall + rng.randint(0, 1)
+    else:
+        potential = overall
+    return overall, max(overall, potential)
+
+
 def normalize_player(player: dict[str, Any], team_api_id: int) -> dict[str, Any]:
     p = dict(player)
     p["api_id"] = int(p.get("api_id") or p.get("id") or 0)
     p["team_api_id"] = int(team_api_id)
     p["name"] = p.get("name") or "Unknown"
-    p["position"] = (p.get("position") or "MID").upper()
-    if p["position"] not in {"GK", "DEF", "MID", "FWD"}:
-        # try infer
-        pos = (p.get("position") or "").lower()
-        if "goal" in pos or pos == "g": p["position"] = "GK"
-        elif "def" in pos or "back" in pos: p["position"] = "DEF"
-        elif "att" in pos or "forw" in pos or "strik" in pos or "wing" in pos: p["position"] = "FWD"
-        else: p["position"] = "MID"
+    detailed = (p.get("detailed_position") or p.get("position") or "MID").upper().strip()
+    p["detailed_position"] = detailed
+    p["position"] = _coarse_position(detailed)
     p["attributes"] = p.get("attributes") or _derive_attributes(p)
+    if p.get("overall") is None or p.get("potential") is None:
+        ovr, pot = _derive_ratings(p)
+        p.setdefault("overall", ovr)
+        p.setdefault("potential", pot)
+    p.setdefault("status", "active")
     return p
 
 
@@ -85,7 +135,7 @@ class FootballDataService:
 
     async def ensure_seeded(self) -> None:
         # Seed bundled teams/players into DB for fast lookup and persistence
-        seed_key = "bundled_seed_v5"
+        seed_key = "bundled_seed_v6_2026_27"
         meta = await self.db.get_cache_meta(seed_key)
         if meta:
             return
@@ -141,6 +191,35 @@ class FootballDataService:
             return out
         players = [normalize_player(p, team_api_id) for p in get_team_players(team_api_id)]
         return players
+
+    async def search_players(
+        self,
+        query: str | None = None,
+        *,
+        team_api_id: int | None = None,
+        league: str | None = None,
+        position: str | None = None,
+        min_overall: int | None = None,
+        max_overall: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        await self.ensure_seeded()
+        rows = await self.db.search_players(
+            self.season,
+            query=query,
+            team_api_id=team_api_id,
+            league=league,
+            position=position,
+            min_overall=min_overall,
+            max_overall=max_overall,
+            limit=limit,
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d["attributes"] = self.db.loads(d.get("attributes_json")) or {}
+            out.append(d)
+        return out
 
     def list_leagues(self) -> list[dict[str, str]]:
         return [{"key": k, "name": LEAGUE_DISPLAY_NAMES.get(k, k)} for k in list_league_keys()]

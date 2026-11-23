@@ -36,11 +36,18 @@ CREATE TABLE IF NOT EXISTS players (
     firstname TEXT,
     lastname TEXT,
     age INTEGER,
+    dob TEXT,
     nationality TEXT,
     photo TEXT,
     position TEXT,
     detailed_position TEXT,
     number INTEGER,
+    height_cm INTEGER,
+    weight_kg INTEGER,
+    preferred_foot TEXT,
+    overall INTEGER,
+    potential INTEGER,
+    status TEXT NOT NULL DEFAULT 'active',
     injured INTEGER NOT NULL DEFAULT 0,
     attributes_json TEXT,
     statistics_json TEXT,
@@ -161,8 +168,24 @@ class Database:
         await self._conn.execute("PRAGMA foreign_keys=ON;")
 
     async def initialize(self) -> None:
-        await self.require_conn().executescript(SCHEMA)
-        await self.require_conn().commit()
+        conn = self.require_conn()
+        await conn.executescript(SCHEMA)
+        # Lightweight migrations for existing DBs
+        migrations = [
+            "ALTER TABLE players ADD COLUMN dob TEXT",
+            "ALTER TABLE players ADD COLUMN height_cm INTEGER",
+            "ALTER TABLE players ADD COLUMN weight_kg INTEGER",
+            "ALTER TABLE players ADD COLUMN preferred_foot TEXT",
+            "ALTER TABLE players ADD COLUMN overall INTEGER",
+            "ALTER TABLE players ADD COLUMN potential INTEGER",
+            "ALTER TABLE players ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+        ]
+        for sql in migrations:
+            try:
+                await conn.execute(sql)
+            except Exception:
+                pass
+        await conn.commit()
 
     def require_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -222,17 +245,21 @@ class Database:
             return
         rows = [(
             int(p["api_id"]), season, team_api_id, p.get("name") or "", p.get("firstname"), p.get("lastname"),
-            p.get("age"), p.get("nationality"), p.get("photo"), p.get("position"), p.get("detailed_position"),
-            p.get("number"), 1 if p.get("injured") else 0, self.dumps(p.get("attributes") or {}),
+            p.get("age"), p.get("dob"), p.get("nationality"), p.get("photo"), p.get("position"), p.get("detailed_position"),
+            p.get("number"), p.get("height_cm"), p.get("weight_kg"), p.get("preferred_foot"),
+            p.get("overall"), p.get("potential"), p.get("status") or "active",
+            1 if p.get("injured") else 0, self.dumps(p.get("attributes") or {}),
             self.dumps(p.get("statistics") or {}), self.dumps(p.get("raw") or p), utc_now_iso(),
         ) for p in players]
         await self.executemany(
-            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,nationality,photo,position,detailed_position,number,injured,attributes_json,statistics_json,raw_json,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,dob,nationality,photo,position,detailed_position,number,height_cm,weight_kg,preferred_foot,overall,potential,status,injured,attributes_json,statistics_json,raw_json,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(api_id,team_api_id,season) DO UPDATE SET
-               name=excluded.name,firstname=excluded.firstname,lastname=excluded.lastname,age=excluded.age,nationality=excluded.nationality,
-               photo=excluded.photo,position=excluded.position,detailed_position=excluded.detailed_position,number=excluded.number,
-               injured=excluded.injured,attributes_json=excluded.attributes_json,statistics_json=excluded.statistics_json,raw_json=excluded.raw_json,updated_at=excluded.updated_at""", rows)
+               name=excluded.name,firstname=excluded.firstname,lastname=excluded.lastname,age=excluded.age,dob=excluded.dob,
+               nationality=excluded.nationality,photo=excluded.photo,position=excluded.position,detailed_position=excluded.detailed_position,
+               number=excluded.number,height_cm=excluded.height_cm,weight_kg=excluded.weight_kg,preferred_foot=excluded.preferred_foot,
+               overall=excluded.overall,potential=excluded.potential,status=excluded.status,injured=excluded.injured,
+               attributes_json=excluded.attributes_json,statistics_json=excluded.statistics_json,raw_json=excluded.raw_json,updated_at=excluded.updated_at""", rows)
 
     async def get_teams(self, season: int, query: str | None = None, limit: int = 25) -> list[aiosqlite.Row]:
         if query:
@@ -247,6 +274,48 @@ class Database:
 
     async def get_players_for_team(self, team_api_id: int, season: int) -> list[aiosqlite.Row]:
         return await self.fetchall("SELECT * FROM players WHERE team_api_id=? AND season=? ORDER BY position,name", (team_api_id, season))
+
+    async def search_players(
+        self,
+        season: int,
+        *,
+        query: str | None = None,
+        team_api_id: int | None = None,
+        league: str | None = None,
+        position: str | None = None,
+        min_overall: int | None = None,
+        max_overall: int | None = None,
+        limit: int = 50,
+    ) -> list[aiosqlite.Row]:
+        sql = (
+            "SELECT p.*, t.name AS team_name, t.league_name "
+            "FROM players p LEFT JOIN teams t ON t.api_id=p.team_api_id AND t.season=p.season "
+            "WHERE p.season=?"
+        )
+        params: list[Any] = [season]
+        if query:
+            like = f"%{query.strip()}%"
+            sql += " AND (p.name LIKE ? OR p.firstname LIKE ? OR p.lastname LIKE ?)"
+            params.extend([like, like, like])
+        if team_api_id is not None:
+            sql += " AND p.team_api_id=?"
+            params.append(int(team_api_id))
+        if league:
+            like = f"%{league.strip()}%"
+            sql += " AND (t.league_name LIKE ? OR t.country LIKE ?)"
+            params.extend([like, like])
+        if position:
+            sql += " AND (p.position=? OR p.detailed_position=?)"
+            params.extend([position.upper(), position.upper()])
+        if min_overall is not None:
+            sql += " AND COALESCE(p.overall,0)>=?"
+            params.append(int(min_overall))
+        if max_overall is not None:
+            sql += " AND COALESCE(p.overall,0)<=?"
+            params.append(int(max_overall))
+        sql += " ORDER BY COALESCE(p.overall,0) DESC, p.name LIMIT ?"
+        params.append(int(limit))
+        return await self.fetchall(sql, params)
 
     async def get_cache_meta(self, key: str) -> aiosqlite.Row | None:
         return await self.fetchone("SELECT * FROM api_cache_meta WHERE cache_key=?", (key,))

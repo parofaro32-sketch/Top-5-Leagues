@@ -49,7 +49,7 @@ def load_settings() -> Settings:
         discord_guild_id=guild_id,
         football_api_key=os.getenv("FOOTBALL_API_KEY", "").strip(),
         football_api_base_url=os.getenv("FOOTBALL_API_BASE_URL", "https://v3.football.api-sports.io").strip().rstrip("/"),
-        football_api_season=int(os.getenv("FOOTBALL_API_SEASON", "2025")),
+        football_api_season=int(os.getenv("FOOTBALL_API_SEASON", "2026")),
         football_data_source=source,
         database_path=db_path,
         command_prefix=os.getenv("COMMAND_PREFIX", "!").strip() or "!",
