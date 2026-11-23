@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import random
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 from engine.ai_manager import decide_ai_break_actions, generate_ai_lineup, generate_ai_tactics
 from engine.match_engine import MatchEngine
@@ -28,59 +31,87 @@ class ActiveMatchSession:
     async def save(self) -> None:
         if not self.persist:
             return
-        await self.db.save_match({
-            "id": self.state.id,
-            "guild_id": self.state.guild_id,
-            "channel_id": self.state.channel_id,
-            "message_id": self.state.message_id,
-            "home_team_api_id": self.state.home.team.api_id,
-            "away_team_api_id": self.state.away.team.api_id,
-            "home_team_name": self.state.home.team.name,
-            "away_team_name": self.state.away.team.name,
-            "mode": self.state.mode,
-            "status": self.state.status,
-            "current_minute": self.state.minute,
-            "phase": self.state.phase,
-            "state": self.state.to_dict(),
-        })
-        await self.db.upsert_match_participant(match_id=self.state.id, side="home", team_api_id=self.state.home.team.api_id, manager_user_id=self.home_manager_id, is_bot=self.home_manager_id is None)
-        await self.db.upsert_match_participant(match_id=self.state.id, side="away", team_api_id=self.state.away.team.api_id, manager_user_id=self.away_manager_id, is_bot=self.away_manager_id is None)
+        try:
+            await self.db.save_match({
+                "id": self.state.id,
+                "guild_id": self.state.guild_id,
+                "channel_id": self.state.channel_id,
+                "message_id": self.state.message_id,
+                "home_team_api_id": self.state.home.team.api_id,
+                "away_team_api_id": self.state.away.team.api_id,
+                "home_team_name": self.state.home.team.name,
+                "away_team_name": self.state.away.team.name,
+                "mode": self.state.mode,
+                "status": self.state.status,
+                "current_minute": self.state.minute,
+                "phase": self.state.phase,
+                "state": self.state.to_dict(),
+            })
+            await self.db.upsert_match_participant(match_id=self.state.id, side="home", team_api_id=self.state.home.team.api_id, manager_user_id=self.home_manager_id, is_bot=self.home_manager_id is None)
+            await self.db.upsert_match_participant(match_id=self.state.id, side="away", team_api_id=self.state.away.team.api_id, manager_user_id=self.away_manager_id, is_bot=self.away_manager_id is None)
+        except Exception:
+            logger.exception("MATCH_SERVICE save failed match_id=%s", self.state.id)
 
     async def append_events(self, events: list[dict[str, Any]]) -> None:
         if not self.persist:
             return
         for ev in events:
-            await self.db.append_match_event(
-                match_id=self.state.id, seq=ev.get("seq"), minute=ev.get("minute", 0), extra_minute=ev.get("extra_minute", 0), phase=ev.get("phase"),
-                event_type=ev.get("event_type"), team_side=ev.get("team_side"), player_api_id=ev.get("player_api_id"),
-                payload=ev.get("payload") or {}, commentary=ev.get("commentary"), public_payload=ev.get("public_payload") or ev.get("payload") or {},
-            )
+            try:
+                await self.db.append_match_event(
+                    match_id=self.state.id, seq=ev.get("seq"), minute=ev.get("minute", 0), extra_minute=ev.get("extra_minute", 0), phase=ev.get("phase"),
+                    event_type=ev.get("event_type"), team_side=ev.get("team_side"), player_api_id=ev.get("player_api_id"),
+                    payload=ev.get("payload") or {}, commentary=ev.get("commentary"), public_payload=ev.get("public_payload") or ev.get("payload") or {},
+                )
+            except Exception:
+                logger.exception("MATCH_SERVICE append_event failed match_id=%s seq=%s", self.state.id, ev.get("seq"))
 
     async def start_and_simulate_until_break(self, tick_callback: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None) -> list[dict[str, Any]]:
         async with self.lock:
             out = self.engine.start() if self.state.status == "setup" else []
             await self.append_events(out)
             if tick_callback and out:
-                await tick_callback(out)
-            step = self.engine.simulate_until_break_or_end()
-            out.extend(step.events)
-            await self.append_events(step.events)
-            if tick_callback and step.events:
-                await tick_callback(step.events)
+                try:
+                    await tick_callback(out)
+                except Exception:
+                    logger.exception("MATCH_SERVICE tick_callback failed (start) match_id=%s", self.state.id)
+            try:
+                step = self.engine.simulate_until_break_or_end()
+                out.extend(step.events)
+                await self.append_events(step.events)
+                if tick_callback and step.events:
+                    try:
+                        await tick_callback(step.events)
+                    except Exception:
+                        logger.exception("MATCH_SERVICE tick_callback failed (step) match_id=%s", self.state.id)
+            except Exception:
+                logger.exception("MATCH_SERVICE simulate_until_break_or_end failed match_id=%s", self.state.id)
             await self.save()
             return out
 
     async def continue_after_break(self, tick_callback: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None) -> list[dict[str, Any]]:
         async with self.lock:
-            evs = self.engine.resume_after_break()
+            try:
+                evs = self.engine.resume_after_break()
+            except Exception:
+                logger.exception("MATCH_SERVICE resume_after_break failed match_id=%s", self.state.id)
+                evs = []
             await self.append_events(evs)
             if tick_callback and evs:
-                await tick_callback(evs)
-            step = self.engine.simulate_until_break_or_end()
-            evs.extend(step.events)
-            await self.append_events(step.events)
-            if tick_callback and step.events:
-                await tick_callback(step.events)
+                try:
+                    await tick_callback(evs)
+                except Exception:
+                    logger.exception("MATCH_SERVICE tick_callback failed (resume) match_id=%s", self.state.id)
+            try:
+                step = self.engine.simulate_until_break_or_end()
+                evs.extend(step.events)
+                await self.append_events(step.events)
+                if tick_callback and step.events:
+                    try:
+                        await tick_callback(step.events)
+                    except Exception:
+                        logger.exception("MATCH_SERVICE tick_callback failed (continue_step) match_id=%s", self.state.id)
+            except Exception:
+                logger.exception("MATCH_SERVICE continue simulate failed match_id=%s", self.state.id)
             await self.save()
             return evs
 

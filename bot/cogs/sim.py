@@ -1017,6 +1017,28 @@ class SimCog(commands.Cog):
                         # Safety: avoid tight loop if nothing produced unexpectedly
                         logger.warning("MATCH_FLOW no events produced and not finished/break match_id=%s; sleeping", session.state.id)
                         await asyncio.sleep(0.5)
+                    else:
+                        # Empty events but state advanced to break/finished - likely engine bug or send issue.
+                        logger.warning(
+                            "MATCH_FLOW empty events with advanced state match_id=%s status=%s phase=%s minute=%s pending=%s",
+                            session.state.id, session.state.status, session.state.phase, session.state.minute, session.state.pending_break,
+                        )
+                        try:
+                            await channel.send(_clamp(
+                                f"⚠️ No play-by-play events were produced for that interval (minute {session.state.minute}, phase {session.state.phase}). "
+                                "Attempting to recover simulation..."
+                            ))
+                        except Exception:
+                            pass
+                        # Recovery: if at a break with no events, force-resolve and try to continue
+                        if session.state.pending_break and session.engine.is_waiting_for_break_decisions():
+                            try:
+                                await session.auto_resolve_ai_sides_if_ready()
+                                session.state.home_break_decision_done = True
+                                session.state.away_break_decision_done = True
+                                await session.save()
+                            except Exception:
+                                logger.exception("MATCH_FLOW recovery force-resolve failed match_id=%s", session.state.id)
                 except Exception:
                     logger.exception("Match flow iteration failed; attempting recovery match_id=%s", session.state.id)
                     _log_state("recovery")
@@ -1024,9 +1046,13 @@ class SimCog(commands.Cog):
                         if session.state.status != "finished" and not session.state.pending_break:
                             step = session.engine.simulate_until_break_or_end()
                             if step.events:
-                                await session.append_events(step.events)
-                                await session.save()
+                                # Send first so play-by-play is not lost if persistence fails.
                                 await self._send_events_live(channel, step.events, delay=3.0, state=session.state)
+                                try:
+                                    await session.append_events(step.events)
+                                    await session.save()
+                                except Exception:
+                                    logger.exception("MATCH_FLOW recovery persist failed match_id=%s", session.state.id)
                         await asyncio.sleep(0.5)
                     except Exception:
                         logger.exception("Match flow recovery failed match_id=%s", session.state.id)

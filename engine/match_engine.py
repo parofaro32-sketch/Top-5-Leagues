@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import random
 from collections import deque
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from engine.ratings import adjust as rating_adjust, finalize_all, record_card as
 from engine.statistics import card as stat_card, corner as stat_corner, foul as stat_foul, goal as stat_goal, interception as stat_interception, key_pass as stat_key, offside as stat_offside, passes as stat_passes, save as stat_save, shot as stat_shot, tackle as stat_tackle
 from engine.stamina import apply_halftime_recovery, apply_minute_stamina
 from engine.tactics_engine import team_strength
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -151,7 +154,11 @@ class MatchEngine:
               "phase": self.state.phase, "event_type": et, "team_side": side, "player_api_id": pid,
               "payload": payload, "public_payload": payload}
         if commentary is None:
-            commentary = gen_commentary(self.state, ev, self.rng)
+            try:
+                commentary = gen_commentary(self.state, ev, self.rng)
+            except Exception:
+                logger.exception("ENGINE commentary generation failed et=%s match_id=%s", et, getattr(self.state, 'id', None))
+                commentary = payload.get("detail") or payload.get("summary") or ""
         text = str(commentary or "").strip()
         norm = self._norm_line(text)
         if norm and norm in {self._norm_line(x) for x in list(self._recent_lines)[-25:]}:
@@ -349,7 +356,14 @@ class MatchEngine:
             # First-half stoppage time
             if self.state.phase == "first_half_stoppage":
                 self.state.extra_minute += 1
-                produced.extend(self._minute())
+                try:
+                    produced.extend(self._minute())
+                except Exception:
+                    logger.exception("ENGINE _minute failed match_id=%s minute=%s extra=%s phase=%s", getattr(self.state, 'id', None), self.state.minute, self.state.extra_minute, self.state.phase)
+                    try:
+                        produced.append(self._emit(E.PASS_SEQUENCE, self.state.possession_side, payload={"detail": f"Play continues as both sides regroup at {self.state.scoreline()}."}))
+                    except Exception:
+                        logger.exception("ENGINE fallback emit failed match_id=%s minute=%s extra=%s", getattr(self.state, 'id', None), self.state.minute, self.state.extra_minute)
                 if self.state.extra_minute >= self.state.stoppage_time_1:
                     produced.append(self._emit(E.HALF_TIME, payload={"detail": f"Half-time. {self.state.scoreline()}"}))
                     self.state.pending_break = "halftime"; self.state.status = "halftime"; self.state.phase = "halftime"
@@ -361,7 +375,14 @@ class MatchEngine:
             # Second-half stoppage time
             if self.state.phase == "second_half_stoppage":
                 self.state.extra_minute += 1
-                produced.extend(self._minute())
+                try:
+                    produced.extend(self._minute())
+                except Exception:
+                    logger.exception("ENGINE _minute failed match_id=%s minute=%s extra=%s phase=%s", getattr(self.state, 'id', None), self.state.minute, self.state.extra_minute, self.state.phase)
+                    try:
+                        produced.append(self._emit(E.PASS_SEQUENCE, self.state.possession_side, payload={"detail": f"Play continues as both sides regroup at {self.state.scoreline()}."}))
+                    except Exception:
+                        logger.exception("ENGINE fallback emit failed match_id=%s minute=%s extra=%s", getattr(self.state, 'id', None), self.state.minute, self.state.extra_minute)
                 if self.state.extra_minute >= self.state.stoppage_time_2:
                     self.state.status = "finished"; self.state.phase = "finished"; finalize_all(self.state)
                     produced.append(self._emit(E.FULL_TIME, payload={"detail": f"Full-time! {self.state.scoreline()}"}))
@@ -377,7 +398,14 @@ class MatchEngine:
 
             # Simulate next regular minute
             self.state.minute += 1; self.state.extra_minute = 0
-            produced.extend(self._minute())
+            try:
+                produced.extend(self._minute())
+            except Exception:
+                logger.exception("ENGINE _minute failed match_id=%s minute=%s phase=%s", getattr(self.state, 'id', None), self.state.minute, self.state.phase)
+                try:
+                    produced.append(self._emit(E.PASS_SEQUENCE, self.state.possession_side, payload={"detail": f"Play continues as both sides battle for control at {self.state.scoreline()}."}))
+                except Exception:
+                    logger.exception("ENGINE fallback emit failed match_id=%s minute=%s", getattr(self.state, 'id', None), self.state.minute)
 
             # End of first half regulation -> stoppage then halftime break
             if self.state.phase == "first_half" and self.state.minute == 45:
@@ -659,7 +687,7 @@ class MatchEngine:
             evs.append(self._emit(E.BLOCK, deff, blocker.player_api_id if blocker else None, {"detail": detail}))
             if corner:
                 stat_corner(self.state, att)
-                evs.append(self._emit(E.CORNER, att, {"detail": f"The block deflects behind, and {an} will have a corner."}, commentary=""))
+                evs.append(self._emit(E.CORNER, att, payload={"detail": f"The block deflects behind, and {an} will have a corner."}, commentary=""))
             return evs
 
         on_target_p = max(0.24, min(0.76, 0.40 + xg * 0.58))
@@ -688,7 +716,7 @@ class MatchEngine:
             evs.extend(self._save_event(att, deff, finisher, gk, xg, narrative=detail))
             if corner and gk:
                 stat_corner(self.state, att)
-                evs.append(self._emit(E.CORNER, att, {"detail": f"The save forces a corner for {an}."}))
+                evs.append(self._emit(E.CORNER, att, payload={"detail": f"The save forces a corner for {an}."}))
         return evs
 
     def _gk_str(self, side):
