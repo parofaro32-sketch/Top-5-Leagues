@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.ui.views import BreakControlView, SimpleChoiceView, TeamSelect
+from bot.ui.modals import LineupSubmitModal, TacticsTextModal
+from bot.ui.views import BreakControlView, LeagueSelect, SimpleChoiceView, TeamSelect
+from services.lineup_service import LineupValidationError, format_squad_for_manager, parse_lineup_submission
 
 logger = logging.getLogger(__name__)
 
@@ -95,32 +99,7 @@ def _format_lineup(state, side: str) -> str:
     else:
         lines.append("**Bench:** none")
 
-    # Tactics summary
-    t = team.tactics or {}
-    atk = t.get("attacking", {})
-    dfn = t.get("defensive", {})
-    tparts = []
-    if atk.get("mentality"):
-        tparts.append(f"mentality: {atk.get('mentality')}")
-    if atk.get("build_up"):
-        tparts.append(f"build-up: {atk.get('build_up')}")
-    if atk.get("attacking_width"):
-        tparts.append(f"width: {atk.get('attacking_width')}")
-    if atk.get("attacking_transitions"):
-        tparts.append(f"transitions: {atk.get('attacking_transitions')}")
-    if atk.get("counterattacking"):
-        tparts.append("counter-attacking: on")
-    if dfn.get("pressing_intensity"):
-        tparts.append(f"press: {dfn.get('pressing_intensity')}")
-    if dfn.get("defensive_line"):
-        tparts.append(f"line: {dfn.get('defensive_line')}")
-    if dfn.get("compactness"):
-        tparts.append(f"compactness: {dfn.get('compactness')}")
-    if dfn.get("counterpressing"):
-        tparts.append("counter-press: on")
-    if tparts:
-        lines.append("**Tactical Setup:** " + ", ".join(tparts))
-
+    # Tactics are private - never expose in public lineup messages.
     return _clamp("\n".join(lines))
 
 
@@ -570,6 +549,7 @@ def _format_report(report: dict[str, Any]) -> list[str]:
         f"xG: {h.get('xg',0)} - {a.get('xg',0)}",
         f"Corners: {h.get('corners',0)} - {a.get('corners',0)}",
         f"Fouls: {h.get('fouls',0)} - {a.get('fouls',0)}",
+        f"Saves: {h.get('saves',0)} - {a.get('saves',0)}",
         f"Cards (Y/R): {h.get('yellow_cards',0)}/{h.get('red_cards',0)} - {a.get('yellow_cards',0)}/{a.get('red_cards',0)}",
         f"Pass accuracy: {h.get('pass_accuracy',0)}% - {a.get('pass_accuracy',0)}%",
     ]
@@ -585,26 +565,23 @@ def _format_report(report: dict[str, Any]) -> list[str]:
     ))
 
     extra_lines = []
-    ta = report.get('tactical_analysis')
-    if ta:
-        extra_lines.append("**Tactical Analysis**")
-        extra_lines.append(str(ta))
     disc = report.get('discipline') or []
     if disc:
-        extra_lines.append("")
         extra_lines.append("**Discipline**")
         for x in disc[:15]:
             extra_lines.append(f"- {x.get('minute')}' {x.get('player')} ({x.get('team')}) — {str(x.get('type','')).replace('_',' ')}")
     inj = report.get('injuries') or []
     if inj:
-        extra_lines.append("")
+        if extra_lines:
+            extra_lines.append("")
         extra_lines.append("**Injuries**")
         for x in inj[:12]:
             status = 'continued' if x.get('continued') else 'substituted off' if x.get('substituted') else 'forced off'
             extra_lines.append(f"- {x.get('minute')}' {x.get('player')} ({x.get('team')}) — {x.get('severity')} ({status})")
     subs = report.get('substitutions') or []
     if subs:
-        extra_lines.append("")
+        if extra_lines:
+            extra_lines.append("")
         extra_lines.append("**Substitutions**")
         for x in subs[:20]:
             reason = f" ({x.get('reason')})" if x.get('reason') else ''
@@ -615,9 +592,478 @@ def _format_report(report: dict[str, Any]) -> list[str]:
     return [m for m in msgs if m.strip()]
 
 
+def _competition_and_type(home: dict[str, Any], away: dict[str, Any]) -> tuple[str, str]:
+    # /sim creates an ad-hoc match with no scheduled fixture; label as Friendly.
+    # If fixture/competition data is wired in later, this should use it.
+    home_league = (home.get("league_name") or "").strip()
+    away_league = (away.get("league_name") or "").strip()
+    if home_league and away_league and home_league == away_league:
+        return "Friendly", "Friendly"
+    if home_league or away_league:
+        return "Friendly", "Friendly"
+    return "Friendly", "Friendly"
+
+
+def build_match_setup_embed(session, *, competition: str | None = None, match_type: str | None = None, stadium: str | None = None) -> discord.Embed:
+    st = session.state
+    sub = st.submission or {}
+    comp = competition or sub.get("competition") or "Friendly"
+    mtype = match_type or sub.get("match_type") or ("Friendly" if comp == "Friendly" else "Competitive")
+    stad = stadium or sub.get("stadium") or st.home.team.logo or f"{st.home.team.name} Stadium"
+    # if stadium accidentally got logo, fix
+    if isinstance(stad, str) and stad.startswith("http"):
+        stad = sub.get("stadium") or f"{st.home.team.name} Stadium"
+    embed = discord.Embed(
+        title=f"{st.home.team.name} vs {st.away.team.name}",
+        description="Match setup is ready. Submit your lineup and tactics before kickoff.",
+        color=discord.Color.blue(),
+    )
+    if st.home.team.logo:
+        embed.set_thumbnail(url=st.home.team.logo)
+    embed.add_field(name="Competition", value=str(comp), inline=True)
+    embed.add_field(name="Match Type", value=str(mtype), inline=True)
+    embed.add_field(name="Stadium", value=str(stad), inline=True)
+    home_mgr = f"<@{session.home_manager_id}>" if session.home_manager_id else "Bot (AI)"
+    away_mgr = f"<@{session.away_manager_id}>" if session.away_manager_id else "Bot (AI)"
+    embed.add_field(name="Home Manager", value=home_mgr, inline=True)
+    embed.add_field(name="Away Manager", value=away_mgr, inline=True)
+    embed.add_field(name="Mode", value=st.mode.replace("_", " ").title(), inline=True)
+    # Submission status
+    def _status(side: str, mgr_id):
+        if mgr_id is None:
+            return "✅ Bot ready"
+        lu = "✅" if sub.get(f"{side}_lineup_submitted") else "⏳"
+        tac = "✅" if sub.get(f"{side}_tactics_submitted") else "⏳"
+        return f"Lineup {lu} | Tactics {tac}"
+    embed.add_field(name=f"{st.home.team.name} Submissions", value=_status("home", session.home_manager_id), inline=False)
+    embed.add_field(name=f"{st.away.team.name} Submissions", value=_status("away", session.away_manager_id), inline=False)
+    deadline_at = sub.get("deadline_at")
+    if deadline_at:
+        try:
+            ts = int(datetime.fromisoformat(str(deadline_at).replace("Z", "+00:00")).timestamp())
+            embed.add_field(name="Submission Deadline", value=f"<t:{ts}:R> (<t:{ts}:T>)", inline=False)
+        except Exception:
+            embed.add_field(name="Submission Deadline", value=str(deadline_at), inline=False)
+    embed.set_footer(text=f"Match ID: {st.id} • Tactics are private")
+    return embed
+
+
+class ManagerSetupView(discord.ui.View):
+    def __init__(self, cog: "SimCog", session, *, timeout: float | None = None):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.session = session
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return True
+
+    def _resolve_side(self, interaction: discord.Interaction) -> str | None:
+        uid = interaction.user.id if interaction.user else None
+        if uid is not None and uid == self.session.home_manager_id:
+            return "home"
+        if uid is not None and uid == self.session.away_manager_id:
+            return "away"
+        return None
+
+    async def _refresh_message(self, interaction: discord.Interaction | None = None):
+        embed = build_match_setup_embed(self.session)
+        try:
+            if interaction and not interaction.response.is_done():
+                await interaction.response.edit_message(embed=embed, view=self)
+            elif self.message:
+                await self.message.edit(embed=embed, view=self)
+        except Exception:
+            logger.exception("Failed to refresh setup message")
+
+    @discord.ui.button(label="View Squad", style=discord.ButtonStyle.secondary)
+    async def view_squad(self, interaction: discord.Interaction, button: discord.ui.Button):
+        side = self._resolve_side(interaction)
+        if not side:
+            await interaction.response.send_message("Only assigned managers can view their squad privately here.", ephemeral=True)
+            return
+        team = self.session.state.team(side)
+        squad = await self.cog.bot.football_data.get_squad(team.team.api_id)
+        text = format_squad_for_manager(squad)
+        header = f"**{team.team.name} — Available Squad**\nFormation: `{team.lineup.formation}` (current)\n\n"
+        await interaction.response.send_message(_clamp(header + "```\n" + text + "\n```", 1900), ephemeral=True)
+
+    @discord.ui.button(label="Submit Lineup", style=discord.ButtonStyle.primary)
+    async def submit_lineup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        side = self._resolve_side(interaction)
+        if not side:
+            await interaction.response.send_message("Only assigned managers can submit a lineup for their side.", ephemeral=True)
+            return
+        if self.session.state.status not in {"setup"}:
+            await interaction.response.send_message("Lineup submissions are closed for this match.", ephemeral=True)
+            return
+
+        async def on_submit(inter: discord.Interaction, payload: dict[str, Any]):
+            await self.cog._handle_lineup_submission(inter, self.session, side, payload, self)
+
+        await interaction.response.send_modal(LineupSubmitModal(on_submit))
+
+    @discord.ui.button(label="Submit Tactics", style=discord.ButtonStyle.success)
+    async def submit_tactics(self, interaction: discord.Interaction, button: discord.ui.Button):
+        side = self._resolve_side(interaction)
+        if not side:
+            await interaction.response.send_message("Only assigned managers can submit tactics for their side.", ephemeral=True)
+            return
+        if self.session.state.status not in {"setup"}:
+            await interaction.response.send_message("Tactics submissions are closed for this match.", ephemeral=True)
+            return
+
+        async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
+            await self.cog._handle_tactics_submission(inter, self.session, side, updates, summary, self)
+
+        await interaction.response.send_modal(TacticsTextModal(on_submit))
+
+    @discord.ui.button(label="Cancel Match (Admin)", style=discord.ButtonStyle.danger)
+    async def cancel_match(self, interaction: discord.Interaction, button: discord.ui.Button):
+        perms = getattr(interaction.user, "guild_permissions", None)
+        is_admin = bool(perms and (perms.administrator or perms.manage_guild))
+        is_manager = interaction.user.id in {self.session.home_manager_id, self.session.away_manager_id}
+        if not (is_admin or is_manager):
+            await interaction.response.send_message("Only a manager or server admin can cancel this match.", ephemeral=True)
+            return
+        self.session.state.status = "cancelled"
+        self.session.state.phase = "cancelled"
+        await self.session.save()
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.response.edit_message(content="Match cancelled.", embed=build_match_setup_embed(self.session), view=self)
+        except Exception:
+            try:
+                await interaction.response.send_message("Match cancelled.", ephemeral=True)
+            except Exception:
+                pass
+
+
 class SimCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._recovery_done = False
+        self._deadline_tasks: dict[str, asyncio.Task] = {}
+
+    def _side_manager_id(self, session, side: str) -> int | None:
+        return session.home_manager_id if side == "home" else session.away_manager_id
+
+    async def _handle_lineup_submission(self, interaction: discord.Interaction, session, side: str, payload: dict[str, Any], view: ManagerSetupView | None = None):
+        if self._side_manager_id(session, side) != interaction.user.id:
+            await interaction.response.send_message("Only the assigned manager can submit this lineup.", ephemeral=True)
+            return
+        if session.state.status != "setup":
+            await interaction.response.send_message("Lineup submissions are closed for this match.", ephemeral=True)
+            return
+        sub = session.state.submission or {}
+        if sub.get(f"{side}_lineup_submitted") and sub.get(f"{side}_tactics_submitted"):
+            await interaction.response.send_message("Your lineup and tactics are already submitted. Use setup controls before kickoff only.", ephemeral=True)
+            return
+        team = session.state.team(side)
+        squad = await self.bot.football_data.get_squad(team.team.api_id)
+        try:
+            lu = parse_lineup_submission(payload.get("formation", ""), payload.get("starters_raw", ""), payload.get("bench_raw", ""), squad, team.team.api_id, team.team.name)
+        except LineupValidationError as e:
+            await interaction.response.send_message(f"Lineup invalid: {e}", ephemeral=True)
+            return
+        except Exception as e:
+            logger.exception("Lineup submission parse failed")
+            await interaction.response.send_message("Could not validate lineup. Please check names/numbers and try again.", ephemeral=True)
+            return
+
+        # Check availability (injured/unavailable)
+        squad_by_id = {int(p.get("api_id") or 0): p for p in squad}
+        unavailable = []
+        for e in list(lu.starters) + list(lu.bench):
+            p = squad_by_id.get(int(e.player_api_id))
+            if not p:
+                continue
+            status = str(p.get("status") or "active").lower()
+            if p.get("injured") or status in {"injured", "unavailable", "suspended"}:
+                unavailable.append(f"{e.name} ({status if status != 'active' else 'injured'})")
+        if unavailable:
+            await interaction.response.send_message(
+                "Lineup invalid: unavailable players selected: " + ", ".join(unavailable[:10]),
+                ephemeral=True,
+            )
+            return
+
+        # Apply lineup to state (replace placeholder). Keep tactics.
+        team.lineup = lu
+        # Rebuild player states for this side to match submitted lineup
+        session.engine._init_ps(side, lu)
+        # Ensure players_index has all squad players
+        from engine.models import Player, PlayerAttributes
+        for p in squad:
+            key = session.state.player_key(side, int(p.get("api_id") or 0))
+            if key not in session.state.players_index:
+                attrs = PlayerAttributes.from_dict(p.get("attributes") or {})
+                session.state.players_index[key] = Player(
+                    api_id=int(p.get("api_id") or 0), name=p.get("name") or "Unknown", team_api_id=team.team.api_id,
+                    position=(p.get("position") or "MID").upper(), detailed_position=p.get("detailed_position"), number=p.get("number"),
+                    nationality=p.get("nationality"), age=p.get("age"), photo=p.get("photo"), injured=bool(p.get("injured", False)),
+                    attributes=attrs,
+                )
+        sub[f"{side}_lineup_submitted"] = True
+        sub[f"{side}_lineup_submitted_at"] = datetime.now(timezone.utc).isoformat()
+        await session.save()
+
+        await interaction.response.send_message(
+            f"Lineup submitted privately for **{team.team.name}** ({lu.formation}).", ephemeral=True
+        )
+        await self._after_submission_update(session, side, view)
+
+    async def _handle_tactics_submission(self, interaction: discord.Interaction, session, side: str, updates: dict[str, Any], summary: str | None, view: ManagerSetupView | None = None):
+        if self._side_manager_id(session, side) != interaction.user.id:
+            await interaction.response.send_message("Only the assigned manager can submit tactics for this side.", ephemeral=True)
+            return
+        if session.state.status != "setup":
+            # Allow during breaks via BreakControlView; this is setup handler
+            await interaction.response.send_message("Tactics submissions are closed for this match setup.", ephemeral=True)
+            return
+        sub = session.state.submission or {}
+        team = session.state.team(side)
+        # Apply privately
+        from services.tactics_service import normalize_tactics as _norm
+        team.tactics = _norm({**(team.tactics or {}), **(updates or {})})
+        sub[f"{side}_tactics_submitted"] = True
+        sub[f"{side}_tactics_submitted_at"] = datetime.now(timezone.utc).isoformat()
+        await session.save()
+
+        await interaction.response.send_message(
+            f"Tactics submitted privately for **{team.team.name}**. Confirmation: received.", ephemeral=True
+        )
+        await self._after_submission_update(session, side, view)
+
+    async def _after_submission_update(self, session, side: str, view: ManagerSetupView | None = None):
+        sub = session.state.submission or {}
+        # If this side is fully submitted and the other isn't, extend deadline to 10 min from now
+        if session.side_submission_complete(side):
+            sub[f"{side}_submitted_at"] = datetime.now(timezone.utc).isoformat()
+            other = "away" if side == "home" else "home"
+            other_mgr = self._side_manager_id(session, other)
+            if other_mgr is not None and not session.side_submission_complete(other):
+                now = datetime.now(timezone.utc)
+                ext = int(sub.get("extension_seconds") or 600)
+                new_deadline = now + timedelta(seconds=ext)
+                # Always set to 10 min from now per spec
+                sub["deadline_at"] = new_deadline.isoformat()
+                try:
+                    ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                    if ch:
+                        ts = int(new_deadline.timestamp())
+                        await ch.send(_clamp(f"⏳ <@{other_mgr}> your opponent has submitted their lineup and tactics. You have 10 minutes to submit yours (deadline <t:{ts}:R>).", 1900))
+                except Exception:
+                    logger.exception("Failed to send extension notice")
+        await session.save()
+        # Refresh setup message
+        try:
+            if view and view.message:
+                await view.message.edit(embed=build_match_setup_embed(session), view=view)
+        except Exception:
+            logger.exception("Failed to refresh setup embed")
+        # Start if ready
+        if session.is_setup_complete() and session.state.status == "setup":
+            await self._start_manager_match(session, view)
+
+    async def _start_manager_match(self, session, view: ManagerSetupView | None = None):
+        # prevent duplicate starts
+        sub = session.state.submission or {}
+        if sub.get("match_started"):
+            return
+        if not session.is_setup_complete():
+            return
+        sub["match_started"] = True
+        await session.save()
+        if view:
+            for child in view.children:
+                child.disabled = True
+            try:
+                if view.message:
+                    await view.message.edit(embed=build_match_setup_embed(session), view=view)
+            except Exception:
+                pass
+        try:
+            ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+            if ch:
+                await ch.send(_clamp(f"✅ Both managers are ready. Starting match: **{session.state.home.team.name}** vs **{session.state.away.team.name}**", 1900))
+        except Exception:
+            pass
+        # Launch the match flow as a task. We need a fake interaction-like channel context; _run_match_flow takes (interaction, session) but only uses interaction.channel
+        # Create a small shim
+        class _Shim:
+            channel = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+        shim = _Shim()
+        if shim.channel is None:
+            # try fetching
+            try:
+                shim.channel = await self.bot.fetch_channel(session.state.channel_id) if session.state.channel_id else None
+            except Exception:
+                shim.channel = None
+        if shim.channel is not None:
+            asyncio.create_task(self._run_match_flow(shim, session))
+
+    def _start_deadline_watcher(self, session, view: ManagerSetupView | None = None):
+        mid = getattr(session.state, "id", None)
+        if not mid:
+            return None
+        existing = self._deadline_tasks.get(mid)
+        if existing and not existing.done():
+            return existing
+        task = asyncio.create_task(self._watch_submission_deadline(session, view))
+        self._deadline_tasks[mid] = task
+        return task
+
+    async def _watch_submission_deadline(self, session, view: ManagerSetupView | None = None):
+        """Watch manager submission deadline. Never auto-picks lineups for humans."""
+        try:
+            while session.state.status == "setup":
+                sub = session.state.submission or {}
+                if sub.get("match_started"):
+                    return
+                if session.is_setup_complete():
+                    await self._start_manager_match(session, view)
+                    return
+                deadline_at = sub.get("deadline_at")
+                if not deadline_at:
+                    await asyncio.sleep(5)
+                    continue
+                try:
+                    dl = datetime.fromisoformat(str(deadline_at).replace("Z", "+00:00"))
+                except Exception:
+                    await asyncio.sleep(5)
+                    continue
+                now = datetime.now(timezone.utc)
+                remaining = (dl - now).total_seconds()
+                if remaining > 0:
+                    await asyncio.sleep(min(remaining, 15))
+                    continue
+                # Deadline reached
+                if sub.get("match_started") or session.state.status != "setup":
+                    return
+                missing = session.missing_submissions()
+                if not missing:
+                    await self._start_manager_match(session, view)
+                    return
+                policy = str(sub.get("timeout_policy") or "cancel").lower()
+                ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                if ch is None and session.state.channel_id:
+                    try:
+                        ch = await self.bot.fetch_channel(session.state.channel_id)
+                    except Exception:
+                        ch = None
+                if policy == "forfeit" and len(missing) == 1:
+                    # Forfeit: cancel with explicit result note; do not auto-pick lineup
+                    forfeiter = missing[0]
+                    winner = "away" if forfeiter == "home" else "home"
+                    session.state.status = "cancelled"
+                    session.state.phase = "forfeited"
+                    sub["forfeit_side"] = forfeiter
+                    sub["winner_side"] = winner
+                    await session.save()
+                    if view:
+                        for child in view.children:
+                            child.disabled = True
+                        try:
+                            if view.message:
+                                await view.message.edit(embed=build_match_setup_embed(session), view=view)
+                        except Exception:
+                            pass
+                    if ch:
+                        mgr = self._side_manager_id(session, forfeiter)
+                        who = f"<@{mgr}>" if mgr else forfeiter.title()
+                        await ch.send(_clamp(f"⏱️ Submission deadline reached. {who} did not submit required lineup/tactics. Match forfeited by timeout policy. No lineup was auto-selected.", 1900))
+                    return
+                # Default: cancel / admin intervention. Never auto-pick.
+                session.state.status = "cancelled"
+                session.state.phase = "cancelled_timeout"
+                sub["timeout_missing_sides"] = missing
+                await session.save()
+                if view:
+                    for child in view.children:
+                        child.disabled = True
+                    try:
+                        if view.message:
+                            await view.message.edit(embed=build_match_setup_embed(session), view=view)
+                    except Exception:
+                        pass
+                if ch:
+                    missing_mentions = []
+                    for s in missing:
+                        mgr = self._side_manager_id(session, s)
+                        missing_mentions.append(f"<@{mgr}>" if mgr else s.title())
+                    await ch.send(_clamp(
+                        "⏱️ Submission deadline reached. Missing submissions: " + ", ".join(missing_mentions) +
+                        ". Match cancelled by timeout policy. No lineup was auto-selected. An administrator can create a new match or reset as needed.",
+                        1900
+                    ))
+                return
+        except Exception:
+            logger.exception("Submission deadline watcher failed match_id=%s", getattr(session.state, "id", None))
+        finally:
+            mid = getattr(session.state, "id", None)
+            if mid:
+                self._deadline_tasks.pop(mid, None)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._recovery_done:
+            return
+        self._recovery_done = True
+        asyncio.create_task(self._recover_pending_setups())
+
+    async def _recover_pending_setups(self):
+        try:
+            rows = await self.bot.db.list_recoverable_matches()
+        except Exception:
+            logger.exception("Failed to list recoverable matches")
+            return
+        for row in rows:
+            try:
+                state_raw = row["state_json"] if isinstance(row, dict) else row["state_json"]
+                state = self.bot.db.loads(state_raw)
+                if not isinstance(state, dict):
+                    continue
+                if state.get("status") != "setup":
+                    continue
+                if state.get("mode") != "manager_vs_manager":
+                    continue
+                match_id = state.get("id") or (row["id"] if "id" in row.keys() else None)
+                if not match_id:
+                    continue
+                session = await self.bot.match_service.load_from_db(str(match_id))
+                if not session:
+                    continue
+                if session.state.status != "setup":
+                    continue
+                sub = session.state.submission or {}
+                if sub.get("match_started"):
+                    continue
+                # Rebuild view
+                view = ManagerSetupView(self, session, timeout=None)
+                ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                if ch is None and session.state.channel_id:
+                    try:
+                        ch = await self.bot.fetch_channel(session.state.channel_id)
+                    except Exception:
+                        ch = None
+                if ch and session.state.message_id:
+                    try:
+                        msg = await ch.fetch_message(int(session.state.message_id))
+                        view.message = msg
+                        await msg.edit(embed=build_match_setup_embed(session), view=view)
+                    except Exception:
+                        pass
+                if session.is_setup_complete():
+                    asyncio.create_task(self._start_manager_match(session, view))
+                    logger.info("Recovered ready manager setup match_id=%s; starting", session.state.id)
+                    continue
+                # Re-attach deadline watcher
+                self._start_deadline_watcher(session, view)
+                logger.info("Recovered pending manager setup match_id=%s", session.state.id)
+            except Exception:
+                logger.exception("Failed to recover pending setup row")
 
     async def _send_events_live(self, channel: discord.abc.Messageable, events: list[dict[str, Any]], delay: float = 3.0, state=None):
         import re as _re
@@ -706,8 +1152,7 @@ class SimCog(commands.Cog):
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
                     side = ev.get("team_side")
                     team_name = state.team(side).team.name if side else "Team"
-                    summary = payload.get("summary") or payload.get("detail") or "tactical adjustment"
-                    msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** {summary}"
+                    msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** tactical adjustments made."
                     await channel.send(_clamp(msg, 1900))
                     sent += 1
                 else:
@@ -884,6 +1329,10 @@ class SimCog(commands.Cog):
     async def _run_match_flow(self, interaction: discord.Interaction, session):
         channel = interaction.channel
         if channel is None:
+            return
+
+        if not session.is_setup_complete() and session.state.status == "setup":
+            logger.info("MATCH_FLOW blocked: setup incomplete match_id=%s", session.state.id)
             return
 
         st = session.state
@@ -1081,6 +1530,12 @@ class SimCog(commands.Cog):
                     await channel.send(_clamp(f"Full-time: {session.state.scoreline()}"))
                 except Exception:
                     pass
+            try:
+                persisted = await session.persist_player_stats()
+                if persisted:
+                    await channel.send(_clamp("📊 Player match and career statistics updated.", 1900))
+            except Exception:
+                logger.exception("Failed to persist player stats match_id=%s", session.state.id)
         except Exception:
             logger.exception("MATCH_FLOW fatal unhandled error match_id=%s", getattr(getattr(session, 'state', None), 'id', None))
             try:
@@ -1136,43 +1591,89 @@ class SimCog(commands.Cog):
         home = await resolve_team(home_team, "home")
         away = await resolve_team(away_team, "away")
 
-        # If teams not provided or not found, fall back to interactive selection for the given/first league
+        # If teams not provided or not found, fall back to interactive selection
         if home is None or away is None or (home and away and home.get("api_id") == away.get("api_id")):
             leagues = fd.list_leagues()
-            league_key = None
             from data.bundled import resolve_league_key
-            if league:
-                league_key = resolve_league_key(league)
-            if not league_key:
-                league_key = leagues[0]["key"] if leagues else "premier_league"
-            teams = await fd.list_teams(league=league_key, limit=25)
-            if len(teams) < 2:
-                await interaction.followup.send("Could not load enough teams for selection.", ephemeral=True)
+            league_key = resolve_league_key(league) if league else None
+
+            selected: dict[str, Any] = {"home": home, "away": away, "league_key": league_key}
+
+            async def start_team_selection(inter: discord.Interaction, lk: str):
+                teams = await fd.list_teams(league=lk, limit=25)
+                if len(teams) < 2:
+                    await inter.response.send_message("Could not load enough teams for that league.", ephemeral=True)
+                    return
+                selected["league_key"] = lk
+                league_name = next((l['name'] for l in fd.list_leagues() if l['key'] == lk), lk)
+
+                async def on_away_pick(i2: discord.Interaction, team_id: int):
+                    t = await fd.get_team(team_id)
+                    if selected.get("home") and int(t.get("api_id", 0)) == int(selected["home"].get("api_id", 0)):
+                        await i2.response.send_message("Away team must be different from home team.", ephemeral=True)
+                        return
+                    selected["away"] = t
+                    await i2.response.edit_message(content=f"Match setup: **{selected['home'].get('name')}** vs **{t.get('name')}**\nStarting simulation...", view=None)
+                    await self._launch_with_selection(interaction, mode.value, selected["home"], selected["away"], home_manager, away_manager)
+
+                async def on_home_pick(i2: discord.Interaction, team_id: int):
+                    t = await fd.get_team(team_id)
+                    selected["home"] = t
+                    away_opts = [x for x in teams if int(x["api_id"]) != team_id]
+                    view2_local = SimpleChoiceView(interaction.user.id)
+                    view2_local.add_item(TeamSelect(away_opts, "Select AWAY team", on_away_pick))
+                    await i2.response.edit_message(content=f"League: **{league_name}**\nHome team: **{t.get('name')}**\nSelect away team.", view=view2_local)
+
+                view_teams = SimpleChoiceView(interaction.user.id)
+                view_teams.add_item(TeamSelect(teams, "Select HOME team", on_home_pick))
+                msg = f"**Match Setup** — {league_name}\nSelect the home team, then away team."
+                if inter.response.is_done():
+                    await inter.edit_original_response(content=msg, view=view_teams)
+                else:
+                    await inter.response.edit_message(content=msg, view=view_teams)
+
+            if league_key:
+                # go straight to team selection
+                class _DummyInter:
+                    response = interaction.response
+                    async def edit_original_response(self, **kw):
+                        await interaction.edit_original_response(**kw)
+                # Use a simple path: send message then edit via followup flow
+                teams = await fd.list_teams(league=league_key, limit=25)
+                if len(teams) < 2:
+                    await interaction.followup.send("Could not load enough teams for selection.", ephemeral=True)
+                    return
+                league_name = next((l['name'] for l in fd.list_leagues() if l['key'] == league_key), league_key)
+
+                async def on_away_pick_direct(i2: discord.Interaction, team_id: int):
+                    t = await fd.get_team(team_id)
+                    if selected.get("home") and int(t.get("api_id", 0)) == int(selected["home"].get("api_id", 0)):
+                        await i2.response.send_message("Away team must be different from home team.", ephemeral=True)
+                        return
+                    selected["away"] = t
+                    await i2.response.edit_message(content=f"Match setup: **{selected['home'].get('name')}** vs **{t.get('name')}**\nStarting simulation...", view=None)
+                    await self._launch_with_selection(interaction, mode.value, selected["home"], selected["away"], home_manager, away_manager)
+
+                async def on_home_pick_direct(i2: discord.Interaction, team_id: int):
+                    t = await fd.get_team(team_id)
+                    selected["home"] = t
+                    away_opts = [x for x in teams if int(x["api_id"]) != team_id]
+                    view2_local = SimpleChoiceView(interaction.user.id)
+                    view2_local.add_item(TeamSelect(away_opts, "Select AWAY team", on_away_pick_direct))
+                    await i2.response.edit_message(content=f"League: **{league_name}**\nHome team: **{t.get('name')}**\nSelect away team.", view=view2_local)
+
+                view = SimpleChoiceView(interaction.user.id)
+                view.add_item(TeamSelect(teams, "Select HOME team", on_home_pick_direct))
+                await interaction.followup.send(f"**Match Setup** — {league_name}\nSelect the home team, then away team.", view=view, ephemeral=True)
                 return
 
-            selected: dict[str, Any] = {"home": home, "away": away}
-
-            async def on_away_pick(inter: discord.Interaction, team_id: int):
-                t = await fd.get_team(team_id)
-                if selected.get("home") and int(t.get("api_id", 0)) == int(selected["home"].get("api_id", 0)):
-                    await inter.response.send_message("Away team must be different from home team.", ephemeral=True)
-                    return
-                selected["away"] = t
-                await inter.response.edit_message(content=f"Match setup: **{selected['home'].get('name')}** vs **{t.get('name')}**\nStarting simulation...", view=None)
-                await self._launch_with_selection(interaction, mode.value, selected["home"], selected["away"], home_manager, away_manager)
-
-            async def on_home_pick_chain(inter: discord.Interaction, team_id: int):
-                t = await fd.get_team(team_id)
-                selected["home"] = t
-                away_opts = [x for x in teams if int(x["api_id"]) != team_id]
-                view2_local = SimpleChoiceView(interaction.user.id)
-                view2_local.add_item(TeamSelect(away_opts, "Select AWAY team", on_away_pick))
-                await inter.response.edit_message(content=f"Home team: **{t.get('name')}**\nSelect away team.", view=view2_local)
+            # no league specified -> show all 5 leagues
+            async def on_league_pick(i2: discord.Interaction, lk: str):
+                await start_team_selection(i2, lk)
 
             view = SimpleChoiceView(interaction.user.id)
-            view.add_item(TeamSelect(teams, "Select HOME team", on_home_pick_chain))
-            league_name = next((l['name'] for l in fd.list_leagues() if l['key'] == league_key), league_key)
-            await interaction.followup.send(f"**Match Setup** — {league_name}\nSelect the home team, then away team.", view=view, ephemeral=True)
+            view.add_item(LeagueSelect(leagues, on_league_pick))
+            await interaction.followup.send("**Match Setup**\nSelect a league, then pick home and away teams.", view=view, ephemeral=True)
             return
 
         await self._launch_with_selection(interaction, mode.value, home, away, home_manager, away_manager)
@@ -1227,15 +1728,79 @@ class SimCog(commands.Cog):
             await interaction.followup.send(f"Failed to create match: {e}", ephemeral=True)
             return
 
-        msg = f"Match created: **{home.get('name')}** vs **{away.get('name')}**\nMatch ID: `{session.state.id}`\nMode: {mode.replace('_',' ').title()}"
+        # Determine competition / match type / stadium
+        competition, match_type = _competition_and_type(home, away)
+        stadium = home.get("venue_name") or home.get("venue") or f"{home.get('name','Home')} Stadium"
+        session.state.submission["competition"] = competition
+        session.state.submission["match_type"] = match_type
+        session.state.submission["stadium"] = stadium
+        await session.save()
+
+        setup_embed = build_match_setup_embed(session, competition=competition, match_type=match_type, stadium=stadium)
+
         if mode == "manager_vs_manager":
-            msg += f"\nHome manager: <@{hm_id}>\nAway manager: <@{am_id}>"
+            # 20-minute initial deadline for both managers
+            now = datetime.now(timezone.utc)
+            deadline = now + timedelta(seconds=int(session.state.submission.get("initial_deadline_seconds") or 1200))
+            session.state.submission["deadline_at"] = deadline.isoformat()
+            session.state.submission["match_started"] = False
+            await session.save()
+
+            view = ManagerSetupView(self, session, timeout=None)
+            try:
+                setup_msg = await channel.send(embed=build_match_setup_embed(session), view=view)
+                view.message = setup_msg
+                session.state.message_id = setup_msg.id
+                await session.save()
+            except Exception:
+                logger.exception("Failed to send manager setup embed")
+                try:
+                    await interaction.followup.send("Failed to post match setup embed in channel.", ephemeral=True)
+                except Exception:
+                    pass
+                return
+
+            # Notify managers (private DM best-effort + channel mention)
+            deadline_ts = int(deadline.timestamp())
+            notice = (
+                f"**Manager vs Manager — Submissions Open**\n"
+                f"{home.get('name')} vs {away.get('name')}\n"
+                f"Both managers have 20 minutes to submit their starting lineup and tactics.\n"
+                f"Deadline: <t:{deadline_ts}:R> (<t:{deadline_ts}:T>)\n"
+                f"Please select your starting XI, choose your bench and submit your tactics before the deadline."
+            )
+            for uid in (hm_id, am_id):
+                try:
+                    user = self.bot.get_user(uid) or await self.bot.fetch_user(uid)
+                    await user.send(notice + f"\nMatch ID: `{session.state.id}`")
+                except Exception:
+                    pass
+            try:
+                await channel.send(_clamp(f"<@{hm_id}> <@{am_id}> " + notice, 1900))
+            except Exception:
+                pass
+
+            try:
+                await interaction.followup.send(_clamp(f"Match setup created: `{session.state.id}`. Waiting for manager submissions."), ephemeral=True)
+            except Exception:
+                pass
+
+            self._start_deadline_watcher(session, view)
+            return
+
+        # Bot vs Bot: show setup embed then start
         try:
-            await interaction.followup.send(_clamp(msg), ephemeral=True)
+            msg = await channel.send(embed=setup_embed)
+            session.state.message_id = msg.id
+            await session.save()
+        except Exception:
+            logger.exception("Failed to send bot vs bot setup embed")
+
+        try:
+            await interaction.followup.send(_clamp(f"Match created: **{home.get('name')}** vs **{away.get('name')}**\nMatch ID: `{session.state.id}`"), ephemeral=True)
         except Exception:
             pass
 
-        # Run full flow in background task
         asyncio.create_task(self._run_match_flow(interaction, session))
 
 

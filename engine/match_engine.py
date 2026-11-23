@@ -30,9 +30,28 @@ class MatchEngine:
         self.state = state
         self.rng = random.Random(state.rng_seed or 1)
         self._recent_lines: deque[str] = deque(maxlen=40)
+        self._recent_categories: deque[str] = deque(maxlen=16)
         self._momentum: dict[str, float] = {"home": 50.0, "away": 50.0}
         self._pressure_chain: int = 0
         self._last_attack_side: str | None = None
+
+    def _push_category(self, cat: str) -> None:
+        self._recent_categories.append(cat)
+
+    def _category_streak(self, cat: str) -> int:
+        c = 0
+        for x in reversed(self._recent_categories):
+            if x == cat:
+                c += 1
+            else:
+                break
+        return c
+
+    def _category_count_recent(self, cat: str, n: int = 8) -> int:
+        return sum(1 for x in list(self._recent_categories)[-n:] if x == cat)
+
+    def _should_suppress(self, cat: str, max_streak: int = 2, max_recent: int = 4) -> bool:
+        return self._category_streak(cat) >= max_streak or self._category_count_recent(cat, 8) >= max_recent
 
     @classmethod
     def initialize(cls, *, match_id: str, guild_id: int | None, channel_id: int | None, mode: str,
@@ -148,11 +167,12 @@ class MatchEngine:
         for s in ("home", "away"):
             self._momentum[s] += (50.0 - self._momentum[s]) * 0.01
 
-    def _emit(self, et: str, side: Side | None = None, pid: int | None = None, payload: dict[str, Any] | None = None, commentary: str | None = None) -> dict[str, Any]:
+    def _emit(self, et: str, side: Side | None = None, pid: int | None = None, payload: dict[str, Any] | None = None, commentary: str | None = None, public_payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
+        pub = payload if public_payload is None else public_payload
         ev = {"seq": self.state.next_event_seq, "minute": self.state.minute, "extra_minute": self.state.extra_minute,
               "phase": self.state.phase, "event_type": et, "team_side": side, "player_api_id": pid,
-              "payload": payload, "public_payload": payload}
+              "payload": payload, "public_payload": pub}
         if commentary is None:
             try:
                 commentary = gen_commentary(self.state, ev, self.rng)
@@ -173,6 +193,17 @@ class MatchEngine:
         ev["commentary"] = text
         self.state.events.append(MatchEvent.from_dict(ev))
         self.state.next_event_seq += 1
+        # repetition tracking categories
+        cat_map = {
+            E.PASS_SEQUENCE: "possession", E.CHANCE: "chance", E.SHOT: "shot", E.BLOCK: "block", E.SAVE: "save",
+            E.GOAL: "goal", E.PENALTY_SCORED: "goal", E.PENALTY_MISSED: "penalty", E.PENALTY_SAVED: "save",
+            E.CORNER: "corner", E.FREE_KICK: "set_piece", E.FOUL: "foul", E.YELLOW_CARD: "card", E.RED_CARD: "card",
+            E.SECOND_YELLOW: "card", E.OFFSIDE: "offside", E.INJURY: "injury", E.VAR_REVIEW: "var", E.VAR_OVERTURN: "var",
+            E.DISALLOWED_GOAL: "var", E.SUBSTITUTION: "tactical", E.TACTICAL_CHANGE: "tactical",
+        }
+        cat = cat_map.get(et)
+        if cat:
+            self._push_category(cat)
         self._update_momentum(et, side, payload)
         return ev
 
@@ -303,8 +334,15 @@ class MatchEngine:
         if new_form and isinstance(new_form,str):
             self._apply_formation(side, new_form)
         team.tactical_changes.append({"minute": self.state.minute, "summary": summary or "tactical adjustment", "updates": updates})
-        detail = f"{team.team.name} make a tactical adjustment: {summary}." if summary else f"{team.team.name} adjust their approach as play resumes."
-        return self._emit(E.TACTICAL_CHANGE, side, payload={"summary": summary or "tactical adjustment", "detail": detail})
+        public_detail = f"{team.team.name} make a tactical adjustment as play resumes."
+        private_detail = f"{team.team.name} make a tactical adjustment: {summary}." if summary else public_detail
+        return self._emit(
+            E.TACTICAL_CHANGE,
+            side,
+            payload={"summary": summary or "tactical adjustment", "detail": private_detail},
+            commentary=public_detail,
+            public_payload={"summary": "tactical adjustment", "detail": public_detail},
+        )
 
     def _apply_formation(self, side: Side, formation: str):
         from engine.formations import SUPPORTED_FORMATIONS, get_formation_slots
@@ -658,6 +696,58 @@ class MatchEngine:
         if not finisher:
             return evs
 
+        # Repetition/variety control: not every attack ends in a shot
+        recent_shotty = sum(1 for c in list(self._recent_categories)[-6:] if c in {"shot", "block", "save", "goal", "chance"})
+        if recent_shotty >= 4 and self.rng.random() < 0.45:
+            breakdown = self.rng.choice(["clearance", "intercepted", "overhit", "keeper_claim", "crowded_out"])
+            if breakdown == "clearance" and defender:
+                detail = self.rng.choice([
+                    f"{creator.name + ' tries to pick out ' + finisher.name if creator else finisher.name + ' advances'}, but {defender.name} reads it well and clears the danger for {dn}.",
+                    f"{an} work the ball into a promising area, yet {defender.name} steps across and makes a firm clearance before a shot can come in.",
+                    f"The move breaks down as {defender.name} gets there first and boots the ball clear for {dn}.",
+                ])
+                evs.append(self._emit(E.PASS_SEQUENCE, att, creator.player_api_id if creator else finisher.player_api_id, {"detail": detail}))
+                self._push_category("possession")
+                return evs
+            if breakdown == "intercepted" and defender:
+                stat_interception(self.state, deff, defender.player_api_id)
+                record_interception(self.state, deff, defender.player_api_id)
+                detail = self.rng.choice([
+                    f"{an} try to thread a pass into the final third, but {defender.name} cuts it out with a smart interception.",
+                    f"Promising build-up from {an}, yet the final pass is intercepted by {defender.name} before {finisher.name} can get a shot away.",
+                    f"{defender.name} anticipates the danger and steps in to intercept, stopping {an}'s attack in its tracks.",
+                ])
+                evs.append(self._emit(E.PASS_SEQUENCE, deff, defender.player_api_id, {"detail": detail}))
+                self._push_category("possession")
+                return evs
+            if breakdown == "keeper_claim" and gk:
+                detail = self.rng.choice([
+                    f"{an} deliver into the area, but {gk.name} comes off his line confidently to claim the ball before {finisher.name} can threaten.",
+                    f"A cross into the box is well read by {gk.name}, who catches cleanly and ends the attack for {dn}.",
+                    f"{gk.name} takes command of his area, punching the danger away as {an} look for a final touch.",
+                ])
+                evs.append(self._emit(E.PASS_SEQUENCE, deff, gk.player_api_id, {"detail": detail}))
+                self._push_category("possession")
+                return evs
+            if breakdown == "crowded_out":
+                detail = self.rng.choice([
+                    f"{finisher.name} tries to work space in the box, but {dn} crowd him out and the chance disappears.",
+                    f"{an} probe patiently around the area, yet the defense holds firm and the attack fizzles out without a shot.",
+                    f"{finisher.name} can't find a shooting lane as {dn} close ranks, and possession is recycled.",
+                ])
+                evs.append(self._emit(E.PASS_SEQUENCE, att, finisher.player_api_id, {"detail": detail}))
+                self._push_category("possession")
+                return evs
+            # overhit
+            detail = self.rng.choice([
+                f"{an} look to release {finisher.name}, but the pass is overhit and runs through to {gk.name if gk else 'the goalkeeper'}.",
+                f"A promising move from {an} breaks down as the final ball carries too much weight and goes harmlessly out of play.",
+                f"{finisher.name} makes the run, but the through ball is just too strong and {dn} escape the danger.",
+            ])
+            evs.append(self._emit(E.PASS_SEQUENCE, att, creator.player_api_id if creator else finisher.player_api_id, {"detail": detail}))
+            self._push_category("possession")
+            return evs
+
         intro = self._chance_intro(finisher, creator, defender, gk, is_counter)
         # Record chance/key pass (suppress CHANCE commentary to avoid duplicate with rich outcome line)
         evs.append(self._emit(E.CHANCE, att, finisher.player_api_id, {"player_name": finisher.name, "detail": intro}, commentary=""))
@@ -686,8 +776,7 @@ class MatchEngine:
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.append(self._emit(E.BLOCK, deff, blocker.player_api_id if blocker else None, {"detail": detail}))
             if corner:
-                stat_corner(self.state, att)
-                evs.append(self._emit(E.CORNER, att, payload={"detail": f"The block deflects behind, and {an} will have a corner."}, commentary=""))
+                evs.extend(self._corner_kick(att, deff))
             return evs
 
         on_target_p = max(0.24, min(0.76, 0.40 + xg * 0.58))
@@ -715,8 +804,7 @@ class MatchEngine:
             detail = f"CHANCE! {detail}" if not detail.upper().startswith("CHANCE") else detail
             evs.extend(self._save_event(att, deff, finisher, gk, xg, narrative=detail))
             if corner and gk:
-                stat_corner(self.state, att)
-                evs.append(self._emit(E.CORNER, att, payload={"detail": f"The save forces a corner for {an}."}))
+                evs.extend(self._corner_kick(att, deff))
         return evs
 
     def _gk_str(self, side):
@@ -1072,6 +1160,66 @@ class MatchEngine:
                 f"Penalty missed! {taker.name} fails to hit the target from the spot.",
                 f"Off target from {taker.name} — the penalty is squandered.",
                 f"{taker.name} puts too much on it and sends the penalty wide of the goal.",
+            ])}))
+        return evs
+
+    def _corner_kick(self, att: Side, deff: Side):
+        evs = []
+        an = self.state.team(att).team.name
+        dn = self.state.team(deff).team.name
+        taker = self.pick(att, "mid", "crossing") or self.pick(att, "att", "passing") or self.pick(att, "any")
+        target = self.pick(att, "def", "heading") or self.pick(att, "fwd", "heading") or self.pick(att, "att")
+        defender = self.pick(deff, "def", "heading") or self.pick(deff, "def")
+        gk = self.gk(deff)
+        if not taker:
+            return evs
+        stat_corner(self.state, att)
+        # Not every corner leads to a chance
+        outcome_roll = self.rng.random()
+        if outcome_roll < 0.28:
+            detail = self.rng.choice([
+                f"{taker.name} swings the corner in, but {gk.name if gk else 'the goalkeeper'} claims it confidently in the air.",
+                f"Corner taken by {taker.name} — {defender.name if defender else 'a defender'} rises highest to head clear for {dn}.",
+                f"{taker.name} delivers the corner, but the first contact is defensive and {dn} clear their lines.",
+                f"Short corner routine from {an}. {taker.name} plays it short, but {dn} press quickly and the move breaks down.",
+            ])
+            evs.append(self._emit(E.CORNER, att, taker.player_api_id, {"detail": detail, "outcome": "cleared"}))
+            return evs
+        if outcome_roll < 0.44:
+            detail = self.rng.choice([
+                f"{taker.name} whips in a dangerous corner, but the header from {target.name if target else 'the attacker'} drifts wide of the post.",
+                f"Good delivery from {taker.name}, yet {target.name if target else 'the attacker'} can't keep the header on target.",
+                f"{an} win the first ball from the corner, but the flick-on goes harmlessly over the bar.",
+            ])
+            if target:
+                stat_shot(self.state, att, target.player_api_id, False, 0.08)
+                rating_shot(self.state, att, target.player_api_id, False)
+            evs.append(self._emit(E.CORNER, att, taker.player_api_id, {"detail": detail, "outcome": "header_off_target"}))
+            return evs
+        # dangerous corner
+        scorer = target or self.pick(att, "att")
+        if not scorer:
+            return evs
+        xg = 0.12 + self.rng.random() * 0.18
+        on_target = self.rng.random() < 0.55
+        stat_shot(self.state, att, scorer.player_api_id, on_target, xg)
+        rating_shot(self.state, att, scorer.player_api_id, on_target, big_chance=xg > 0.22)
+        if on_target and self.rng.random() < self._goal_prob(att, deff, scorer, gk, xg, team_strength(self.state, att), team_strength(self.state, deff), False):
+            evs.extend(self._score_goal(att, deff, scorer, taker, xg, narrative=self.rng.choice([
+                f"GOAL! {taker.name} delivers an inviting corner and {scorer.name} rises highest to power a header into the net for {an}! {self.state.home.team.name} {self.state.home.score}–{self.state.away.score} {self.state.away.team.name}.",
+                f"GOAL! From the corner, {scorer.name} attacks the ball in front of goal and glances it past {gk.name if gk else 'the goalkeeper'}! {self.state.home.team.name} {self.state.home.score}–{self.state.away.score} {self.state.away.team.name}.",
+            ])))
+        elif on_target and gk:
+            stat_save(self.state, deff, gk.player_api_id)
+            rating_save(self.state, deff, gk.player_api_id, big=xg > 0.2)
+            evs.append(self._emit(E.SAVE, deff, gk.player_api_id, {"shooter_name": scorer.name, "xg": round(xg, 3), "detail": self.rng.choice([
+                f"Corner swung in by {taker.name} and {scorer.name} meets it with a header, but {gk.name} reacts brilliantly to push it away!",
+                f"{scorer.name} gets a strong header on {taker.name}'s corner, yet {gk.name} produces a superb reflex save to keep it out.",
+            ])}))
+        else:
+            evs.append(self._emit(E.SHOT, att, scorer.player_api_id, {"outcome": "off_target", "xg": round(xg, 3), "detail": self.rng.choice([
+                f"{taker.name}'s corner finds {scorer.name}, but the header flashes just wide.",
+                f"A well-worked corner routine ends with {scorer.name} heading over the bar from close range.",
             ])}))
         return evs
 

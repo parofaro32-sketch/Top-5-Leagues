@@ -60,14 +60,28 @@ class BreakControlView(discord.ui.View):
             return "away"
         return None
 
-    @discord.ui.button(label="Confirm Ready (No Changes)", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Keep Current Tactics", style=discord.ButtonStyle.secondary)
     async def confirm_ready(self, interaction: discord.Interaction, button: discord.ui.Button):
         side = await self._resolve_side(interaction)
         if not side:
             await interaction.response.send_message("Only assigned human managers can confirm for their side in manager mode.", ephemeral=True)
             return
         await self.session.apply_break_actions(side, substitutions=[], tactics_updates={}, summary=None)
-        await interaction.response.send_message(f"{side.title()} side marked ready.", ephemeral=True)
+        await interaction.response.send_message(f"{side.title()} side: current tactics kept and marked ready.", ephemeral=True)
+
+    @discord.ui.button(label="Submit Tactics", style=discord.ButtonStyle.success)
+    async def submit_tactics(self, interaction: discord.Interaction, button: discord.ui.Button):
+        side = await self._resolve_side(interaction)
+        if not side:
+            await interaction.response.send_message("Only assigned human managers can submit tactics for their side.", ephemeral=True)
+            return
+        from bot.ui.modals import TacticsTextModal
+
+        async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
+            await self.session.apply_break_actions(side, substitutions=[], tactics_updates=updates, summary=summary or "Manager submitted tactics")
+            await inter.response.send_message(f"{side.title()} tactics submitted privately and side marked ready.", ephemeral=True)
+
+        await interaction.response.send_modal(TacticsTextModal(on_submit))
 
     @discord.ui.button(label="AI Suggest & Ready (My Side)", style=discord.ButtonStyle.primary)
     async def ai_ready(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -139,7 +139,19 @@ class LineupCog(commands.Cog):
             # mid-match: store for reference; live XI changes handled via substitutions/break controls
             team_state.lineup = lu
 
+        # Mark setup submission flags for manager mode
+        if session.state.mode == "manager_vs_manager" and mgr is not None and session.state.status == "setup":
+            session.state.submission[f"{s}_lineup_submitted"] = True
+            session.state.submission[f"{s}_lineup_submitted_at"] = discord.utils.utcnow().isoformat()
         await session.save()
+        # Nudge sim cog to check setup completion
+        if session.state.mode == "manager_vs_manager" and session.state.status == "setup":
+            sim_cog = self.bot.get_cog("SimCog")
+            if sim_cog and hasattr(sim_cog, "_after_submission_update"):
+                try:
+                    await sim_cog._after_submission_update(session, s, None)
+                except Exception:
+                    pass
         names = ", ".join([p.name for p in lu.starters[:11]])
         extra = ""
         if custom_players:

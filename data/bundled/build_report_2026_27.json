@@ -6,7 +6,7 @@
     },
     "la_liga": {
       "clubs": 20,
-      "players": 466
+      "players": 463
     },
     "serie_a": {
       "clubs": 20,
@@ -23,7 +23,7 @@
   },
   "totals": {
     "clubs": 96,
-    "players": 2307
+    "players": 2304
   },
   "warnings": [
     "SKIP suspected-misplaced: Cristhian Mosquera at Arsenal (existing: Valencia CF)",
@@ -138,6 +138,9 @@
     "SKIP suspected-misplaced: Karim Adeyemi at FC Barcelona (existing: Borussia Dortmund)",
     "SKIP suspected-misplaced: Altay Bayındır at Celta Vigo (existing: Manchester United)",
     "SKIP suspected-misplaced: Javi Galán at Celta Vigo (existing: Club Atlético de Madrid)",
+    "SKIP suspected-misplaced: Marc Casadó at Deportivo La Coruña (existing: FC Barcelona)",
+    "SKIP suspected-misplaced: Angeliño at Deportivo La Coruña (existing: AS Roma)",
+    "SKIP suspected-misplaced: José María Giménez at Deportivo La Coruña (existing: Club Atlético de Madrid)",
     "SKIP suspected-misplaced: Facundo Buonanotte at Elche CF (existing: Leeds United)",
     "SKIP suspected-misplaced: Tete Morente at Elche CF (existing: US Lecce)",
     "SKIP suspected-misplaced: Andoni Gorosabel at RCD Espanyol (existing: Athletic Club)",
@@ -367,12 +370,7 @@
     "SKIP suspected-misplaced: Mahdi Camara at Stade Rennais FC (existing: Stade Brestois 29)",
     "SKIP suspected-misplaced: Przemysław Frankowski at Stade Rennais FC (existing: Racing Club de Lens)",
     "SKIP suspected-misplaced: Filip Jörgensen at RC Strasbourg Alsace (existing: Chelsea)",
-    "SKIP suspected-misplaced: Martial Godo at RC Strasbourg Alsace (existing: Fulham)",
-    "MANUAL PATCH: Deportivo La Coruña squad injected from Wikipedia (page title redirect issue fixed)."
+    "SKIP suspected-misplaced: Martial Godo at RC Strasbourg Alsace (existing: Fulham)"
   ],
-  "duplicates": [],
-  "notes": [
-    "Detailed positions distributed deterministically within each squad (GK preserved; DEF->CB/LB/RB; MID->CDM/CM/CAM/LM/RM; FWD->ST/LW/RW) because source data provided coarse DF/MF/FW roles.",
-    "Age/DOB and height were not available from the automated source and are left null; overall/potential are deterministic estimates in 67-87 range."
-  ]
+  "duplicates": []
 }

@@ -82,3 +82,134 @@ def tactics_summary(t: dict[str, Any]) -> str:
     if d.get("counterpressing"): parts.append("counterpress on")
     if d.get("offside_trap"): parts.append("offside trap on")
     return ", ".join(parts)
+
+
+def parse_tactics_text(text: str) -> dict[str, Any]:
+    """Parse free-text tactics into a structured updates dict. Best-effort, private."""
+    import json as _json
+    import re as _re
+
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+
+    # JSON fallback
+    if raw.startswith("{"):
+        try:
+            obj = _json.loads(raw)
+            if isinstance(obj, dict):
+                return normalize_tactics(obj)
+        except Exception:
+            pass
+
+    t = default_tactics()
+    low = raw.lower()
+
+    def has(*words: str) -> bool:
+        return any(w in low for w in words)
+
+    def pick(patterns: list[tuple[str, str]], default: str | None = None) -> str | None:
+        for pat, val in patterns:
+            if _re.search(pat, low):
+                return val
+        return default
+
+    # Formation mention (stored as top-level hint; engine handles it in tactics update)
+    fm = _re.search(r"\b(3-4-3|3-5-2|3-4-1-2|4-1-4-1|4-2-3-1|4-2-2-2|4-3-1-2|4-3-3|4-4-1-1|4-4-2|4-5-1|5-3-2|5-4-1)\b", low)
+    if fm:
+        t["formation"] = fm.group(1)
+
+    ment = pick([
+        (r"\bvery attacking\b|\ball[- ]?out attack\b", "very_attacking"),
+        (r"\battacking\b", "attacking"),
+        (r"\bpositive\b", "positive"),
+        (r"\bcautious\b|\bdefensive mentality\b", "cautious"),
+        (r"\bbalanced\b", "balanced"),
+    ])
+    if ment:
+        t["attacking"]["mentality"] = ment
+
+    build = pick([
+        (r"\bshort passing\b|\bshort build\b|\bplay out from the back\b|\bpossession\b", "short"),
+        (r"\bdirect\b|\blong ball\b|\bgo long\b|\bdirect passing\b", "direct"),
+        (r"\bmixed build\b", "mixed"),
+    ])
+    if build:
+        t["attacking"]["build_up"] = build
+        t["attacking"]["passing_directness"] = build if build in {"short", "direct", "mixed"} else "mixed"
+
+    width = pick([
+        (r"\bwide\b|\buse wings\b|\bstretch\b", "wide"),
+        (r"\bnarrow\b|\bthrough the middle\b|\bcentral\b", "narrow"),
+    ])
+    if width:
+        t["attacking"]["attacking_width"] = width
+
+    trans = pick([
+        (r"\bfast transition\b|\bquick transition\b|\btransition quickly\b", "fast"),
+        (r"\bslow transition\b|\bpatient transition\b", "slow"),
+    ])
+    if trans:
+        t["attacking"]["attacking_transitions"] = trans
+
+    if has("counterattack", "counter-attack", "counter attack", "hit on the break", "break quickly"):
+        t["attacking"]["counterattacking"] = True
+    if has("no counterattack", "no counter-attack"):
+        t["attacking"]["counterattacking"] = False
+    if has("overlap", "overlapping fullbacks", "overlapping full-backs"):
+        t["attacking"]["overlapping_fullbacks"] = True
+    if has("underlap", "underlapping"):
+        t["attacking"]["underlapping_movements"] = True
+
+    press = pick([
+        (r"\bvery high press\b|\bgegenpress\b|\brelentless press\b", "very_high"),
+        (r"\bhigh press\b|\bpress high\b|\bpress intensely\b", "high"),
+        (r"\bmedium press\b|\bbalanced press\b", "medium"),
+        (r"\blow press\b|\bdrop off\b|\bstand off\b", "low"),
+    ])
+    if press:
+        t["defensive"]["pressing_intensity"] = press
+
+    line = pick([
+        (r"\bvery high line\b", "very_high"),
+        (r"\bhigh line\b", "high"),
+        (r"\bdeep line\b|\blow block\b|\bdrop deep\b|\bsit deep\b", "deep"),
+        (r"\bstandard line\b|\bnormal line\b", "standard"),
+    ])
+    if line:
+        t["defensive"]["defensive_line"] = line
+
+    block = pick([
+        (r"\blow block\b|\bsit deep\b", "low"),
+        (r"\bmid block\b", "mid"),
+        (r"\bhigh block\b", "high"),
+    ])
+    if block:
+        t["defensive"]["defensive_block"] = block
+
+    compact = pick([
+        (r"\bvery compact\b|\bcompact\b|\bstay compact\b", "high"),
+        (r"\bnot compact\b|\bloose shape\b", "low"),
+    ])
+    if compact:
+        t["defensive"]["compactness"] = compact
+
+    if has("counterpress", "counter-press", "press after loss"):
+        t["defensive"]["counterpressing"] = True
+    if has("offside trap"):
+        t["defensive"]["offside_trap"] = True
+    if has("man mark", "man-mark", "man marking"):
+        t["defensive"]["marking"] = "man"
+    elif has("zonal", "zone marking"):
+        t["defensive"]["marking"] = "zonal"
+
+    # tempo/possession hints
+    if has("slow tempo", "patient", "keep possession"):
+        t["attacking"]["possession_style"] = "patient"
+    elif has("fast tempo", "high tempo", "quick tempo"):
+        t["attacking"]["possession_style"] = "fast"
+
+    if has("cross a lot", "lots of crosses", "whip crosses", "crossing"):
+        t["attacking"]["crossing"] = "high"
+
+    return normalize_tactics(t)

@@ -410,11 +410,11 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         ])
 
     if et == E.TACTICAL_CHANGE:
-        summary = payload.get("summary", "a tactical adjustment")
+        # Tactics are private - never reveal details publicly
         return _pick(rng, [
-            f"{pfx} — {team} adjust their approach: {summary}. The change in shape, pressing intensity, or transition plan could alter how the next phase unfolds against {opp}.",
-            f"{pfx} — Tactical tweak from {team} — {summary}. It signals a clear response to the current game state at {score} and the patterns seen so far.",
-            f"{pfx} — {team} modify their setup ({summary}), aiming to gain better control of key zones and create more favorable matchups.",
+            f"{pfx} — {team} make a tactical adjustment on the touchline {flav}.",
+            f"{pfx} — A tactical change from {team} as they look to influence the next phase at {score}.",
+            f"{pfx} — {team} adjust their approach as the match situation evolves.",
         ])
 
     if et == E.VAR_REVIEW:
