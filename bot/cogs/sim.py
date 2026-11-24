@@ -1584,7 +1584,8 @@ class SimCog(commands.Cog):
             logger.warning("MATCH_FLOW send_events_live: empty events list match_id=%s", match_id)
             return
 
-        # Presentation fast-forward: skip low-importance moments (no simulation speed change).
+        # Presentation fast-forward: show key moments and periodic updates, not every routine event.
+        # This does NOT change simulation speed.
         CRITICAL = {
             "goal", "penalty_scored", "penalty_missed", "penalty_saved", "own_goal",
             "second_yellow", "red_card", "injury", "substitution", "tactical_change",
@@ -1596,39 +1597,40 @@ class SimCog(commands.Cog):
             "shot", "save", "block", "chance", "penalty_awarded", "yellow_card",
             "corner", "free_kick",
         }
-        # Routine events are fast-forwarded: no message, no pacing delay.
-        ROUTINE_SKIP = {"pass_sequence", "note"}
+        ROUTINE_GAP_MINUTES = 7  # show routine play at most every ~7 minutes
 
         sent = 0
         silent = 0
         skipped = 0
+        last_routine_minute = -999
+
         for ev in events:
             et = ev.get("event_type")
             text = ev.get("commentary")
             payload = ev.get("payload") or {}
-
-            # Fast-forward: skip routine non-important events entirely (presentation only).
-            if et in ROUTINE_SKIP:
-                skipped += 1
-                continue
+            minute = int(ev.get("minute", getattr(state, "minute", 0) if state is not None else 0) or 0)
 
             if not text:
                 # CHANCE events are intentionally paired with rich outcome narratives; avoid duplicate display
                 if et != "chance":
                     text = payload.get("detail") or payload.get("summary") or ""
+
             if not text:
-                # silent/internal event: skip without adding pacing delay
+                # silent/internal event: skip display, no pacing delay
                 silent += 1
                 continue
 
-            # Fast-forward: hide low-signal routine fouls/offside unless notable; keep pacing light.
-            if et in {"foul", "offside"} and et not in CRITICAL:
-                # show occasionally? skip to keep match moving; still counted as skipped
-                skipped += 1
-                continue
+            is_critical = et in CRITICAL
+            is_notable = et in NOTABLE
+
+            # Fast-forward routine moments: keep key events, show routine updates periodically.
+            if not is_critical and not is_notable:
+                if minute - last_routine_minute < ROUTINE_GAP_MINUTES:
+                    skipped += 1
+                    continue
+                last_routine_minute = minute
 
             try:
-                et = ev.get("event_type")
                 if et in {"goal", "penalty_scored"} and state is not None:
                     minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
                     extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
@@ -1701,15 +1703,10 @@ class SimCog(commands.Cog):
             except Exception:
                 logger.exception("Failed to send match event message")
 
-            # Presentation pacing: keep normal feel for important moments, faster for routine.
+            # Normal pacing for shown events (no engine speed change).
             if delay > 0:
-                if et in CRITICAL:
-                    await asyncio.sleep(delay)
-                elif et in NOTABLE:
-                    await asyncio.sleep(min(delay, 1.2))
-                else:
-                    # other non-critical events: minimal pacing
-                    await asyncio.sleep(min(delay, 0.4))
+                await asyncio.sleep(delay)
+
         logger.info("MATCH_FLOW send_events_live done match_id=%s total=%s sent=%s silent=%s skipped=%s", match_id, len(events), sent, silent, skipped)
 
     async def _send_live_ratings(self, channel: discord.abc.Messageable, session) -> None:
