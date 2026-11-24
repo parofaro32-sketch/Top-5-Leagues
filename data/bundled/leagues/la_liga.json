@@ -2335,26 +2335,6 @@
           "injured": false
         },
         {
-          "api_id": 13374101,
-          "name": "Joan García",
-          "firstname": "Joan",
-          "lastname": "García",
-          "age": null,
-          "dob": null,
-          "nationality": "Spain",
-          "photo": null,
-          "position": "GK",
-          "detailed_position": "GK",
-          "number": 14,
-          "height_cm": null,
-          "weight_kg": null,
-          "preferred_foot": null,
-          "overall": 68,
-          "potential": 70,
-          "status": "active",
-          "injured": false
-        },
-        {
           "name": "Marcus Rashford",
           "firstname": "Marcus",
           "lastname": "Rashford",
