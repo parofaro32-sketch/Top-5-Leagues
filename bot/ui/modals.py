@@ -25,9 +25,18 @@ class TacticsJsonModal(discord.ui.Modal, title="Submit Tactics JSON"):
             if not isinstance(data, dict):
                 raise ValueError("JSON must be an object")
         except Exception as e:
-            await interaction.response.send_message(f"Invalid tactics JSON: {e}", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Invalid tactics JSON: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"Invalid tactics JSON: {e}", ephemeral=True)
             return
-        await self._on_submit_data(interaction, data)
+        try:
+            await self._on_submit_data(interaction, data)
+        except Exception as e:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Failed to save tactics: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"Failed to save tactics: {e}", ephemeral=True)
 
 
 class TacticsTextModal(discord.ui.Modal, title="Confirm Tactics"):
@@ -53,9 +62,18 @@ class TacticsTextModal(discord.ui.Modal, title="Confirm Tactics"):
             updates = normalize_tactics(updates)
             summary = tactics_summary(updates)
         except Exception as e:
-            await interaction.response.send_message(f"Could not parse tactics: {e}", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Could not parse tactics: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"Could not parse tactics: {e}", ephemeral=True)
             return
-        await self._on_submit_data(interaction, updates, summary)
+        try:
+            await self._on_submit_data(interaction, updates, summary)
+        except Exception as e:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Failed to save tactics: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"Failed to save tactics: {e}", ephemeral=True)
 
 
 class LineupSubmitModal(discord.ui.Modal, title="Submit Lineup"):
@@ -91,4 +109,10 @@ class LineupSubmitModal(discord.ui.Modal, title="Submit Lineup"):
             "starters_raw": str(self.starters.value or "").strip(),
             "bench_raw": str(self.bench.value or "").strip(),
         }
-        await self._on_submit_data(interaction, payload)
+        try:
+            await self._on_submit_data(interaction, payload)
+        except Exception as e:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Failed to submit lineup: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"Failed to submit lineup: {e}", ephemeral=True)

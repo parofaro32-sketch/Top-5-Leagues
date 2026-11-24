@@ -682,11 +682,23 @@ class ManagerSetupView(discord.ui.View):
         if not side:
             await interaction.response.send_message("Only assigned managers can view their squad privately here.", ephemeral=True)
             return
-        team = self.session.state.team(side)
-        squad = await self.cog.bot.football_data.get_squad(team.team.api_id)
-        text = format_squad_for_manager(squad)
-        header = f"**{team.team.name} — Available Squad**\nFormation: `{team.lineup.formation}` (current)\n\n"
-        await interaction.response.send_message(_clamp(header + "```\n" + text + "\n```", 1900), ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+        try:
+            team = self.session.state.team(side)
+            squad = await self.cog.bot.football_data.get_squad(team.team.api_id)
+            text = format_squad_for_manager(squad)
+            header = f"**{team.team.name} — Available Squad**\nFormation: `{team.lineup.formation}` (current)\n\n"
+            await interaction.followup.send(_clamp(header + "```\n" + text + "\n```", 1900), ephemeral=True)
+        except Exception:
+            logger.exception("Failed to show squad")
+            try:
+                await interaction.followup.send("Failed to load squad. Please try again.", ephemeral=True)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Submit Lineup", style=discord.ButtonStyle.primary)
     async def submit_lineup(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -726,16 +738,27 @@ class ManagerSetupView(discord.ui.View):
         if not (is_admin or is_manager):
             await interaction.response.send_message("Only a manager or server admin can cancel this match.", ephemeral=True)
             return
-        self.session.state.status = "cancelled"
-        self.session.state.phase = "cancelled"
-        await self.session.save()
-        for child in self.children:
-            child.disabled = True
         try:
-            await interaction.response.edit_message(content="Match cancelled.", embed=build_match_setup_embed(self.session), view=self)
+            if not interaction.response.is_done():
+                await interaction.response.defer()
         except Exception:
+            pass
+        try:
+            self.session.state.status = "cancelled"
+            self.session.state.phase = "cancelled"
+            await self.session.save()
+            for child in self.children:
+                child.disabled = True
+            embed = build_match_setup_embed(self.session)
             try:
-                await interaction.response.send_message("Match cancelled.", ephemeral=True)
+                await interaction.edit_original_response(content="Match cancelled.", embed=embed, view=self)
+            except Exception:
+                if self.message:
+                    await self.message.edit(content="Match cancelled.", embed=embed, view=self)
+        except Exception:
+            logger.exception("Failed to cancel match")
+            try:
+                await interaction.followup.send("Failed to cancel match. Please try again.", ephemeral=True)
             except Exception:
                 pass
 
@@ -750,91 +773,114 @@ class SimCog(commands.Cog):
         return session.home_manager_id if side == "home" else session.away_manager_id
 
     async def _handle_lineup_submission(self, interaction: discord.Interaction, session, side: str, payload: dict[str, Any], view: ManagerSetupView | None = None):
-        if self._side_manager_id(session, side) != interaction.user.id:
-            await interaction.response.send_message("Only the assigned manager can submit this lineup.", ephemeral=True)
-            return
-        if session.state.status != "setup":
-            await interaction.response.send_message("Lineup submissions are closed for this match.", ephemeral=True)
-            return
-        sub = session.state.submission or {}
-        if sub.get(f"{side}_lineup_submitted") and sub.get(f"{side}_tactics_submitted"):
-            await interaction.response.send_message("Your lineup and tactics are already submitted. Use setup controls before kickoff only.", ephemeral=True)
-            return
-        team = session.state.team(side)
-        squad = await self.bot.football_data.get_squad(team.team.api_id)
         try:
-            lu = parse_lineup_submission(payload.get("formation", ""), payload.get("starters_raw", ""), payload.get("bench_raw", ""), squad, team.team.api_id, team.team.name)
-        except LineupValidationError as e:
-            await interaction.response.send_message(f"Lineup invalid: {e}", ephemeral=True)
-            return
-        except Exception as e:
-            logger.exception("Lineup submission parse failed")
-            await interaction.response.send_message("Could not validate lineup. Please check names/numbers and try again.", ephemeral=True)
-            return
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            logger.exception("Failed to defer lineup submission interaction")
+        try:
+            if self._side_manager_id(session, side) != interaction.user.id:
+                await interaction.followup.send("Only the assigned manager can submit this lineup.", ephemeral=True)
+                return
+            if session.state.status != "setup":
+                await interaction.followup.send("Lineup submissions are closed for this match.", ephemeral=True)
+                return
+            sub = session.state.submission or {}
+            if sub.get(f"{side}_lineup_submitted") and sub.get(f"{side}_tactics_submitted"):
+                await interaction.followup.send("Your lineup and tactics are already submitted. Use setup controls before kickoff only.", ephemeral=True)
+                return
+            team = session.state.team(side)
+            squad = await self.bot.football_data.get_squad(team.team.api_id)
+            try:
+                lu = parse_lineup_submission(payload.get("formation", ""), payload.get("starters_raw", ""), payload.get("bench_raw", ""), squad, team.team.api_id, team.team.name)
+            except LineupValidationError as e:
+                await interaction.followup.send(f"Lineup invalid: {e}", ephemeral=True)
+                return
+            except Exception:
+                logger.exception("Lineup submission parse failed")
+                await interaction.followup.send("Could not validate lineup. Please check names/numbers and try again.", ephemeral=True)
+                return
 
-        # Check availability (injured/unavailable)
-        squad_by_id = {int(p.get("api_id") or 0): p for p in squad}
-        unavailable = []
-        for e in list(lu.starters) + list(lu.bench):
-            p = squad_by_id.get(int(e.player_api_id))
-            if not p:
-                continue
-            status = str(p.get("status") or "active").lower()
-            if p.get("injured") or status in {"injured", "unavailable", "suspended"}:
-                unavailable.append(f"{e.name} ({status if status != 'active' else 'injured'})")
-        if unavailable:
-            await interaction.response.send_message(
-                "Lineup invalid: unavailable players selected: " + ", ".join(unavailable[:10]),
-                ephemeral=True,
-            )
-            return
-
-        # Apply lineup to state (replace placeholder). Keep tactics.
-        team.lineup = lu
-        # Rebuild player states for this side to match submitted lineup
-        session.engine._init_ps(side, lu)
-        # Ensure players_index has all squad players
-        from engine.models import Player, PlayerAttributes
-        for p in squad:
-            key = session.state.player_key(side, int(p.get("api_id") or 0))
-            if key not in session.state.players_index:
-                attrs = PlayerAttributes.from_dict(p.get("attributes") or {})
-                session.state.players_index[key] = Player(
-                    api_id=int(p.get("api_id") or 0), name=p.get("name") or "Unknown", team_api_id=team.team.api_id,
-                    position=(p.get("position") or "MID").upper(), detailed_position=p.get("detailed_position"), number=p.get("number"),
-                    nationality=p.get("nationality"), age=p.get("age"), photo=p.get("photo"), injured=bool(p.get("injured", False)),
-                    attributes=attrs,
+            # Check availability (injured/unavailable)
+            squad_by_id = {int(p.get("api_id") or 0): p for p in squad}
+            unavailable = []
+            for e in list(lu.starters) + list(lu.bench):
+                p = squad_by_id.get(int(e.player_api_id))
+                if not p:
+                    continue
+                status = str(p.get("status") or "active").lower()
+                if p.get("injured") or status in {"injured", "unavailable", "suspended"}:
+                    unavailable.append(f"{e.name} ({status if status != 'active' else 'injured'})")
+            if unavailable:
+                await interaction.followup.send(
+                    "Lineup invalid: unavailable players selected: " + ", ".join(unavailable[:10]),
+                    ephemeral=True,
                 )
-        sub[f"{side}_lineup_submitted"] = True
-        sub[f"{side}_lineup_submitted_at"] = datetime.now(timezone.utc).isoformat()
-        await session.save()
+                return
 
-        await interaction.response.send_message(
-            f"Lineup submitted privately for **{team.team.name}** ({lu.formation}).", ephemeral=True
-        )
-        await self._after_submission_update(session, side, view)
+            # Apply lineup to state (replace placeholder). Keep tactics.
+            team.lineup = lu
+            # Rebuild player states for this side to match submitted lineup
+            session.engine._init_ps(side, lu)
+            # Ensure players_index has all squad players
+            from engine.models import Player, PlayerAttributes
+            for p in squad:
+                key = session.state.player_key(side, int(p.get("api_id") or 0))
+                if key not in session.state.players_index:
+                    attrs = PlayerAttributes.from_dict(p.get("attributes") or {})
+                    session.state.players_index[key] = Player(
+                        api_id=int(p.get("api_id") or 0), name=p.get("name") or "Unknown", team_api_id=team.team.api_id,
+                        position=(p.get("position") or "MID").upper(), detailed_position=p.get("detailed_position"), number=p.get("number"),
+                        nationality=p.get("nationality"), age=p.get("age"), photo=p.get("photo"), injured=bool(p.get("injured", False)),
+                        attributes=attrs,
+                    )
+            sub[f"{side}_lineup_submitted"] = True
+            sub[f"{side}_lineup_submitted_at"] = datetime.now(timezone.utc).isoformat()
+            await session.save()
+
+            await interaction.followup.send(
+                f"Lineup submitted privately for **{team.team.name}** ({lu.formation}).", ephemeral=True
+            )
+            await self._after_submission_update(session, side, view)
+        except Exception:
+            logger.exception("Failed to handle lineup submission")
+            try:
+                await interaction.followup.send("Failed to submit lineup. Please try again.", ephemeral=True)
+            except Exception:
+                pass
 
     async def _handle_tactics_submission(self, interaction: discord.Interaction, session, side: str, updates: dict[str, Any], summary: str | None, view: ManagerSetupView | None = None):
-        if self._side_manager_id(session, side) != interaction.user.id:
-            await interaction.response.send_message("Only the assigned manager can submit tactics for this side.", ephemeral=True)
-            return
-        if session.state.status != "setup":
-            # Allow during breaks via BreakControlView; this is setup handler
-            await interaction.response.send_message("Tactics submissions are closed for this match setup.", ephemeral=True)
-            return
-        sub = session.state.submission or {}
-        team = session.state.team(side)
-        # Apply privately
-        from services.tactics_service import normalize_tactics as _norm
-        team.tactics = _norm({**(team.tactics or {}), **(updates or {})})
-        sub[f"{side}_tactics_submitted"] = True
-        sub[f"{side}_tactics_submitted_at"] = datetime.now(timezone.utc).isoformat()
-        await session.save()
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            logger.exception("Failed to defer tactics submission interaction")
+        try:
+            if self._side_manager_id(session, side) != interaction.user.id:
+                await interaction.followup.send("Only the assigned manager can submit tactics for this side.", ephemeral=True)
+                return
+            if session.state.status != "setup":
+                await interaction.followup.send("Tactics submissions are closed for this match setup.", ephemeral=True)
+                return
+            sub = session.state.submission or {}
+            team = session.state.team(side)
+            # Apply privately
+            from services.tactics_service import normalize_tactics as _norm
+            team.tactics = _norm({**(team.tactics or {}), **(updates or {})})
+            sub[f"{side}_tactics_submitted"] = True
+            sub[f"{side}_tactics_submitted_at"] = datetime.now(timezone.utc).isoformat()
+            await session.save()
 
-        await interaction.response.send_message(
-            f"Tactics submitted privately for **{team.team.name}**. Confirmation: received.", ephemeral=True
-        )
-        await self._after_submission_update(session, side, view)
+            await interaction.followup.send(
+                f"Tactics submitted privately for **{team.team.name}**. Confirmation: received.", ephemeral=True
+            )
+            await self._after_submission_update(session, side, view)
+        except Exception:
+            logger.exception("Failed to handle tactics submission")
+            try:
+                await interaction.followup.send("Failed to save tactics. Please try again.", ephemeral=True)
+            except Exception:
+                pass
 
     async def _after_submission_update(self, session, side: str, view: ManagerSetupView | None = None):
         sub = session.state.submission or {}
@@ -1428,22 +1474,43 @@ class SimCog(commands.Cog):
                         continue
 
                     # Start or simulate next segment (setup/normal)
-                    interval_msg = _interval_text_for_state(session.state)
-                    if interval_msg:
-                        try:
-                            await channel.send(interval_msg)
-                        except Exception:
-                            logger.exception("Failed to send interval announcement")
-
                     if session.state.status == "setup":
-                        evs = await session.start_and_simulate_until_break()
+                        kickoff_evs = await session.start_if_setup()
+                        if kickoff_evs:
+                            try:
+                                await self._send_events_live(channel, kickoff_evs, delay=0.5, state=session.state)
+                            except Exception:
+                                logger.exception("Failed to send kickoff events match_id=%s", session.state.id)
+                        interval_msg = _interval_text_for_state(session.state)
+                        if interval_msg:
+                            try:
+                                await channel.send(interval_msg)
+                            except Exception:
+                                logger.exception("Failed to send interval announcement")
+                        # Simulate rest of segment (engine already started)
+                        async with session.lock:
+                            try:
+                                step = session.engine.simulate_until_break_or_end()
+                                sim_evs = step.events
+                                await session.append_events(sim_evs)
+                            except Exception:
+                                logger.exception("MATCH_SERVICE simulate_until_break_or_end failed match_id=%s", session.state.id)
+                                sim_evs = []
+                            await session.save()
+                        evs = sim_evs
                         logger.info(
-                            "MATCH_FLOW started match_id=%s events=%s status=%s phase=%s minute=%s pending=%s",
-                            session.state.id, len(evs or []), session.state.status, session.state.phase, session.state.minute, session.state.pending_break,
+                            "MATCH_FLOW started match_id=%s kickoff=%s events=%s status=%s phase=%s minute=%s pending=%s",
+                            session.state.id, len(kickoff_evs or []), len(evs or []), session.state.status, session.state.phase, session.state.minute, session.state.pending_break,
                         )
                     elif session.state.status == "finished":
                         break
                     else:
+                        interval_msg = _interval_text_for_state(session.state)
+                        if interval_msg:
+                            try:
+                                await channel.send(interval_msg)
+                            except Exception:
+                                logger.exception("Failed to send interval announcement")
                         # Not in break and not finished: continue simulation to break/end
                         try:
                             evs = await session.continue_after_break()
@@ -1451,10 +1518,11 @@ class SimCog(commands.Cog):
                             logger.exception("MATCH_FLOW continue_after_break failed in running state match_id=%s", session.state.id)
                             evs = []
                         if not evs and session.state.status != "finished":
-                            step = session.engine.simulate_until_break_or_end()
-                            evs = step.events
-                            await session.append_events(evs)
-                            await session.save()
+                            async with session.lock:
+                                step = session.engine.simulate_until_break_or_end()
+                                evs = step.events
+                                await session.append_events(evs)
+                                await session.save()
                         logger.info(
                             "MATCH_FLOW progressed match_id=%s events=%s status=%s phase=%s minute=%s pending=%s",
                             session.state.id, len(evs or []), session.state.status, session.state.phase, session.state.minute, session.state.pending_break,
@@ -1578,7 +1646,10 @@ class SimCog(commands.Cog):
         async def resolve_team(q: str | None, label: str) -> dict[str, Any] | None:
             if not q:
                 return None
+            # Try league filter first (if provided), then fall back to all leagues for cross-league support
             matches = await fd.list_teams(query=q, league=league, limit=5)
+            if not matches and league:
+                matches = await fd.list_teams(query=q, league=None, limit=5)
             if not matches:
                 return None
             # exact-ish first
@@ -1595,85 +1666,131 @@ class SimCog(commands.Cog):
         if home is None or away is None or (home and away and home.get("api_id") == away.get("api_id")):
             leagues = fd.list_leagues()
             from data.bundled import resolve_league_key
-            league_key = resolve_league_key(league) if league else None
+            default_league_key = resolve_league_key(league) if league else None
 
-            selected: dict[str, Any] = {"home": home, "away": away, "league_key": league_key}
+            selected: dict[str, Any] = {"home": home, "away": away}
 
-            async def start_team_selection(inter: discord.Interaction, lk: str):
+            async def _send(inter: discord.Interaction, *, content: str, view: discord.ui.View | None = None):
+                if inter.response.is_done():
+                    await inter.edit_original_response(content=content, view=view)
+                else:
+                    await inter.response.edit_message(content=content, view=view)
+
+            async def prompt_away_league(inter: discord.Interaction):
+                async def on_away_league_pick(i2: discord.Interaction, lk: str):
+                    await prompt_away_team(i2, lk)
+
+                v = SimpleChoiceView(interaction.user.id)
+                v.add_item(LeagueSelect(leagues, on_away_league_pick))
+                await _send(inter, content=(
+                    f"**Match Setup**\nHome: **{selected['home'].get('name')}** ({selected['home'].get('league_name','')})\n"
+                    "Select the AWAY team's league (cross-league matches allowed)."
+                ), view=v)
+
+            async def prompt_away_team(inter: discord.Interaction, lk: str):
                 teams = await fd.list_teams(league=lk, limit=25)
-                if len(teams) < 2:
-                    await inter.response.send_message("Could not load enough teams for that league.", ephemeral=True)
+                if not teams:
+                    await inter.response.send_message("Could not load teams for that league.", ephemeral=True)
                     return
-                selected["league_key"] = lk
-                league_name = next((l['name'] for l in fd.list_leagues() if l['key'] == lk), lk)
+                league_name = next((l['name'] for l in leagues if l['key'] == lk), lk)
+                away_opts = [x for x in teams if not (selected.get("home") and int(x.get("api_id", 0)) == int(selected["home"].get("api_id", 0)))]
 
                 async def on_away_pick(i2: discord.Interaction, team_id: int):
                     t = await fd.get_team(team_id)
+                    if not t:
+                        await i2.response.send_message("Team not found.", ephemeral=True)
+                        return
                     if selected.get("home") and int(t.get("api_id", 0)) == int(selected["home"].get("api_id", 0)):
                         await i2.response.send_message("Away team must be different from home team.", ephemeral=True)
                         return
                     selected["away"] = t
                     await i2.response.edit_message(content=f"Match setup: **{selected['home'].get('name')}** vs **{t.get('name')}**\nStarting simulation...", view=None)
                     await self._launch_with_selection(interaction, mode.value, selected["home"], selected["away"], home_manager, away_manager)
+
+                v = SimpleChoiceView(interaction.user.id)
+                v.add_item(TeamSelect(away_opts, f"Select AWAY team ({league_name})", on_away_pick))
+                # Allow changing league if needed
+                async def change_away_league(i2: discord.Interaction):
+                    await prompt_away_league(i2)
+                # No extra button component needed; user can rerun /sim to restart. Keep simple.
+                await _send(inter, content=(
+                    f"**Match Setup**\nHome: **{selected['home'].get('name')}** ({selected['home'].get('league_name','')})\n"
+                    f"Away league: **{league_name}**\nSelect the away team."
+                ), view=v)
+
+            async def prompt_home_team(inter: discord.Interaction, lk: str):
+                teams = await fd.list_teams(league=lk, limit=25)
+                if not teams:
+                    await inter.response.send_message("Could not load teams for that league.", ephemeral=True)
+                    return
+                league_name = next((l['name'] for l in leagues if l['key'] == lk), lk)
 
                 async def on_home_pick(i2: discord.Interaction, team_id: int):
                     t = await fd.get_team(team_id)
-                    selected["home"] = t
-                    away_opts = [x for x in teams if int(x["api_id"]) != team_id]
-                    view2_local = SimpleChoiceView(interaction.user.id)
-                    view2_local.add_item(TeamSelect(away_opts, "Select AWAY team", on_away_pick))
-                    await i2.response.edit_message(content=f"League: **{league_name}**\nHome team: **{t.get('name')}**\nSelect away team.", view=view2_local)
-
-                view_teams = SimpleChoiceView(interaction.user.id)
-                view_teams.add_item(TeamSelect(teams, "Select HOME team", on_home_pick))
-                msg = f"**Match Setup** — {league_name}\nSelect the home team, then away team."
-                if inter.response.is_done():
-                    await inter.edit_original_response(content=msg, view=view_teams)
-                else:
-                    await inter.response.edit_message(content=msg, view=view_teams)
-
-            if league_key:
-                # go straight to team selection
-                class _DummyInter:
-                    response = interaction.response
-                    async def edit_original_response(self, **kw):
-                        await interaction.edit_original_response(**kw)
-                # Use a simple path: send message then edit via followup flow
-                teams = await fd.list_teams(league=league_key, limit=25)
-                if len(teams) < 2:
-                    await interaction.followup.send("Could not load enough teams for selection.", ephemeral=True)
-                    return
-                league_name = next((l['name'] for l in fd.list_leagues() if l['key'] == league_key), league_key)
-
-                async def on_away_pick_direct(i2: discord.Interaction, team_id: int):
-                    t = await fd.get_team(team_id)
-                    if selected.get("home") and int(t.get("api_id", 0)) == int(selected["home"].get("api_id", 0)):
-                        await i2.response.send_message("Away team must be different from home team.", ephemeral=True)
+                    if not t:
+                        await i2.response.send_message("Team not found.", ephemeral=True)
                         return
-                    selected["away"] = t
-                    await i2.response.edit_message(content=f"Match setup: **{selected['home'].get('name')}** vs **{t.get('name')}**\nStarting simulation...", view=None)
-                    await self._launch_with_selection(interaction, mode.value, selected["home"], selected["away"], home_manager, away_manager)
-
-                async def on_home_pick_direct(i2: discord.Interaction, team_id: int):
-                    t = await fd.get_team(team_id)
                     selected["home"] = t
-                    away_opts = [x for x in teams if int(x["api_id"]) != team_id]
-                    view2_local = SimpleChoiceView(interaction.user.id)
-                    view2_local.add_item(TeamSelect(away_opts, "Select AWAY team", on_away_pick_direct))
-                    await i2.response.edit_message(content=f"League: **{league_name}**\nHome team: **{t.get('name')}**\nSelect away team.", view=view2_local)
+                    # After home selected, pick away league (cross-league allowed)
+                    await prompt_away_league(i2)
 
-                view = SimpleChoiceView(interaction.user.id)
-                view.add_item(TeamSelect(teams, "Select HOME team", on_home_pick_direct))
-                await interaction.followup.send(f"**Match Setup** — {league_name}\nSelect the home team, then away team.", view=view, ephemeral=True)
+                v = SimpleChoiceView(interaction.user.id)
+                v.add_item(TeamSelect(teams, f"Select HOME team ({league_name})", on_home_pick))
+                await _send(inter, content=(
+                    f"**Match Setup**\nHome league: **{league_name}**\nSelect the home team."
+                ), view=v)
+
+            async def prompt_home_league(inter: discord.Interaction):
+                async def on_home_league_pick(i2: discord.Interaction, lk: str):
+                    await prompt_home_team(i2, lk)
+
+                v = SimpleChoiceView(interaction.user.id)
+                v.add_item(LeagueSelect(leagues, on_home_league_pick))
+                await _send(inter, content="**Match Setup**\nSelect the HOME team's league (cross-league matches allowed).", view=v)
+
+            # Entry: if league arg provided, default to that for home but still allow cross-league for away
+            if (not home) and default_league_key:
+                # send an initial message then go to home team in that league
+                view0 = SimpleChoiceView(interaction.user.id)
+                view0.add_item(LeagueSelect(leagues, lambda i2, lk: prompt_home_team(i2, lk)))
+                # If league provided, jump directly to home team selection
+                teams = await fd.list_teams(league=default_league_key, limit=25)
+                if teams:
+                    league_name = next((l['name'] for l in leagues if l['key'] == default_league_key), default_league_key)
+                    async def on_home_pick_direct(i2: discord.Interaction, team_id: int):
+                        t = await fd.get_team(team_id)
+                        if not t:
+                            await i2.response.send_message("Team not found.", ephemeral=True)
+                            return
+                        selected["home"] = t
+                        await prompt_away_league(i2)
+                    v = SimpleChoiceView(interaction.user.id)
+                    v.add_item(TeamSelect(teams, f"Select HOME team ({league_name})", on_home_pick_direct))
+                    await interaction.followup.send(f"**Match Setup**\nHome league: **{league_name}** (from command)\nSelect the home team. Away team can be from any league.", view=v, ephemeral=True)
+                    return
+                # fallback to league pick
+                await interaction.followup.send("**Match Setup**\nSelect the HOME team's league (cross-league matches allowed).", view=view0, ephemeral=True)
                 return
 
-            # no league specified -> show all 5 leagues
-            async def on_league_pick(i2: discord.Interaction, lk: str):
-                await start_team_selection(i2, lk)
+            if home and not away:
+                # We have home, need away - send prompt
+                v = SimpleChoiceView(interaction.user.id)
+                async def on_away_league_pick(i2: discord.Interaction, lk: str):
+                    await prompt_away_team(i2, lk)
+                v.add_item(LeagueSelect(leagues, on_away_league_pick))
+                await interaction.followup.send(
+                    f"**Match Setup**\nHome: **{home.get('name')}** ({home.get('league_name','')})\nSelect the AWAY team's league (cross-league matches allowed).",
+                    view=v,
+                    ephemeral=True,
+                )
+                return
 
-            view = SimpleChoiceView(interaction.user.id)
-            view.add_item(LeagueSelect(leagues, on_league_pick))
-            await interaction.followup.send("**Match Setup**\nSelect a league, then pick home and away teams.", view=view, ephemeral=True)
+            # Neither team resolved
+            v = SimpleChoiceView(interaction.user.id)
+            async def on_home_league_pick(i2: discord.Interaction, lk: str):
+                await prompt_home_team(i2, lk)
+            v.add_item(LeagueSelect(leagues, on_home_league_pick))
+            await interaction.followup.send("**Match Setup**\nSelect the HOME team's league (cross-league matches allowed).", view=v, ephemeral=True)
             return
 
         await self._launch_with_selection(interaction, mode.value, home, away, home_manager, away_manager)

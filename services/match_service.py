@@ -65,6 +65,20 @@ class ActiveMatchSession:
             except Exception:
                 logger.exception("MATCH_SERVICE append_event failed match_id=%s seq=%s", self.state.id, ev.get("seq"))
 
+    async def start_if_setup(self) -> list[dict[str, Any]]:
+        """Start the match (emit kickoff) if still in setup. Returns kickoff events."""
+        async with self.lock:
+            if self.state.status != "setup":
+                return []
+            if not self.is_setup_complete():
+                missing = ", ".join(self.missing_submissions()) or "unknown"
+                logger.info("MATCH_SERVICE start blocked - setup incomplete match_id=%s missing=%s", self.state.id, missing)
+                return []
+            out = self.engine.start()
+            await self.append_events(out)
+            await self.save()
+            return out
+
     async def start_and_simulate_until_break(self, tick_callback: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None) -> list[dict[str, Any]]:
         async with self.lock:
             if not self.is_setup_complete():

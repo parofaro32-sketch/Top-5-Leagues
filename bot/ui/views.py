@@ -66,8 +66,19 @@ class BreakControlView(discord.ui.View):
         if not side:
             await interaction.response.send_message("Only assigned human managers can confirm for their side in manager mode.", ephemeral=True)
             return
-        await self.session.apply_break_actions(side, substitutions=[], tactics_updates={}, summary=None)
-        await interaction.response.send_message(f"{side.title()} side: current tactics kept and marked ready.", ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+        try:
+            await self.session.apply_break_actions(side, substitutions=[], tactics_updates={}, summary=None)
+            await interaction.followup.send(f"{side.title()} side: current tactics kept and marked ready.", ephemeral=True)
+        except Exception:
+            try:
+                await interaction.followup.send("Failed to keep current tactics. Please try again.", ephemeral=True)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Submit Tactics", style=discord.ButtonStyle.success)
     async def submit_tactics(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -78,8 +89,19 @@ class BreakControlView(discord.ui.View):
         from bot.ui.modals import TacticsTextModal
 
         async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
-            await self.session.apply_break_actions(side, substitutions=[], tactics_updates=updates, summary=summary or "Manager submitted tactics")
-            await inter.response.send_message(f"{side.title()} tactics submitted privately and side marked ready.", ephemeral=True)
+            try:
+                if not inter.response.is_done():
+                    await inter.response.defer(ephemeral=True)
+            except Exception:
+                pass
+            try:
+                await self.session.apply_break_actions(side, substitutions=[], tactics_updates=updates, summary=summary or "Manager submitted tactics")
+                await inter.followup.send(f"{side.title()} tactics submitted privately and side marked ready.", ephemeral=True)
+            except Exception:
+                try:
+                    await inter.followup.send("Failed to save tactics. Please try again.", ephemeral=True)
+                except Exception:
+                    pass
 
         await interaction.response.send_modal(TacticsTextModal(on_submit))
 
@@ -89,11 +111,22 @@ class BreakControlView(discord.ui.View):
         if not side:
             await interaction.response.send_message("Only assigned human managers can use this for their side.", ephemeral=True)
             return
-        from engine.ai_manager import decide_ai_break_actions
-        actions = decide_ai_break_actions(self.session.state, side)
-        await self.session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Manager accepted AI adjustment")
-        subs = actions.get("substitutions", [])
-        txt = "AI adjustments applied and side marked ready."
-        if subs:
-            txt += " Subs: " + ", ".join([f"{s.get('on_name')} for {s.get('off_name')}" for s in subs])
-        await interaction.response.send_message(txt[:1900], ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+        try:
+            from engine.ai_manager import decide_ai_break_actions
+            actions = decide_ai_break_actions(self.session.state, side)
+            await self.session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Manager accepted AI adjustment")
+            subs = actions.get("substitutions", [])
+            txt = "AI adjustments applied and side marked ready."
+            if subs:
+                txt += " Subs: " + ", ".join([f"{s.get('on_name')} for {s.get('off_name')}" for s in subs])
+            await interaction.followup.send(txt[:1900], ephemeral=True)
+        except Exception:
+            try:
+                await interaction.followup.send("Failed to apply AI adjustments. Please try again.", ephemeral=True)
+            except Exception:
+                pass

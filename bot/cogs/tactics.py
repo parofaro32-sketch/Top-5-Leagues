@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+logger = logging.getLogger(__name__)
 
 from bot.ui.embeds import error_embed, info_embed
 from bot.ui.modals import TacticsJsonModal
@@ -46,20 +50,32 @@ class TacticsCog(commands.Cog):
             return
 
         async def apply(inter: discord.Interaction, updates: dict):
-            team_state = session.state.team(s)
-            team_state.tactics = normalize_tactics({**(team_state.tactics or {}), **updates})
-            if session.state.mode == "manager_vs_manager" and mgr is not None and session.state.status == "setup":
-                session.state.submission[f"{s}_tactics_submitted"] = True
-                session.state.submission[f"{s}_tactics_submitted_at"] = discord.utils.utcnow().isoformat()
-            await session.save()
-            if session.state.mode == "manager_vs_manager" and session.state.status == "setup":
-                sim_cog = self.bot.get_cog("SimCog")
-                if sim_cog and hasattr(sim_cog, "_after_submission_update"):
-                    try:
-                        await sim_cog._after_submission_update(session, s, None)
-                    except Exception:
-                        pass
-            await inter.response.send_message(embed=info_embed("Tactics Updated", f"**{team_state.team.name}** tactics submitted privately. Confirmation: received."), ephemeral=True)
+            try:
+                if not inter.response.is_done():
+                    await inter.response.defer(ephemeral=True)
+            except Exception:
+                pass
+            try:
+                team_state = session.state.team(s)
+                team_state.tactics = normalize_tactics({**(team_state.tactics or {}), **updates})
+                if session.state.mode == "manager_vs_manager" and mgr is not None and session.state.status == "setup":
+                    session.state.submission[f"{s}_tactics_submitted"] = True
+                    session.state.submission[f"{s}_tactics_submitted_at"] = discord.utils.utcnow().isoformat()
+                await session.save()
+                if session.state.mode == "manager_vs_manager" and session.state.status == "setup":
+                    sim_cog = self.bot.get_cog("SimCog")
+                    if sim_cog and hasattr(sim_cog, "_after_submission_update"):
+                        try:
+                            await sim_cog._after_submission_update(session, s, None)
+                        except Exception:
+                            pass
+                await inter.followup.send(embed=info_embed("Tactics Updated", f"**{team_state.team.name}** tactics submitted privately. Confirmation: received."), ephemeral=True)
+            except Exception:
+                logger.exception("Failed to apply tactics command update")
+                try:
+                    await inter.followup.send(embed=error_embed("Tactics Error", "Failed to save tactics. Please try again."), ephemeral=True)
+                except Exception:
+                    pass
 
         if advanced_json:
             async def on_modal(inter: discord.Interaction, data: dict):
