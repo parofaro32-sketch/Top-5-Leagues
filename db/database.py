@@ -412,6 +412,9 @@ class Database:
                lineup_submission_id=excluded.lineup_submission_id,tactics_submission_id=excluded.tactics_submission_id""",
             (kw["match_id"], kw["side"], kw["team_api_id"], kw.get("manager_user_id"), 1 if kw.get("is_bot") else 0, kw.get("lineup_submission_id"), kw.get("tactics_submission_id")))
 
+    async def get_match_participants(self, match_id: str) -> list[aiosqlite.Row]:
+        return await self.fetchall("SELECT * FROM match_participants WHERE match_id=?", (match_id,))
+
     async def append_match_event(self, **kw: Any) -> None:
         await self.execute(
             """INSERT OR REPLACE INTO match_events(match_id,seq,minute,extra_minute,phase,event_type,team_side,player_api_id,payload_json,commentary,public_payload_json)

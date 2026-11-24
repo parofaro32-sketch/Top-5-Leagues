@@ -1354,20 +1354,20 @@ class SimCog(commands.Cog):
             await asyncio.sleep(2)
             waited += 2
             if waited >= 300:
-                # timeout: auto-apply for remaining human sides
+                # Timeout: for human managers, keep current tactics (no AI auto-changes).
                 for side in ("home", "away"):
                     mgr = session.home_manager_id if side == "home" else session.away_manager_id
                     done = session.state.home_break_decision_done if side == "home" else session.state.away_break_decision_done
                     if mgr is not None and not done:
                         try:
-                            from engine.ai_manager import decide_ai_break_actions
-                            actions = decide_ai_break_actions(session.state, side)
-                            timeout_evs = await session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Auto-applied (timeout)")
+                            timeout_evs = await session.apply_break_actions(
+                                side, substitutions=[], tactics_updates={}, summary="Kept current tactics (timeout)"
+                            )
                             if timeout_evs:
                                 action_evs.extend(timeout_evs)
                                 await self._send_events_live(channel, timeout_evs, delay=1.0, state=session.state)
                         except Exception:
-                            logger.exception("Failed to auto-apply break actions on timeout for %s", side)
+                            logger.exception("Failed to mark break timeout as keep-current for %s", side)
                 await session.save()
                 break
         return action_evs

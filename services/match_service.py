@@ -405,6 +405,21 @@ class MatchService:
             return None
         state = MatchState.from_dict(self.db.loads(row["state_json"]))
         engine = MatchEngine(state)
-        session = ActiveMatchSession(state=state, engine=engine, db=self.db)
+        home_manager_id = None
+        away_manager_id = None
+        try:
+            participants = await self.db.get_match_participants(match_id)
+            for p in participants:
+                pd = dict(p)
+                side = pd.get("side")
+                uid = pd.get("manager_user_id")
+                is_bot = bool(pd.get("is_bot"))
+                if side == "home":
+                    home_manager_id = int(uid) if uid is not None and not is_bot else None
+                elif side == "away":
+                    away_manager_id = int(uid) if uid is not None and not is_bot else None
+        except Exception:
+            logger.exception("MATCH_SERVICE failed to load participants match_id=%s", match_id)
+        session = ActiveMatchSession(state=state, engine=engine, db=self.db, home_manager_id=home_manager_id, away_manager_id=away_manager_id)
         self.sessions[match_id] = session
         return session
