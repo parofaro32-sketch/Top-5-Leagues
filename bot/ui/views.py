@@ -47,10 +47,17 @@ class SimpleChoiceView(discord.ui.View):
 
 
 class BreakControlView(discord.ui.View):
-    def __init__(self, match_id: str, session, *, timeout: float = 600):
+    def __init__(self, match_id: str, session, *, timeout: float | None = None):
         super().__init__(timeout=timeout)
         self.match_id = match_id
         self.session = session
+        # Stable custom IDs for restart-safe dispatch
+        try:
+            self.confirm_ready.custom_id = f"br:{match_id}:keep"
+            self.submit_tactics.custom_id = f"br:{match_id}:submit"
+            self.ai_ready.custom_id = f"br:{match_id}:ai"
+        except Exception:
+            pass
 
     async def _resolve_side(self, interaction: discord.Interaction) -> str | None:
         uid = interaction.user.id if interaction.user else None
@@ -62,6 +69,9 @@ class BreakControlView(discord.ui.View):
 
     @discord.ui.button(label="Keep Current Tactics", style=discord.ButtonStyle.secondary)
     async def confirm_ready(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cid = (interaction.data or {}).get("custom_id", "")
+        if isinstance(cid, str) and cid.startswith("br:"):
+            return  # handled by SimCog.on_interaction persistent dispatcher
         side = await self._resolve_side(interaction)
         if not side:
             await interaction.response.send_message("Only assigned human managers can confirm for their side in manager mode.", ephemeral=True)
@@ -82,31 +92,46 @@ class BreakControlView(discord.ui.View):
 
     @discord.ui.button(label="Submit Tactics", style=discord.ButtonStyle.success)
     async def submit_tactics(self, interaction: discord.Interaction, button: discord.ui.Button):
-        side = await self._resolve_side(interaction)
-        if not side:
-            await interaction.response.send_message("Only assigned human managers can submit tactics for their side.", ephemeral=True)
-            return
-        from bot.ui.modals import TacticsTextModal
+        try:
+            cid = (interaction.data or {}).get("custom_id", "")
+            if isinstance(cid, str) and cid.startswith("br:"):
+                return  # handled by SimCog.on_interaction persistent dispatcher
+            side = await self._resolve_side(interaction)
+            if not side:
+                await interaction.response.send_message("Only assigned human managers can submit tactics for their side.", ephemeral=True)
+                return
+            from bot.ui.modals import TacticsTextModal
 
-        async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
-            try:
-                if not inter.response.is_done():
-                    await inter.response.defer(ephemeral=True)
-            except Exception:
-                pass
-            try:
-                await self.session.apply_break_actions(side, substitutions=[], tactics_updates=updates, summary=summary or "Manager submitted tactics")
-                await inter.followup.send(f"{side.title()} tactics submitted privately and side marked ready.", ephemeral=True)
-            except Exception:
+            async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
                 try:
-                    await inter.followup.send("Failed to save tactics. Please try again.", ephemeral=True)
+                    if not inter.response.is_done():
+                        await inter.response.defer(ephemeral=True)
                 except Exception:
                     pass
+                try:
+                    await self.session.apply_break_actions(side, substitutions=[], tactics_updates=updates, summary=summary or "Manager submitted tactics")
+                    await inter.followup.send(f"{side.title()} tactics submitted privately and side marked ready.", ephemeral=True)
+                except Exception:
+                    try:
+                        await inter.followup.send("Failed to save tactics. Please try again.", ephemeral=True)
+                    except Exception:
+                        pass
 
-        await interaction.response.send_modal(TacticsTextModal(on_submit))
+            await interaction.response.send_modal(TacticsTextModal(on_submit))
+        except Exception:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Failed to open tactics form. Please try again.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Failed to open tactics form. Please try again.", ephemeral=True)
+            except Exception:
+                pass
 
     @discord.ui.button(label="AI Suggest & Ready (My Side)", style=discord.ButtonStyle.primary)
     async def ai_ready(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cid = (interaction.data or {}).get("custom_id", "")
+        if isinstance(cid, str) and cid.startswith("br:"):
+            return  # handled by SimCog.on_interaction persistent dispatcher
         side = await self._resolve_side(interaction)
         if not side:
             await interaction.response.send_message("Only assigned human managers can use this for their side.", ephemeral=True)

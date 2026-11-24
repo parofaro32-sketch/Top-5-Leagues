@@ -654,6 +654,15 @@ class ManagerSetupView(discord.ui.View):
         self.cog = cog
         self.session = session
         self.message: discord.Message | None = None
+        # Stable custom IDs for persistent dispatch / restart safety
+        mid = str(getattr(session.state, "id", "") or "")
+        try:
+            self.view_squad.custom_id = f"ms:{mid}:squad"
+            self.submit_lineup.custom_id = f"ms:{mid}:lineup"
+            self.submit_tactics.custom_id = f"ms:{mid}:tactics"
+            self.cancel_match.custom_id = f"ms:{mid}:cancel"
+        except Exception:
+            pass
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return True
@@ -678,6 +687,9 @@ class ManagerSetupView(discord.ui.View):
 
     @discord.ui.button(label="View Squad", style=discord.ButtonStyle.secondary)
     async def view_squad(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cid = (interaction.data or {}).get("custom_id", "")
+        if isinstance(cid, str) and cid.startswith("ms:"):
+            return  # handled by SimCog.on_interaction persistent dispatcher
         side = self._resolve_side(interaction)
         if not side:
             await interaction.response.send_message("Only assigned managers can view their squad privately here.", ephemeral=True)
@@ -702,36 +714,65 @@ class ManagerSetupView(discord.ui.View):
 
     @discord.ui.button(label="Submit Lineup", style=discord.ButtonStyle.primary)
     async def submit_lineup(self, interaction: discord.Interaction, button: discord.ui.Button):
-        side = self._resolve_side(interaction)
-        if not side:
-            await interaction.response.send_message("Only assigned managers can submit a lineup for their side.", ephemeral=True)
-            return
-        if self.session.state.status not in {"setup"}:
-            await interaction.response.send_message("Lineup submissions are closed for this match.", ephemeral=True)
-            return
+        try:
+            cid = (interaction.data or {}).get("custom_id", "")
+            if isinstance(cid, str) and cid.startswith("ms:"):
+                return  # handled by SimCog.on_interaction persistent dispatcher
+            side = self._resolve_side(interaction)
+            if not side:
+                await interaction.response.send_message("Only assigned managers can submit a lineup for their side.", ephemeral=True)
+                return
+            if self.session.state.status not in {"setup"}:
+                await interaction.response.send_message("Lineup submissions are closed for this match.", ephemeral=True)
+                return
 
-        async def on_submit(inter: discord.Interaction, payload: dict[str, Any]):
-            await self.cog._handle_lineup_submission(inter, self.session, side, payload, self)
+            async def on_submit(inter: discord.Interaction, payload: dict[str, Any]):
+                await self.cog._handle_lineup_submission(inter, self.session, side, payload, self)
 
-        await interaction.response.send_modal(LineupSubmitModal(on_submit))
+            await interaction.response.send_modal(LineupSubmitModal(on_submit))
+        except Exception:
+            logger.exception("Failed to open lineup modal")
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Failed to open lineup form. Please try again.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Failed to open lineup form. Please try again.", ephemeral=True)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Submit Tactics", style=discord.ButtonStyle.success)
     async def submit_tactics(self, interaction: discord.Interaction, button: discord.ui.Button):
-        side = self._resolve_side(interaction)
-        if not side:
-            await interaction.response.send_message("Only assigned managers can submit tactics for their side.", ephemeral=True)
-            return
-        if self.session.state.status not in {"setup"}:
-            await interaction.response.send_message("Tactics submissions are closed for this match.", ephemeral=True)
-            return
+        try:
+            cid = (interaction.data or {}).get("custom_id", "")
+            if isinstance(cid, str) and cid.startswith("ms:"):
+                return  # handled by SimCog.on_interaction persistent dispatcher
+            side = self._resolve_side(interaction)
+            if not side:
+                await interaction.response.send_message("Only assigned managers can submit tactics for their side.", ephemeral=True)
+                return
+            if self.session.state.status not in {"setup"}:
+                await interaction.response.send_message("Tactics submissions are closed for this match.", ephemeral=True)
+                return
 
-        async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
-            await self.cog._handle_tactics_submission(inter, self.session, side, updates, summary, self)
+            async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
+                await self.cog._handle_tactics_submission(inter, self.session, side, updates, summary, self)
 
-        await interaction.response.send_modal(TacticsTextModal(on_submit))
+            await interaction.response.send_modal(TacticsTextModal(on_submit))
+        except Exception:
+            logger.exception("Failed to open tactics modal (setup)")
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Failed to open tactics form. Please try again.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Failed to open tactics form. Please try again.", ephemeral=True)
+            except Exception:
+                pass
 
     @discord.ui.button(label="Cancel Match (Admin)", style=discord.ButtonStyle.danger)
     async def cancel_match(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cid = (interaction.data or {}).get("custom_id", "")
+        if isinstance(cid, str) and cid.startswith("ms:"):
+            return  # handled by SimCog.on_interaction persistent dispatcher
         perms = getattr(interaction.user, "guild_permissions", None)
         is_admin = bool(perms and (perms.administrator or perms.manage_guild))
         is_manager = interaction.user.id in {self.session.home_manager_id, self.session.away_manager_id}
@@ -771,6 +812,316 @@ class SimCog(commands.Cog):
 
     def _side_manager_id(self, session, side: str) -> int | None:
         return session.home_manager_id if side == "home" else session.away_manager_id
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        """Persistent fallback handler for setup/break buttons.
+        Handles custom IDs even when the original View object is no longer in cache
+        (after restart, timeout, or cache eviction).
+        """
+        cid = ""
+        try:
+            if interaction.type != discord.InteractionType.component:
+                return
+            data = interaction.data or {}
+            raw_cid = data.get("custom_id")
+            if not isinstance(raw_cid, str):
+                return
+            cid = raw_cid
+            if cid.startswith("ms:"):
+                await self._handle_ms_component(interaction, cid)
+            elif cid.startswith("br:"):
+                await self._handle_br_component(interaction, cid)
+        except Exception:
+            logger.exception("on_interaction persistent handler failed cid=%s", cid)
+            if isinstance(cid, str) and (cid.startswith("ms:") or cid.startswith("br:")):
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message(
+                            "Something went wrong handling that button. Please try again, or use /tactics as a fallback.",
+                            ephemeral=True,
+                        )
+                    else:
+                        await interaction.followup.send(
+                            "Something went wrong handling that button. Please try again, or use /tactics as a fallback.",
+                            ephemeral=True,
+                        )
+                except Exception:
+                    pass
+
+    async def _get_session_for_interaction(self, match_id: str):
+        session = self.bot.match_service.sessions.get(match_id)
+        if session is None:
+            try:
+                session = await self.bot.match_service.load_from_db(match_id)
+            except Exception:
+                logger.exception("Failed to load session for interaction match_id=%s", match_id)
+                session = None
+        return session
+
+    async def _safe_send(self, interaction: discord.Interaction, content: str, *, ephemeral: bool = True):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(content, ephemeral=ephemeral)
+            else:
+                await interaction.followup.send(content, ephemeral=ephemeral)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _resolve_side_for_session(session, user_id: int | None) -> str | None:
+        if user_id is None:
+            return None
+        if user_id == session.home_manager_id:
+            return "home"
+        if user_id == session.away_manager_id:
+            return "away"
+        return None
+
+    async def _handle_ms_component(self, interaction: discord.Interaction, cid: str):
+        # Format: ms:<match_id>:<action>
+        parts = cid.split(":")
+        if len(parts) != 3:
+            await self._safe_send(interaction, "Invalid button. Please try again.", ephemeral=True)
+            return
+        _, match_id, action = parts
+        uid = interaction.user.id if interaction.user else None
+
+        # Fast in-memory lookup; avoid DB load before modal responses.
+        session = self.bot.match_service.sessions.get(match_id)
+
+        if action in {"lineup", "tactics"}:
+            # Modal must be the initial response. Validate quickly from memory when possible;
+            # always revalidate in modal submit callback.
+            if session is not None:
+                side = self._resolve_side_for_session(session, uid)
+                if not side:
+                    await self._safe_send(interaction, "Only assigned managers can submit for their side.", ephemeral=True)
+                    return
+                if session.state.status != "setup":
+                    await self._safe_send(interaction, "Submissions are closed for this match.", ephemeral=True)
+                    return
+
+            if action == "lineup":
+                async def on_submit_lineup(inter: discord.Interaction, payload: dict[str, Any]):
+                    try:
+                        if not inter.response.is_done():
+                            await inter.response.defer(ephemeral=True)
+                    except Exception:
+                        pass
+                    try:
+                        sess = await self._get_session_for_interaction(match_id)
+                        if sess is None:
+                            await self._safe_send(inter, "This match session is no longer available.", ephemeral=True)
+                            return
+                        s = self._resolve_side_for_session(sess, inter.user.id if inter.user else None)
+                        if not s:
+                            await self._safe_send(inter, "Only assigned managers can submit this lineup.", ephemeral=True)
+                            return
+                        await self._handle_lineup_submission(inter, sess, s, payload, None)
+                    except Exception:
+                        logger.exception("ms:lineup modal submit failed match_id=%s", match_id)
+                        await self._safe_send(inter, "Failed to submit lineup. Please try again.", ephemeral=True)
+                try:
+                    await interaction.response.send_modal(LineupSubmitModal(on_submit_lineup))
+                except Exception:
+                    logger.exception("ms:lineup send_modal failed match_id=%s", match_id)
+                    await self._safe_send(interaction, "Failed to open lineup form. Please retry, or use /lineup.", ephemeral=True)
+                return
+
+            # tactics
+            async def on_submit_tactics(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
+                try:
+                    if not inter.response.is_done():
+                        await inter.response.defer(ephemeral=True)
+                except Exception:
+                    pass
+                try:
+                    sess = await self._get_session_for_interaction(match_id)
+                    if sess is None:
+                        await self._safe_send(inter, "This match session is no longer available.", ephemeral=True)
+                        return
+                    s = self._resolve_side_for_session(sess, inter.user.id if inter.user else None)
+                    if not s:
+                        await self._safe_send(inter, "Only assigned managers can submit tactics for this side.", ephemeral=True)
+                        return
+                    await self._handle_tactics_submission(inter, sess, s, updates, summary, None)
+                except Exception:
+                    logger.exception("ms:tactics modal submit failed match_id=%s", match_id)
+                    await self._safe_send(inter, "Failed to save tactics. Please try again, or use /tactics.", ephemeral=True)
+            try:
+                await interaction.response.send_modal(TacticsTextModal(on_submit_tactics))
+            except Exception:
+                logger.exception("ms:tactics send_modal failed match_id=%s", match_id)
+                await self._safe_send(interaction, "Failed to open tactics form. Please retry, or use /tactics.", ephemeral=True)
+            return
+
+        # Non-modal actions: defer immediately to avoid 3s timeout
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
+        if session is None:
+            session = await self._get_session_for_interaction(match_id)
+        if session is None:
+            await self._safe_send(interaction, "This match session is no longer available. Please start a new /sim.", ephemeral=True)
+            return
+
+        side = self._resolve_side_for_session(session, uid)
+
+        if action == "squad":
+            if not side:
+                await self._safe_send(interaction, "Only assigned managers can view their squad privately here.", ephemeral=True)
+                return
+            try:
+                team = session.state.team(side)
+                squad = await self.bot.football_data.get_squad(team.team.api_id)
+                text = format_squad_for_manager(squad)
+                header = f"**{team.team.name} — Available Squad**\nFormation: `{team.lineup.formation}` (current)\n\n"
+                await interaction.followup.send(_clamp(header + "```\n" + text + "\n```", 1900), ephemeral=True)
+            except Exception:
+                logger.exception("ms:squad failed match_id=%s", match_id)
+                await self._safe_send(interaction, "Failed to load squad. Please try again.", ephemeral=True)
+            return
+
+        if action == "cancel":
+            perms = getattr(interaction.user, "guild_permissions", None)
+            is_admin = bool(perms and (perms.administrator or perms.manage_guild))
+            is_manager = uid in {session.home_manager_id, session.away_manager_id}
+            if not (is_admin or is_manager):
+                await self._safe_send(interaction, "Only a manager or server admin can cancel this match.", ephemeral=True)
+                return
+            try:
+                session.state.status = "cancelled"
+                session.state.phase = "cancelled"
+                await session.save()
+                try:
+                    ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                    if ch is None and session.state.channel_id:
+                        ch = await self.bot.fetch_channel(session.state.channel_id)
+                    if ch and session.state.message_id:
+                        msg = await ch.fetch_message(int(session.state.message_id))
+                        await msg.edit(content="Match cancelled.", embed=build_match_setup_embed(session), view=None)
+                except Exception:
+                    pass
+                await self._safe_send(interaction, "Match cancelled.", ephemeral=True)
+            except Exception:
+                logger.exception("ms:cancel failed match_id=%s", match_id)
+                await self._safe_send(interaction, "Failed to cancel match. Please try again.", ephemeral=True)
+            return
+
+        await self._safe_send(interaction, "Unknown setup action. Please try again.", ephemeral=True)
+
+    async def _handle_br_component(self, interaction: discord.Interaction, cid: str):
+        # Format: br:<match_id>:<action>
+        parts = cid.split(":")
+        if len(parts) != 3:
+            await self._safe_send(interaction, "Invalid button. Please try again.", ephemeral=True)
+            return
+        _, match_id, action = parts
+        uid = interaction.user.id if interaction.user else None
+
+        session = self.bot.match_service.sessions.get(match_id)
+
+        if action == "submit":
+            # Modal must be the initial response. Fast in-memory validation when possible.
+            if session is not None:
+                side = self._resolve_side_for_session(session, uid)
+                if not side:
+                    await self._safe_send(interaction, "Only assigned human managers can submit tactics for their side.", ephemeral=True)
+                    return
+                if session.state.status in {"finished", "cancelled"} or not session.state.pending_break:
+                    await self._safe_send(interaction, "No active tactical break for this match.", ephemeral=True)
+                    return
+
+            async def on_submit(inter: discord.Interaction, updates: dict[str, Any], summary: str | None):
+                try:
+                    if not inter.response.is_done():
+                        await inter.response.defer(ephemeral=True)
+                except Exception:
+                    pass
+                try:
+                    sess = await self._get_session_for_interaction(match_id)
+                    if sess is None:
+                        await inter.followup.send("This match session is no longer available.", ephemeral=True)
+                        return
+                    s = self._resolve_side_for_session(sess, inter.user.id if inter.user else None)
+                    if not s:
+                        await inter.followup.send("Only assigned human managers can submit tactics for their side.", ephemeral=True)
+                        return
+                    if sess.state.status in {"finished", "cancelled"} or not sess.state.pending_break:
+                        await inter.followup.send("No active tactical break for this match.", ephemeral=True)
+                        return
+                    await sess.apply_break_actions(s, substitutions=[], tactics_updates=updates, summary=summary or "Manager submitted tactics")
+                    await inter.followup.send(f"{s.title()} tactics submitted privately and side marked ready.", ephemeral=True)
+                except Exception:
+                    logger.exception("br:submit modal save failed match_id=%s", match_id)
+                    try:
+                        await inter.followup.send("Failed to save tactics. Please try again, or use /tactics.", ephemeral=True)
+                    except Exception:
+                        pass
+
+            try:
+                await interaction.response.send_modal(TacticsTextModal(on_submit))
+            except Exception:
+                logger.exception("br:submit send_modal failed match_id=%s", match_id)
+                await self._safe_send(interaction, "Failed to open tactics form. Please use /tactics as a fallback.", ephemeral=True)
+            return
+
+        # Non-modal actions: defer immediately
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
+        if session is None:
+            session = await self._get_session_for_interaction(match_id)
+        if session is None:
+            await self._safe_send(interaction, "This match session is no longer available.", ephemeral=True)
+            return
+
+        side = self._resolve_side_for_session(session, uid)
+
+        if action == "keep":
+            if not side:
+                await self._safe_send(interaction, "Only assigned human managers can confirm for their side in manager mode.", ephemeral=True)
+                return
+            if session.state.status in {"finished", "cancelled"} or not session.state.pending_break:
+                await self._safe_send(interaction, "No active tactical break for this match.", ephemeral=True)
+                return
+            try:
+                await session.apply_break_actions(side, substitutions=[], tactics_updates={}, summary=None)
+                await self._safe_send(interaction, f"{side.title()} side: current tactics kept and marked ready.", ephemeral=True)
+            except Exception:
+                logger.exception("br:keep failed match_id=%s side=%s", match_id, side)
+                await self._safe_send(interaction, "Failed to keep current tactics. Please try again.", ephemeral=True)
+            return
+
+        if action == "ai":
+            if not side:
+                await self._safe_send(interaction, "Only assigned human managers can use this for their side.", ephemeral=True)
+                return
+            if session.state.status in {"finished", "cancelled"} or not session.state.pending_break:
+                await self._safe_send(interaction, "No active tactical break for this match.", ephemeral=True)
+                return
+            try:
+                from engine.ai_manager import decide_ai_break_actions
+                actions = decide_ai_break_actions(session.state, side)
+                await session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Manager accepted AI adjustment")
+                subs = actions.get("substitutions", [])
+                txt = "AI adjustments applied and side marked ready."
+                if subs:
+                    txt += " Subs: " + ", ".join([f"{s.get('on_name')} for {s.get('off_name')}" for s in subs])
+                await self._safe_send(interaction, txt[:1900], ephemeral=True)
+            except Exception:
+                logger.exception("br:ai failed match_id=%s side=%s", match_id, side)
+                await self._safe_send(interaction, "Failed to apply AI adjustments. Please try again.", ephemeral=True)
+            return
+
+        await self._safe_send(interaction, "Unknown break action. Please try again.", ephemeral=True)
 
     async def _handle_lineup_submission(self, interaction: discord.Interaction, session, side: str, payload: dict[str, Any], view: ManagerSetupView | None = None):
         try:
@@ -905,8 +1256,26 @@ class SimCog(commands.Cog):
         await session.save()
         # Refresh setup message
         try:
+            embed = build_match_setup_embed(session)
             if view and view.message:
-                await view.message.edit(embed=build_match_setup_embed(session), view=view)
+                await view.message.edit(embed=embed, view=view)
+            elif session.state.channel_id and session.state.message_id:
+                ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                if ch is None:
+                    try:
+                        ch = await self.bot.fetch_channel(session.state.channel_id)
+                    except Exception:
+                        ch = None
+                if ch:
+                    try:
+                        msg = await ch.fetch_message(int(session.state.message_id))
+                        if view:
+                            view.message = msg
+                            await msg.edit(embed=embed, view=view)
+                        else:
+                            await msg.edit(embed=embed)
+                    except Exception:
+                        pass
         except Exception:
             logger.exception("Failed to refresh setup embed")
         # Start if ready
@@ -922,14 +1291,40 @@ class SimCog(commands.Cog):
             return
         sub["match_started"] = True
         await session.save()
-        if view:
-            for child in view.children:
-                child.disabled = True
-            try:
+        try:
+            if view:
+                for child in view.children:
+                    child.disabled = True
                 if view.message:
                     await view.message.edit(embed=build_match_setup_embed(session), view=view)
-            except Exception:
-                pass
+                elif session.state.channel_id and session.state.message_id:
+                    ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                    if ch is None:
+                        try:
+                            ch = await self.bot.fetch_channel(session.state.channel_id)
+                        except Exception:
+                            ch = None
+                    if ch:
+                        try:
+                            msg = await ch.fetch_message(int(session.state.message_id))
+                            await msg.edit(embed=build_match_setup_embed(session), view=None)
+                        except Exception:
+                            pass
+            elif session.state.channel_id and session.state.message_id:
+                ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                if ch is None:
+                    try:
+                        ch = await self.bot.fetch_channel(session.state.channel_id)
+                    except Exception:
+                        ch = None
+                if ch:
+                    try:
+                        msg = await ch.fetch_message(int(session.state.message_id))
+                        await msg.edit(embed=build_match_setup_embed(session), view=None)
+                    except Exception:
+                        pass
+        except Exception:
+            logger.exception("Failed to disable setup view on match start")
         try:
             ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
             if ch:
@@ -1490,7 +1885,8 @@ class SimCog(commands.Cog):
                         # Simulate rest of segment (engine already started)
                         async with session.lock:
                             try:
-                                step = session.engine.simulate_until_break_or_end()
+                                loop = asyncio.get_running_loop()
+                                step = await loop.run_in_executor(None, session.engine.simulate_until_break_or_end)
                                 sim_evs = step.events
                                 await session.append_events(sim_evs)
                             except Exception:
@@ -1519,7 +1915,8 @@ class SimCog(commands.Cog):
                             evs = []
                         if not evs and session.state.status != "finished":
                             async with session.lock:
-                                step = session.engine.simulate_until_break_or_end()
+                                loop = asyncio.get_running_loop()
+                                step = await loop.run_in_executor(None, session.engine.simulate_until_break_or_end)
                                 evs = step.events
                                 await session.append_events(evs)
                                 await session.save()
@@ -1561,15 +1958,18 @@ class SimCog(commands.Cog):
                     _log_state("recovery")
                     try:
                         if session.state.status != "finished" and not session.state.pending_break:
-                            step = session.engine.simulate_until_break_or_end()
-                            if step.events:
-                                # Send first so play-by-play is not lost if persistence fails.
-                                await self._send_events_live(channel, step.events, delay=3.0, state=session.state)
-                                try:
-                                    await session.append_events(step.events)
-                                    await session.save()
-                                except Exception:
-                                    logger.exception("MATCH_FLOW recovery persist failed match_id=%s", session.state.id)
+                            async with session.lock:
+                                loop = asyncio.get_running_loop()
+                                step = await loop.run_in_executor(None, session.engine.simulate_until_break_or_end)
+                                recovery_evs = list(step.events or [])
+                                if recovery_evs:
+                                    try:
+                                        await session.append_events(recovery_evs)
+                                        await session.save()
+                                    except Exception:
+                                        logger.exception("MATCH_FLOW recovery persist failed match_id=%s", session.state.id)
+                            if recovery_evs:
+                                await self._send_events_live(channel, recovery_evs, delay=3.0, state=session.state)
                         await asyncio.sleep(0.5)
                     except Exception:
                         logger.exception("Match flow recovery failed match_id=%s", session.state.id)

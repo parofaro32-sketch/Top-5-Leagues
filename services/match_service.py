@@ -93,7 +93,8 @@ class ActiveMatchSession:
                 except Exception:
                     logger.exception("MATCH_SERVICE tick_callback failed (start) match_id=%s", self.state.id)
             try:
-                step = self.engine.simulate_until_break_or_end()
+                loop = asyncio.get_running_loop()
+                step = await loop.run_in_executor(None, self.engine.simulate_until_break_or_end)
                 out.extend(step.events)
                 await self.append_events(step.events)
                 if tick_callback and step.events:
@@ -120,7 +121,8 @@ class ActiveMatchSession:
                 except Exception:
                     logger.exception("MATCH_SERVICE tick_callback failed (resume) match_id=%s", self.state.id)
             try:
-                step = self.engine.simulate_until_break_or_end()
+                loop = asyncio.get_running_loop()
+                step = await loop.run_in_executor(None, self.engine.simulate_until_break_or_end)
                 evs.extend(step.events)
                 await self.append_events(step.events)
                 if tick_callback and step.events:
