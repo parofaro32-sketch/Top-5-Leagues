@@ -334,6 +334,14 @@ class Database:
                overall=excluded.overall,potential=excluded.potential,status=excluded.status,
                attributes_json=excluded.attributes_json,statistics_json=excluded.statistics_json,raw_json=excluded.raw_json,updated_at=excluded.updated_at""", rows)
 
+    async def delete_stale_players_for_team(self, team_api_id: int, season: int, keep_api_ids: list[int]) -> None:
+        if not keep_api_ids:
+            await self.execute("DELETE FROM players WHERE team_api_id=? AND season=?", (team_api_id, season))
+            return
+        placeholders = ",".join("?" for _ in keep_api_ids)
+        params = [team_api_id, season, *[int(x) for x in keep_api_ids]]
+        await self.execute(f"DELETE FROM players WHERE team_api_id=? AND season=? AND api_id NOT IN ({placeholders})", params)
+
     async def get_teams(self, season: int, query: str | None = None, limit: int = 25) -> list[aiosqlite.Row]:
         if query:
             like = f"%{query.strip()}%"

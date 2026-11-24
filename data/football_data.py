@@ -148,7 +148,7 @@ class FootballDataService:
 
     async def ensure_seeded(self) -> None:
         # Seed bundled teams/players into DB for fast lookup and persistence
-        seed_key = "bundled_seed_v7_2026_27_upgrade"
+        seed_key = "bundled_seed_v8_fc27_sync"
         meta = await self.db.get_cache_meta(seed_key)
         if meta:
             return
@@ -158,6 +158,12 @@ class FootballDataService:
             for t in teams:
                 players = [normalize_player(p, t["api_id"]) for p in get_team_players(t["api_id"], league_key)]
                 await self.db.upsert_players(players, t["api_id"], self.season)
+                # Remove stale DB rows no longer present in bundled FC27 roster
+                keep_ids = [int(p["api_id"]) for p in players if p.get("api_id") is not None]
+                try:
+                    await self.db.delete_stale_players_for_team(int(t["api_id"]), self.season, keep_ids)
+                except Exception:
+                    logger.exception("Failed to delete stale players for team_api_id=%s", t.get("api_id"))
         await self.db.set_cache_meta(seed_key, {"ok": True, "season": self.season}, None)
 
     async def list_teams(self, query: str | None = None, league: str | None = None, limit: int = 25) -> list[dict[str, Any]]:
