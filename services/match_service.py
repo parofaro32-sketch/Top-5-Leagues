@@ -135,14 +135,15 @@ class ActiveMatchSession:
             await self.save()
             return evs
 
-    async def apply_break_actions(self, side: str, substitutions: list[dict[str, Any]] | None = None, tactics_updates: dict[str, Any] | None = None, summary: str | None = None) -> list[dict[str, Any]]:
+    async def apply_break_actions(self, side: str, substitutions: list[dict[str, Any]] | None = None, tactics_updates: dict[str, Any] | None = None, summary: str | None = None, mark_done: bool = True) -> list[dict[str, Any]]:
         async with self.lock:
             evs: list[dict[str, Any]] = []
             for sub in (substitutions or []):
                 evs.append(self.engine.apply_substitution(side, int(sub["off_player_id"]), int(sub["on_player_id"]), reason=sub.get("reason")))
             if tactics_updates or summary:
                 evs.append(self.engine.apply_tactical_change(side, tactics_updates or {}, summary=summary))
-            self.engine.mark_break_decision(side, True)
+            if mark_done:
+                self.engine.mark_break_decision(side, True)
             await self.append_events(evs)
             await self.save()
             return evs

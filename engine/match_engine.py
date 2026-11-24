@@ -167,6 +167,20 @@ class MatchEngine:
         for s in ("home", "away"):
             self._momentum[s] += (50.0 - self._momentum[s]) * 0.01
 
+    def _is_recent_commentary(self, text: str) -> bool:
+        norm = self._norm_line(text)
+        if not norm:
+            return False
+        recent = [self._norm_line(x) for x in list(self._recent_lines)[-30:] if x]
+        if norm in recent:
+            return True
+        # also catch near-duplicates (same opening + same event type text)
+        head = " ".join(norm.split()[:10])
+        for r in recent[-12:]:
+            if head and head == " ".join(r.split()[:10]) and len(head) > 20:
+                return True
+        return False
+
     def _emit(self, et: str, side: Side | None = None, pid: int | None = None, payload: dict[str, Any] | None = None, commentary: str | None = None, public_payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
         pub = payload if public_payload is None else public_payload
@@ -176,17 +190,20 @@ class MatchEngine:
         if commentary is None:
             try:
                 commentary = gen_commentary(self.state, ev, self.rng)
+                # retry a few times if too similar to recent commentary
+                for _ in range(3):
+                    if not self._is_recent_commentary(str(commentary or "")):
+                        break
+                    commentary = gen_commentary(self.state, ev, self.rng)
             except Exception:
                 logger.exception("ENGINE commentary generation failed et=%s match_id=%s", et, getattr(self.state, 'id', None))
                 commentary = payload.get("detail") or payload.get("summary") or ""
         text = str(commentary or "").strip()
-        norm = self._norm_line(text)
-        if norm and norm in {self._norm_line(x) for x in list(self._recent_lines)[-25:]}:
+        if self._is_recent_commentary(text):
             suffix = self._context_suffix(et, side)
             if suffix and not text.endswith(suffix.strip()):
                 text = text.rstrip() + suffix
-            else:
-                # fallback variation: add minute/score context
+            if self._is_recent_commentary(text):
                 text = text.rstrip() + f" ({self.state.minute}'; {self.state.scoreline()})"
         if text:
             self._recent_lines.append(text)

@@ -55,6 +55,7 @@ class BreakControlView(discord.ui.View):
         try:
             self.confirm_ready.custom_id = f"br:{match_id}:keep"
             self.submit_tactics.custom_id = f"br:{match_id}:submit"
+            self.submit_subs.custom_id = f"br:{match_id}:subs"
             self.ai_ready.custom_id = f"br:{match_id}:ai"
         except Exception:
             pass
@@ -124,6 +125,48 @@ class BreakControlView(discord.ui.View):
                     await interaction.response.send_message("Failed to open tactics form. Please try again.", ephemeral=True)
                 else:
                     await interaction.followup.send("Failed to open tactics form. Please try again.", ephemeral=True)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="Submit Subs", style=discord.ButtonStyle.primary)
+    async def submit_subs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            cid = (interaction.data or {}).get("custom_id", "")
+            if isinstance(cid, str) and cid.startswith("br:"):
+                return  # handled by SimCog.on_interaction persistent dispatcher
+            side = await self._resolve_side(interaction)
+            if not side:
+                await interaction.response.send_message("Only assigned human managers can submit subs for their side.", ephemeral=True)
+                return
+            from bot.ui.modals import SubsTextModal
+            from services.lineup_service import LineupValidationError, parse_break_subs_text
+
+            async def on_submit(inter: discord.Interaction, raw: str):
+                try:
+                    if not inter.response.is_done():
+                        await inter.response.defer(ephemeral=True)
+                except Exception:
+                    pass
+                try:
+                    subs = parse_break_subs_text(raw, self.session.state, side)
+                    await self.session.apply_break_actions(side, substitutions=subs, tactics_updates={}, summary=None, mark_done=False)
+                    sub_txt = ", ".join([f"{s['off_name']}→{s['on_name']}" for s in subs])
+                    await inter.followup.send(f"{side.title()} substitutions applied: {sub_txt}. You can still submit tactics or keep current tactics.".strip()[:1900], ephemeral=True)
+                except (LineupValidationError, ValueError) as e:
+                    await inter.followup.send(f"Invalid substitutions: {e}", ephemeral=True)
+                except Exception:
+                    try:
+                        await inter.followup.send("Failed to apply substitutions. Please try again.", ephemeral=True)
+                    except Exception:
+                        pass
+
+            await interaction.response.send_modal(SubsTextModal(on_submit))
+        except Exception:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("Failed to open subs form. Please try again.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Failed to open subs form. Please try again.", ephemeral=True)
             except Exception:
                 pass
 

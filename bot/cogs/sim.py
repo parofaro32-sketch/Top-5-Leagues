@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -10,9 +11,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.ui.modals import LineupSubmitModal, TacticsTextModal
+from bot.ui.modals import LineupSubmitModal, SubsTextModal, TacticsTextModal
 from bot.ui.views import BreakControlView, LeagueSelect, SimpleChoiceView, TeamSelect
-from services.lineup_service import LineupValidationError, format_squad_for_manager, parse_lineup_submission
+from services.lineup_service import LineupValidationError, format_squad_for_manager, parse_break_subs_text, parse_lineup_submission, resolve_player_ref
 
 logger = logging.getLogger(__name__)
 
@@ -1070,6 +1071,57 @@ class SimCog(commands.Cog):
                 await self._safe_send(interaction, "Failed to open tactics form. Please use /tactics as a fallback.", ephemeral=True)
             return
 
+        if action == "subs":
+            if session is not None:
+                side = self._resolve_side_for_session(session, uid)
+                if not side:
+                    await self._safe_send(interaction, "Only assigned human managers can submit subs for their side.", ephemeral=True)
+                    return
+                if session.state.status in {"finished", "cancelled"} or not session.state.pending_break:
+                    await self._safe_send(interaction, "No active tactical break for this match.", ephemeral=True)
+                    return
+
+            async def on_submit_subs(inter: discord.Interaction, raw: str):
+                try:
+                    if not inter.response.is_done():
+                        await inter.response.defer(ephemeral=True)
+                except Exception:
+                    pass
+                try:
+                    sess = await self._get_session_for_interaction(match_id)
+                    if sess is None:
+                        await inter.followup.send("This match session is no longer available.", ephemeral=True)
+                        return
+                    s = self._resolve_side_for_session(sess, inter.user.id if inter.user else None)
+                    if not s:
+                        await inter.followup.send("Only assigned human managers can submit subs for their side.", ephemeral=True)
+                        return
+                    if sess.state.status in {"finished", "cancelled"} or not sess.state.pending_break:
+                        await inter.followup.send("No active tactical break for this match.", ephemeral=True)
+                        return
+                    subs = parse_break_subs_text(raw, sess.state, s)
+                    await sess.apply_break_actions(s, substitutions=subs, tactics_updates={}, summary=None, mark_done=False)
+                    sub_txt = ", ".join([f"{x['off_name']}→{x['on_name']}" for x in subs])
+                    await inter.followup.send(f"{s.title()} substitutions applied: {sub_txt}. You can still submit tactics or keep current tactics.".strip()[:1900], ephemeral=True)
+                except (LineupValidationError, ValueError) as e:
+                    try:
+                        await inter.followup.send(f"Invalid substitutions: {e}", ephemeral=True)
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.exception("br:subs modal save failed match_id=%s", match_id)
+                    try:
+                        await inter.followup.send("Failed to apply substitutions. Please try again.", ephemeral=True)
+                    except Exception:
+                        pass
+
+            try:
+                await interaction.response.send_modal(SubsTextModal(on_submit_subs))
+            except Exception:
+                logger.exception("br:subs send_modal failed match_id=%s", match_id)
+                await self._safe_send(interaction, "Failed to open subs form. Please try again.", ephemeral=True)
+            return
+
         # Non-modal actions: defer immediately
         try:
             if not interaction.response.is_done():
@@ -1513,27 +1565,77 @@ class SimCog(commands.Cog):
         if not events:
             logger.warning("MATCH_FLOW send_events_live: empty events list match_id=%s", match_id)
             return
+
+        KEY_EVENTS = {"goal", "penalty_scored", "penalty_saved", "penalty_missed", "red_card", "second_yellow", "disallowed_goal", "var_review", "var_overturn"}
+        MED_EVENTS = {"substitution", "tactical_change", "injury", "yellow_card", "penalty_awarded"}
+
+        def ev_min(ev):
+            return int(ev.get("minute", getattr(state, "minute", 0) or 0) or 0)
+
+        def ev_extra(ev):
+            return int(ev.get("extra_minute", getattr(state, "extra_minute", 0) or 0) or 0)
+
         sent = 0
         silent = 0
-        for ev in events:
+        last_min = None
+        routine_buf: list[str] = []
+
+        async def flush_routine():
+            nonlocal sent, routine_buf
+            if not routine_buf:
+                return
+            msg = "\n".join(routine_buf)
+            # split if too long
+            if len(msg) <= 1900:
+                chunks = [msg]
+            else:
+                chunks = []
+                cur = ""
+                for line in routine_buf:
+                    if len(cur) + len(line) + 1 > 1850:
+                        if cur:
+                            chunks.append(cur)
+                        cur = line
+                    else:
+                        cur = (cur + "\n" + line) if cur else line
+                if cur:
+                    chunks.append(cur)
+            for c in chunks:
+                try:
+                    await channel.send(_clamp(c, 1900))
+                    sent += 1
+                except Exception:
+                    logger.exception("Failed to send routine batch")
+            routine_buf = []
+
+        for i, ev in enumerate(events):
             text = ev.get("commentary")
             payload = ev.get("payload") or {}
             et = ev.get("event_type")
+            minute = ev_min(ev)
+            extra = ev_extra(ev)
+
+            # Minute jump marker for presentation pacing
+            if last_min is not None and minute - last_min >= 5:
+                await flush_routine()
+                try:
+                    gap_msg = f"⏱️ Minutes {last_min + 1}'–{minute - 1}' pass with play continuing..."
+                    await channel.send(_clamp(gap_msg, 1900))
+                    sent += 1
+                except Exception:
+                    pass
+
             if not text:
-                # CHANCE events are intentionally paired with rich outcome narratives; avoid duplicate display
                 if et != "chance":
                     text = payload.get("detail") or payload.get("summary") or ""
             if not text:
-                # fallback: skip silent/internal events but keep pacing sane
                 silent += 1
-                if delay > 0:
-                    await asyncio.sleep(delay)
+                last_min = max(last_min, minute) if last_min is not None else minute
                 continue
+
             try:
-                et = ev.get("event_type")
                 if et in {"goal", "penalty_scored"} and state is not None:
-                    minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
-                    extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
+                    await flush_routine()
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
                     side = ev.get("team_side")
                     scorer = payload.get("player_name") or payload.get("scorer_name")
@@ -1574,9 +1676,10 @@ class SimCog(commands.Cog):
                         banner = f"# ⚽ {home_name.upper()} {hs}-{as_} {away_name.upper()}"
                         await channel.send(_clamp(banner, 1900))
                     sent += 1
+                    await asyncio.sleep(1.5)
+
                 elif et == "substitution" and state is not None:
-                    minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
-                    extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
+                    await flush_routine()
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
                     side = ev.get("team_side")
                     team_name = state.team(side).team.name if side else "Team"
@@ -1587,22 +1690,36 @@ class SimCog(commands.Cog):
                     msg = f"- **{mtxt}** — 🔁 **Substitution ({team_name}):** {on_name} comes on for {off_name}{reason_txt}."
                     await channel.send(_clamp(msg, 1900))
                     sent += 1
+                    await asyncio.sleep(0.8)
+
                 elif et == "tactical_change" and state is not None:
-                    minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
-                    extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
+                    await flush_routine()
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
                     side = ev.get("team_side")
                     team_name = state.team(side).team.name if side else "Team"
                     msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** tactical adjustments made."
                     await channel.send(_clamp(msg, 1900))
                     sent += 1
-                else:
+                    await asyncio.sleep(0.6)
+
+                elif et in KEY_EVENTS or et in MED_EVENTS:
+                    await flush_routine()
                     await channel.send(_clamp(str(text), 1900))
                     sent += 1
+                    await asyncio.sleep(0.8 if et in KEY_EVENTS else 0.4)
+
+                else:
+                    # Routine event: batch for pacing/compression
+                    routine_buf.append(_clamp(str(text), 350))
+                    if len(routine_buf) >= 4:
+                        await flush_routine()
+                        await asyncio.sleep(0.15)
             except Exception:
                 logger.exception("Failed to send match event message")
-            if delay > 0:
-                await asyncio.sleep(delay)
+
+            last_min = max(last_min, minute) if last_min is not None else minute
+
+        await flush_routine()
         logger.info("MATCH_FLOW send_events_live done match_id=%s total=%s sent=%s silent=%s", match_id, len(events), sent, silent)
 
     async def _send_live_ratings(self, channel: discord.abc.Messageable, session) -> None:

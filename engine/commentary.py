@@ -252,6 +252,9 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
             f"{pfx} — Controlled spell for {team}: measured passing, support angles, and careful tempo as they try to unbalance {opp}'s defensive structure without forcing the final ball.{t_hint}",
             f"{pfx} — {team} work the ball across midfield and into wider channels, testing {opp}'s compactness and recovery runs as the tactical chess match continues at {score}.{s_hint}",
             f"{pfx} — {opp} apply pressure in phases, but {team} remain composed in possession, recycling play and resetting their attacking shape to find a cleaner route forward.{t_hint}",
+            f"{pfx} — {team} knock it around confidently, drawing {opp} across before looking to slip a runner in behind the defensive line.{t_hint}",
+            f"{pfx} — A patient buildup from {team}: the center-backs step forward, midfielders offer angles, and the ball moves quickly enough to keep {opp} shifting.{s_hint}",
+            f"{pfx} — {team} probe down the flank, then recycle inside when the crossing lane closes, keeping {opp} working defensively at {score}.",
         ])
 
     if et == E.CHANCE:
@@ -259,6 +262,7 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
             f"{pfx} — CHANCE! {team} unlock space with incisive movement and a well-timed pass, allowing {player} to attack a dangerous area as {opp} scramble to recover their defensive positions.{s_hint}",
             f"{pfx} — CHANCE! A sharp attacking sequence from {team} {flav} cuts through the pressure, and {player} suddenly finds a promising opening in and around the box.{s_hint}",
             f"{pfx} — CHANCE! {team}'s buildup pays off as {player} receives in a threatening pocket, forcing {opp}'s back line into a desperate defensive reaction.",
+            f"{pfx} — CHANCE! {player} finds space between the lines for {team}, and suddenly {opp} are backpedaling toward their own goal.{s_hint}",
         ])
 
     if et == E.SHOT:
@@ -267,16 +271,19 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
             return _pick(rng, [
                 f"{pfx} — {player} connects cleanly for {team}, driving an effort on target that tests the goalkeeper's positioning and reactions in a high-pressure moment.",
                 f"{pfx} — Well-struck attempt by {player}. The shot carries intent and accuracy, forcing a response as {opp} are briefly opened up.",
+                f"{pfx} — {player} lets fly for {team}, forcing the goalkeeper into action with a firm strike toward goal.",
             ])
         if outcome == "blocked":
             return _pick(rng, [
                 f"{pfx} — {player} gets a shot away for {team}, but a defender reads the danger and throws himself into the line to produce a vital block.",
                 f"{pfx} — Determined defending from {opp} as {player}'s effort is charged down inside a crowded area, denying what looked a promising strike.",
+                f"{pfx} — {player} shoots through bodies, but {opp} get a crucial block in and the danger is snuffed out.",
             ])
         return _pick(rng, [
             f"{pfx} — {player} finds a shooting opportunity for {team} {flav}, but the execution falls short and the effort misses the target.",
             f"{pfx} — A glimpse of goal for {player}, who tries to pick his spot under pressure yet cannot keep the attempt on frame.",
             f"{pfx} — {team} work an opening, but {player}'s finish lacks the required precision and {opp} survive the moment.",
+            f"{pfx} — {player} goes for goal from a decent position, but drags the effort wide as {opp} breathe again.",
         ])
 
     if et == E.SAVE:
@@ -297,6 +304,7 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         return _pick(rng, [
             f"{pfx} — Corner to {team} after sustained pressure in the final third forces {opp} to turn the ball behind. A set-piece chance to test organization and aerial strength.",
             f"{pfx} — {team} win a corner {flav}. Deliveries and movement in the box could be decisive here as {opp} prepare to defend.",
+            f"{pfx} — Corner kick for {team}. {opp} clear their lines for now, but the set piece gives {team} another chance to load the box.",
         ])
 
     if et == E.FOUL:
@@ -305,6 +313,7 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         return _pick(rng, [
             f"{pfx} — Foul by {player} on {fouled} ({reason}). The referee stops play and awards {opp} a free kick, breaking up the momentum of the move.",
             f"{pfx} — {player} mistimes the challenge on {fouled} and concedes a foul for {reason}. {opp} have an opportunity to regroup or threaten from the set piece.",
+            f"{pfx} — {player} catches {fouled} and the whistle goes. {opp} win the free kick after {reason}.",
         ])
 
     if et == E.FREE_KICK:
@@ -436,4 +445,6 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         f"{pfx} — {team} and {opp} continue to contest every inch {flav}, with tactical discipline and execution in transitions shaping this phase at {score}.{t_hint}",
         f"{pfx} — The battle for control remains finely balanced. {team} look to execute their plan while {opp} respond with organization and selective pressure.{s_hint}",
         f"{pfx} — Play flows on at {score}. Spacing, timing, and decision-making in possession are defining the rhythm of this spell between {team} and {opp}.",
+        f"{pfx} — {team} keep probing, but {opp} hold their shape well {flav}, waiting for a chance to break.{s_hint}",
+        f"{pfx} — A cagey spell at {score}: {team} have the ball, {opp} have the block, and both sides are looking for the next mistake.{t_hint}",
     ])

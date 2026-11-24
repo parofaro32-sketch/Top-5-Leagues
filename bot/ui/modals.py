@@ -113,3 +113,27 @@ class LineupSubmitModal(discord.ui.Modal, title="Submit Lineup"):
                 await interaction.response.send_message(f"Failed to submit lineup: {e}", ephemeral=True)
             else:
                 await interaction.followup.send(f"Failed to submit lineup: {e}", ephemeral=True)
+
+
+class SubsTextModal(discord.ui.Modal, title="Submit Substitutions"):
+    subs_text = discord.ui.TextInput(
+        label="Subs (one per line: OFF -> ON)",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=1000,
+        placeholder="Saka -> Martinelli\n7 -> 11",
+    )
+
+    def __init__(self, on_submit_data):
+        super().__init__()
+        self._on_submit_data = on_submit_data
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.subs_text.value or "").strip()
+        try:
+            await self._on_submit_data(interaction, raw)
+        except Exception as e:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"Failed to submit substitutions: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"Failed to submit substitutions: {e}", ephemeral=True)
