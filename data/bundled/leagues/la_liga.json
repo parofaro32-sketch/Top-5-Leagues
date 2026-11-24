@@ -2353,6 +2353,46 @@
           "potential": 74,
           "status": "active",
           "injured": false
+        },
+        {
+          "name": "Marcus Rashford",
+          "firstname": "Marcus",
+          "lastname": "Rashford",
+          "age": 28,
+          "nationality": "England",
+          "position": "FWD",
+          "detailed_position": "LW",
+          "number": 14,
+          "preferred_foot": "Right",
+          "overall": 82,
+          "potential": 83,
+          "api_id": 923125268,
+          "status": "active",
+          "injured": false,
+          "dob": null,
+          "photo": null,
+          "height_cm": null,
+          "weight_kg": null
+        },
+        {
+          "name": "Joan García",
+          "firstname": "Joan",
+          "lastname": "García",
+          "age": 25,
+          "nationality": "Spain",
+          "position": "GK",
+          "detailed_position": "GK",
+          "number": 26,
+          "preferred_foot": "Right",
+          "overall": 82,
+          "potential": 86,
+          "api_id": 945047792,
+          "status": "active",
+          "injured": false,
+          "dob": null,
+          "photo": null,
+          "height_cm": null,
+          "weight_kg": null
         }
       ]
     },
@@ -9409,6 +9449,26 @@
           "potential": 68,
           "status": "active",
           "injured": false
+        },
+        {
+          "name": "Franco Mastantuono",
+          "firstname": "Franco",
+          "lastname": "Mastantuono",
+          "age": 18,
+          "nationality": "Argentina",
+          "position": "MID",
+          "detailed_position": "RW",
+          "number": 30,
+          "preferred_foot": "Left",
+          "overall": 78,
+          "potential": 90,
+          "api_id": 935573046,
+          "status": "active",
+          "injured": false,
+          "dob": null,
+          "photo": null,
+          "height_cm": null,
+          "weight_kg": null
         }
       ]
     },

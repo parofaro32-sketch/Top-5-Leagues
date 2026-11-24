@@ -176,7 +176,7 @@ class MatchEngine:
             return True
         # also catch near-duplicates (same opening + same event type text)
         head = " ".join(norm.split()[:10])
-        for r in recent[-12:]:
+        for r in recent[-18:]:
             if head and head == " ".join(r.split()[:10]) and len(head) > 20:
                 return True
         return False
@@ -191,7 +191,7 @@ class MatchEngine:
             try:
                 commentary = gen_commentary(self.state, ev, self.rng)
                 # retry a few times if too similar to recent commentary
-                for _ in range(3):
+                for _ in range(5):
                     if not self._is_recent_commentary(str(commentary or "")):
                         break
                     commentary = gen_commentary(self.state, ev, self.rng)

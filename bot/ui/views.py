@@ -149,9 +149,33 @@ class BreakControlView(discord.ui.View):
                     pass
                 try:
                     subs = parse_break_subs_text(raw, self.session.state, side)
-                    await self.session.apply_break_actions(side, substitutions=subs, tactics_updates={}, summary=None, mark_done=False)
+                    evs = await self.session.apply_break_actions(side, substitutions=subs, tactics_updates={}, summary=None, mark_done=False)
                     sub_txt = ", ".join([f"{s['off_name']}→{s['on_name']}" for s in subs])
                     await inter.followup.send(f"{side.title()} substitutions applied: {sub_txt}. You can still submit tactics or keep current tactics.".strip()[:1900], ephemeral=True)
+                    # Broadcast to match channel
+                    try:
+                        ch = inter.channel
+                        if ch is None and self.session.state.channel_id:
+                            ch = inter.client.get_channel(self.session.state.channel_id)
+                            if ch is None:
+                                ch = await inter.client.fetch_channel(self.session.state.channel_id)
+                        if ch and evs:
+                            for ev in evs:
+                                payload = ev.get("payload") or {}
+                                et = ev.get("event_type")
+                                if et == "substitution":
+                                    minute = int(ev.get("minute", self.session.state.minute) or 0)
+                                    extra = int(ev.get("extra_minute", self.session.state.extra_minute) or 0)
+                                    mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                                    side_ev = ev.get("team_side")
+                                    team_name = self.session.state.team(side_ev).team.name if side_ev else "Team"
+                                    on_name = payload.get("on_name") or "Substitute"
+                                    off_name = payload.get("off_name") or "Player"
+                                    reason = payload.get("reason")
+                                    reason_txt = f" — {reason}" if reason else ""
+                                    await ch.send(f"- **{mtxt}** — 🔁 **Substitution ({team_name}):** {on_name} comes on for {off_name}{reason_txt}."[:1900])
+                    except Exception:
+                        pass
                 except (LineupValidationError, ValueError) as e:
                     await inter.followup.send(f"Invalid substitutions: {e}", ephemeral=True)
                 except Exception:
@@ -187,12 +211,35 @@ class BreakControlView(discord.ui.View):
         try:
             from engine.ai_manager import decide_ai_break_actions
             actions = decide_ai_break_actions(self.session.state, side)
-            await self.session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Manager accepted AI adjustment")
+            evs = await self.session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Manager accepted AI adjustment")
             subs = actions.get("substitutions", [])
             txt = "AI adjustments applied and side marked ready."
             if subs:
                 txt += " Subs: " + ", ".join([f"{s.get('on_name')} for {s.get('off_name')}" for s in subs])
             await interaction.followup.send(txt[:1900], ephemeral=True)
+            # Broadcast substitution events to match channel
+            try:
+                ch = interaction.channel
+                if ch is None and self.session.state.channel_id:
+                    ch = interaction.client.get_channel(self.session.state.channel_id)
+                    if ch is None:
+                        ch = await interaction.client.fetch_channel(self.session.state.channel_id)
+                if ch and evs:
+                    for ev in evs:
+                        payload = ev.get("payload") or {}
+                        if ev.get("event_type") == "substitution":
+                            minute = int(ev.get("minute", self.session.state.minute) or 0)
+                            extra = int(ev.get("extra_minute", self.session.state.extra_minute) or 0)
+                            mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                            side_ev = ev.get("team_side")
+                            team_name = self.session.state.team(side_ev).team.name if side_ev else "Team"
+                            on_name = payload.get("on_name") or "Substitute"
+                            off_name = payload.get("off_name") or "Player"
+                            reason = payload.get("reason")
+                            reason_txt = f" — {reason}" if reason else ""
+                            await ch.send(f"- **{mtxt}** — 🔁 **Substitution ({team_name}):** {on_name} comes on for {off_name}{reason_txt}."[:1900])
+            except Exception:
+                pass
         except Exception:
             try:
                 await interaction.followup.send("Failed to apply AI adjustments. Please try again.", ephemeral=True)

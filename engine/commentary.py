@@ -21,6 +21,35 @@ def _opp(state: MatchState, side: str | None) -> str:
     return "the opposition"
 
 
+def _tref(state: MatchState, side: str | None, rng: random.Random) -> str:
+    """Varied reference to a team to reduce repetitive club-name usage."""
+    name = _team(state, side)
+    if side == "home":
+        alts = ["the hosts", "the home side", name]
+    elif side == "away":
+        alts = ["the visitors", "the away side", name]
+    else:
+        alts = [name]
+    # Prefer name sometimes, but mix in alternatives to avoid repetition.
+    return rng.choice(alts + [name])
+
+
+def _oref(state: MatchState, side: str | None, rng: random.Random) -> str:
+    """Varied reference to the opposing team."""
+    name = _opp(state, side)
+    if side == "home":
+        alts = ["the visitors", "the away side", name]
+    elif side == "away":
+        alts = ["the hosts", "the home side", name]
+    else:
+        alts = [name, "the opposition"]
+    return rng.choice(alts + [name])
+
+
+def _short_score(state: MatchState) -> str:
+    return f"{state.home.score}-{state.away.score}"
+
+
 def _player(state: MatchState, side: str | None, pid: int | None, payload: dict[str, Any]) -> str:
     for k in ("player_name", "name", "scorer_name", "taker_name"):
         if payload.get(k):
@@ -185,19 +214,21 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         side = event.get("team_side")
         if et in {E.GOAL, E.PENALTY_SCORED, E.PENALTY_SAVED, E.PENALTY_MISSED, E.RED_CARD, E.SECOND_YELLOW, E.DISALLOWED_GOAL}:
             extra = _pick(rng, [
-                f" The scoreboard now reads {_score(state)}, and the momentum of the match shifts with it.",
-                f" A defining moment at {_score(state)} that could shape the tactical decisions to come.",
-                f" You can feel the emotional swing ripple through both teams at {_score(state)}.",
+                f" The scoreboard reads {_short_score(state)}, and the momentum swings sharply.",
+                f" At {_short_score(state)}, that moment carries real tactical weight.",
+                f" You can feel the emotional shift ripple across the pitch.",
+                f" A defining flashpoint at {_short_score(state)} with consequences for both benches.",
                 "",
             ])
             if extra and extra.strip() not in txt:
                 txt += extra
         elif et in {E.CHANCE, E.SAVE, E.BLOCK} and rng.random() < 0.45:
             extra = _pick(rng, [
-                " The quality of the movement and execution in that sequence stands out.",
-                " It is the kind of passage that reflects the tactical plan taking shape on the pitch.",
-                " Fine margins in both boxes are proving decisive in this spell.",
-                " Both benches respond immediately, aware of how quickly the balance can tilt.",
+                " The movement and execution in that sequence stood out.",
+                " Fine margins in both boxes are proving decisive.",
+                " Both benches react immediately to the danger.",
+                " A sharp reminder of how quickly the balance can tilt.",
+                " The technical quality in that phase was clear to see.",
             ])
             if extra and extra.strip() not in txt:
                 txt += extra
@@ -211,200 +242,219 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
     side = event.get("team_side")
     team = _team(state, side)
     opp = _opp(state, side)
+    tref = _tref(state, side, rng)
+    oref = _oref(state, side, rng)
     player = _player(state, side, event.get("player_api_id"), payload)
     pfx = _prefix(state, event)
     flav = _phase_flavor(state, rng)
     score = _score(state)
+    ss = _short_score(state)
     t_hint = _tactic_hint(state, side, rng)
     s_hint = _state_hint(state, side, rng)
 
     if et == E.KICKOFF:
-        return f"{pfx} — Kick-off and we are underway. {team} take the first touches and look to impose their game plan against {opp}, with early shape and tempo already under the microscope."
+        return _pick(rng, [
+            f"{pfx} — Kick-off! {team} get us underway against {opp}. Early shape and tempo will set the tone.",
+            f"{pfx} — We're underway at {ss}. {tref.capitalize()} take the first touch, looking to impose their plan on {oref}.",
+        ])
     if et == E.SECOND_HALF_KICKOFF:
-        return f"{pfx} — The second half begins with the score at {score}. {team} restart play, and any tactical adjustments from the interval are about to be tested under match pressure."
+        return _pick(rng, [
+            f"{pfx} — Second half begins at {ss}. {tref.capitalize()} restart, and any interval adjustments are now under pressure.",
+            f"{pfx} — Back out for the second period. {team} kick off with the score {ss}; the next phase should reveal who adapted better.",
+        ])
     if et == E.HALF_TIME:
-        return f"{pfx} — Half-time whistle. {score}. A valuable pause for both managers to reassess pressing structure, spacing between the lines, and how to manage the next phase of the contest."
+        return _pick(rng, [
+            f"{pfx} — Half-time: {score}. A chance for both managers to reassess pressing cues, spacing, and transitions.",
+            f"{pfx} — The whistle goes for the break at {ss}. Tactical tweaks and fresh legs could define the second half.",
+        ])
     if et == E.FULL_TIME:
-        return f"{pfx} — Full-time. {score}. The result is settled by execution in key moments, tactical discipline, and the ability to convert pressure into clear outcomes."
+        return _pick(rng, [
+            f"{pfx} — Full-time: {score}. Execution in key moments and tactical discipline settle the contest.",
+            f"{pfx} — It's over at {ss}. {state.home.team.name} and {state.away.team.name} leave everything on the pitch after a hard-fought battle.",
+        ])
     if et == E.STOPPAGE_TIME:
         mins = payload.get("minutes", 1)
         half = payload.get("half", "this half")
         return _pick(rng, [
-            f"{pfx} — The fourth official indicates {mins} additional minute(s) at the end of {half}. There is still time for a decisive twist if either side can find precision in the final moments.",
-            f"{pfx} — {mins} minute(s) of stoppage time to be played. With the score at {score}, every clearance, pass, and duel carries added weight.",
+            f"{pfx} — {mins} minute(s) of added time at the end of {half}. At {ss}, every touch matters.",
+            f"{pfx} — The board goes up: {mins} additional minute(s). Still time for a late twist with the score {ss}.",
         ])
     if et == E.TACTICAL_BREAK:
         label = payload.get("label", "Tactical break")
         return _pick(rng, [
-            f"{pfx} — {label}. Play pauses briefly, giving both benches a chance to deliver detailed tactical instructions on pressing cues, compactness, and attacking transitions.",
-            f"{pfx} — {label}. A short stoppage, but an important one: managers use the moment to refine shape, manage energy levels, and target weaknesses in the opposition setup.",
+            f"{pfx} — {label}. A brief pause for detailed instructions on shape, pressing triggers, and energy management.",
+            f"{pfx} — {label}. Both benches use the stoppage to fine-tune matchups and attacking patterns.",
         ])
     if et == E.BREAK_RESUME:
         return _pick(rng, [
-            f"{pfx} — Play resumes {flav}. The tactical tweaks made moments ago will be tested immediately as both sides compete for control of space and tempo.{s_hint}",
-            f"{pfx} — Back underway at {score}. You can expect adjustments in pressing height, buildup patterns, and transition play as the match continues.{s_hint}",
+            f"{pfx} — Play resumes {flav}. The tweaks just made will be tested immediately.{s_hint}",
+            f"{pfx} — Back underway at {ss}. Expect subtle changes in pressing height and buildup as play continues.{s_hint}",
         ])
 
     if et == E.PASS_SEQUENCE:
         return _pick(rng, [
-            f"{pfx} — {team} circulate possession with patience, switching the point of attack to pull {opp} out of their block before probing for a progressive pass between the lines.{t_hint}{s_hint}",
-            f"{pfx} — {flav.capitalize()}, {team} build methodically from the back, using short combinations and positional rotations while {opp} stay organized and look for the right moment to press.{t_hint}",
-            f"{pfx} — Controlled spell for {team}: measured passing, support angles, and careful tempo as they try to unbalance {opp}'s defensive structure without forcing the final ball.{t_hint}",
-            f"{pfx} — {team} work the ball across midfield and into wider channels, testing {opp}'s compactness and recovery runs as the tactical chess match continues at {score}.{s_hint}",
-            f"{pfx} — {opp} apply pressure in phases, but {team} remain composed in possession, recycling play and resetting their attacking shape to find a cleaner route forward.{t_hint}",
-            f"{pfx} — {team} knock it around confidently, drawing {opp} across before looking to slip a runner in behind the defensive line.{t_hint}",
-            f"{pfx} — A patient buildup from {team}: the center-backs step forward, midfielders offer angles, and the ball moves quickly enough to keep {opp} shifting.{s_hint}",
-            f"{pfx} — {team} probe down the flank, then recycle inside when the crossing lane closes, keeping {opp} working defensively at {score}.",
+            f"{pfx} — {tref.capitalize()} circulate possession patiently, probing for a gap between the lines.{t_hint}{s_hint}",
+            f"{pfx} — {flav.capitalize()}, {tref} build methodically while {oref} hold their shape and wait for a pressing trigger.{t_hint}",
+            f"{pfx} — Controlled spell: {tref} recycle through midfield, testing {oref}'s compactness without forcing the final ball.{t_hint}",
+            f"{pfx} — {tref.capitalize()} switch the point of attack, pulling {oref} across before looking to progress.{s_hint}",
+            f"{pfx} — {oref.capitalize()} press in phases, but {tref} stay composed and reset the attack with calm passing.{t_hint}",
+            f"{pfx} — A patient buildup: support angles, quick touches, and careful tempo as {tref} search for an opening.",
+            f"{pfx} — {tref.capitalize()} work it wide, then back inside, keeping {oref} moving at {ss}.",
         ])
 
     if et == E.CHANCE:
         return _pick(rng, [
-            f"{pfx} — CHANCE! {team} unlock space with incisive movement and a well-timed pass, allowing {player} to attack a dangerous area as {opp} scramble to recover their defensive positions.{s_hint}",
-            f"{pfx} — CHANCE! A sharp attacking sequence from {team} {flav} cuts through the pressure, and {player} suddenly finds a promising opening in and around the box.{s_hint}",
-            f"{pfx} — CHANCE! {team}'s buildup pays off as {player} receives in a threatening pocket, forcing {opp}'s back line into a desperate defensive reaction.",
-            f"{pfx} — CHANCE! {player} finds space between the lines for {team}, and suddenly {opp} are backpedaling toward their own goal.{s_hint}",
+            f"{pfx} — CHANCE! {player} finds space in a dangerous area for {tref}, and {oref} scramble to recover.{s_hint}",
+            f"{pfx} — CHANCE! A sharp sequence opens up {oref}, and {player} suddenly has a promising sight of goal.{s_hint}",
+            f"{pfx} — CHANCE! {tref.capitalize()} carve through with incisive movement — {player} attacks the gap and the crowd senses danger.",
+            f"{pfx} — Big opening! {player} receives between the lines and {oref} are backpedaling toward their own box.{s_hint}",
+            f"{pfx} — CHANCE! Quick interplay releases {player} in a threatening pocket. The defensive line is stretched and vulnerable.",
         ])
 
     if et == E.SHOT:
         outcome = payload.get("outcome", "off_target")
         if outcome == "on_target":
             return _pick(rng, [
-                f"{pfx} — {player} connects cleanly for {team}, driving an effort on target that tests the goalkeeper's positioning and reactions in a high-pressure moment.",
-                f"{pfx} — Well-struck attempt by {player}. The shot carries intent and accuracy, forcing a response as {opp} are briefly opened up.",
-                f"{pfx} — {player} lets fly for {team}, forcing the goalkeeper into action with a firm strike toward goal.",
+                f"{pfx} — {player} strikes cleanly for {tref}, forcing the goalkeeper into a sharp reaction save.",
+                f"{pfx} — Well-hit effort by {player}! On target, with real intent behind it — {oref} are briefly opened up.",
+                f"{pfx} — {player} lets fly and tests the keeper. Good technique, firm contact, and a moment of concern for {oref}.",
+                f"{pfx} — Shot on target from {player}. The goalkeeper has to be alert to deal with it.",
             ])
         if outcome == "blocked":
             return _pick(rng, [
-                f"{pfx} — {player} gets a shot away for {team}, but a defender reads the danger and throws himself into the line to produce a vital block.",
-                f"{pfx} — Determined defending from {opp} as {player}'s effort is charged down inside a crowded area, denying what looked a promising strike.",
-                f"{pfx} — {player} shoots through bodies, but {opp} get a crucial block in and the danger is snuffed out.",
+                f"{pfx} — {player} gets a shot away, but a defender throws himself into the line for a vital block.",
+                f"{pfx} — Blocked! {player}'s effort is charged down inside a crowded area — brave defending by {oref}.",
+                f"{pfx} — {player} shoots through bodies, but {oref} get a crucial block in to snuff out the danger.",
             ])
         return _pick(rng, [
-            f"{pfx} — {player} finds a shooting opportunity for {team} {flav}, but the execution falls short and the effort misses the target.",
-            f"{pfx} — A glimpse of goal for {player}, who tries to pick his spot under pressure yet cannot keep the attempt on frame.",
-            f"{pfx} — {team} work an opening, but {player}'s finish lacks the required precision and {opp} survive the moment.",
-            f"{pfx} — {player} goes for goal from a decent position, but drags the effort wide as {opp} breathe again.",
+            f"{pfx} — {player} finds a shooting angle {flav}, but the effort drifts off target.",
+            f"{pfx} — A glimpse of goal for {player}, but under pressure the finish misses the frame.",
+            f"{pfx} — {tref.capitalize()} work an opening, yet {player}'s attempt lacks precision and {oref} survive.",
+            f"{pfx} — {player} goes for goal from a decent position but can't keep it down. A let-off for {oref}.",
         ])
 
     if et == E.SAVE:
         shooter = payload.get("shooter_name", "the attacker")
         return _pick(rng, [
-            f"{pfx} — Outstanding save. {shooter} strikes with conviction for {opp}, but {player} shows sharp reflexes and strong technique to keep {team} in the contest.",
-            f"{pfx} — Crucial intervention from {player}, who reads {shooter}'s effort early and produces a composed save under pressure.",
-            f"{pfx} — {player} comes up big for {team}, parrying {shooter}'s on-target attempt away from danger at a key moment.",
+            f"{pfx} — Outstanding save! {player} shows sharp reflexes to deny {shooter} and keep {tref} in it.",
+            f"{pfx} — Crucial stop by {player}, reading {shooter}'s effort early and producing a composed save under pressure.",
+            f"{pfx} — Big save! {player} gets down quickly to parry {shooter}'s strike away from danger.",
+            f"{pfx} — {player} comes up huge for {tref}, reacting brilliantly to keep {shooter}'s on-target effort out.",
         ])
 
     if et == E.BLOCK:
         return _pick(rng, [
-            f"{pfx} — Heroic defending. {player} puts his body on the line to block the shot, absorbing the impact and preventing a clear scoring chance for {opp}.",
-            f"{pfx} — Last-ditch block from {player}, who anticipates the strike and intervenes decisively to protect {team}.",
+            f"{pfx} — Heroic block by {player}! Body on the line to prevent a clear scoring chance for {oref}.",
+            f"{pfx} — Last-ditch defending from {player}, who anticipates the strike and intervenes decisively.",
         ])
 
     if et == E.CORNER:
         return _pick(rng, [
-            f"{pfx} — Corner to {team} after sustained pressure in the final third forces {opp} to turn the ball behind. A set-piece chance to test organization and aerial strength.",
-            f"{pfx} — {team} win a corner {flav}. Deliveries and movement in the box could be decisive here as {opp} prepare to defend.",
-            f"{pfx} — Corner kick for {team}. {opp} clear their lines for now, but the set piece gives {team} another chance to load the box.",
+            f"{pfx} — Corner to {tref} after sustained pressure forces {oref} to turn it behind. Set-piece chance incoming.",
+            f"{pfx} — {tref.capitalize()} win a corner {flav}. Delivery and movement in the box could be decisive.",
+            f"{pfx} — Corner kick for {tref}. {oref.capitalize()} clear for now, but the set piece loads the box again.",
+            f"{pfx} — {team} earn a corner — a chance to test {oref}'s aerial organization and marking.",
         ])
 
     if et == E.FOUL:
         fouled = payload.get("fouled_name", "an opponent")
         reason = payload.get("reason", "a mistimed challenge")
         return _pick(rng, [
-            f"{pfx} — Foul by {player} on {fouled} ({reason}). The referee stops play and awards {opp} a free kick, breaking up the momentum of the move.",
-            f"{pfx} — {player} mistimes the challenge on {fouled} and concedes a foul for {reason}. {opp} have an opportunity to regroup or threaten from the set piece.",
-            f"{pfx} — {player} catches {fouled} and the whistle goes. {opp} win the free kick after {reason}.",
+            f"{pfx} — Foul by {player} on {fouled} ({reason}). {oref.capitalize()} get the free kick.",
+            f"{pfx} — {player} mistimes the challenge on {fouled} and the referee whistles for {reason}.",
+            f"{pfx} — Free kick to {oref} after {player} catches {fouled} — {reason}.",
         ])
 
     if et == E.FREE_KICK:
         return _pick(rng, [
-            f"{pfx} — Free kick in a promising area for {team}. {player} stands over the ball as options are discussed — a delivery into the box or a direct effort are both on.",
-            f"{pfx} — Set-piece opportunity for {team} {flav}. {player} prepares the strike/delivery while {opp} organize their wall and marking assignments.",
+            f"{pfx} — Free kick in a promising area for {tref}. {player} stands over it — delivery or direct effort?",
+            f"{pfx} — Set-piece opportunity for {team} {flav}. {oref.capitalize()} organize the wall as {player} prepares.",
+            f"{pfx} — Dangerous free-kick position. {player} has options in the box and a shooting angle to consider.",
         ])
 
     if et == E.PENALTY_AWARDED:
         reason = payload.get("reason", "a foul in the box")
         return _pick(rng, [
-            f"{pfx} — Penalty to {team}! After {reason}, the referee points to the spot. A huge moment with the score at {score} and pressure at its peak.",
-            f"{pfx} — Spot kick awarded for {team} following {reason}. Composure and technique will decide this pivotal opportunity.",
+            f"{pfx} — PENALTY to {team}! After {reason}, the referee points to the spot. Huge moment at {ss}.",
+            f"{pfx} — Spot kick for {tref}! {reason.capitalize() if reason else 'A foul in the box'} and the pressure is immense at {ss}.",
         ])
 
     if et == E.GOAL:
         assist = payload.get("assist_name")
-        a = f", set up by a well-judged contribution from {assist}" if assist else ""
+        a = f", assisted by {assist}" if assist else ""
         return _pick(rng, [
-            f"{pfx} — GOAL! {player} finishes with conviction for {team}{a}. A high-quality moment of execution and the score moves to {score}.",
-            f"{pfx} — GOAL for {team}! {player} delivers the decisive touch{a}, rewarding the buildup and changing the complexion of the match at {score}.",
+            f"{pfx} — GOAL! {player} finishes with conviction for {team}{a}. {score}.",
+            f"{pfx} — GOAL for {tref}! {player} delivers the decisive touch{a}, and the match shifts to {ss}.",
+            f"{pfx} — It's in! {player} scores for {team}{a} — a clinical finish that changes the picture at {ss}.",
         ])
 
     if et == E.PENALTY_SCORED:
         return _pick(rng, [
-            f"{pfx} — GOAL! {player} holds his nerve from the penalty spot and converts clinically for {team}. {score}.",
-            f"{pfx} — Composed penalty from {player}, who sends the goalkeeper the wrong way and scores for {team}. {score}.",
+            f"{pfx} — GOAL! {player} holds his nerve from the spot and converts for {team}. {score}.",
+            f"{pfx} — Cool as you like. {player} buries the penalty for {tref}. {ss}.",
         ])
 
     if et == E.PENALTY_SAVED:
         taker = payload.get("taker_name", "the penalty taker")
         return _pick(rng, [
-            f"{pfx} — Penalty saved! {player} reads {taker}'s intentions brilliantly and produces a decisive stop to deny what looked a certain goal.",
-            f"{pfx} — Huge moment for {team}: {player} dives the right way and keeps out {taker}'s penalty with excellent reflexes and timing.",
+            f"{pfx} — Penalty saved! {player} reads {taker} brilliantly and produces a decisive stop.",
+            f"{pfx} — Huge save from {player}! {taker}'s penalty is kept out — a massive moment at {ss}.",
         ])
 
     if et == E.PENALTY_MISSED:
         return _pick(rng, [
-            f"{pfx} — Penalty missed. {player} cannot convert for {team}, and a golden opportunity slips away in a crucial phase of the match.",
-            f"{pfx} — Agony for {team} as {player}'s penalty fails to find the target, letting the pressure moment pass.",
+            f"{pfx} — Penalty missed! {player} can't convert for {tref}, and a golden chance slips away.",
+            f"{pfx} — Agony for {team} — {player}'s spot kick fails to find the target at {ss}.",
         ])
 
     if et == E.DISALLOWED_GOAL:
         reason = payload.get("reason", "an infringement")
         return _pick(rng, [
-            f"{pfx} — Goal disallowed for {team} due to {reason}. The celebrations are cut short and the score remains {score}.",
-            f"{pfx} — After review/decision, {player}'s effort is ruled out for {team} ({reason}). Fine margins again at {score}.",
+            f"{pfx} — Goal disallowed for {team} due to {reason}. The score remains {ss}.",
+            f"{pfx} — Ruled out! {player}'s effort for {tref} is chalked off ({reason}). Fine margins at {ss}.",
         ])
 
     if et == E.OFFSIDE:
         return _pick(rng, [
-            f"{pfx} — Offside flag raised against {player}. {team}'s move had promise, but the timing of the run was just a fraction too early.",
-            f"{pfx} — {player} is caught offside as {team} attempt to release him behind the line. {opp} regain possession with the free kick.",
+            f"{pfx} — Offside against {player}. {tref.capitalize()}'s move had promise, but the run was just early.",
+            f"{pfx} — Flag up — {player} is caught offside as {tref} try to release him behind the line.",
         ])
 
     if et == E.YELLOW_CARD:
         reason = payload.get("reason", "a foul")
         return _pick(rng, [
-            f"{pfx} — Yellow card for {player} ({team}) after {reason}. The referee makes a disciplinary statement as intensity rises {flav}.",
-            f"{pfx} — Booking for {player}. Cautioned for {reason}, and he will need to manage his challenges carefully for the remainder of the match.",
+            f"{pfx} — Yellow card for {player} ({team}) for {reason}. He'll need to be careful now.",
+            f"{pfx} — Booking. {player} goes into the book after {reason} — a warning {flav}.",
         ])
 
     if et == E.SECOND_YELLOW:
         reason = payload.get("reason", "another foul")
         return _pick(rng, [
-            f"{pfx} — Second yellow card for {player} ({team}) after {reason}, and that means a red card. A major disciplinary and tactical blow at {score}.",
-            f"{pfx} — Dismissal. {player} picks up a second booking for {team} and is sent off, forcing an immediate reshuffle in shape and responsibilities.",
+            f"{pfx} — Second yellow for {player} ({team}) after {reason} — and that's a red! A major blow at {ss}.",
+            f"{pfx} — Sent off! {player} picks up a second booking and {tref} are down to ten.",
         ])
 
     if et == E.RED_CARD:
         reason = payload.get("reason", "serious foul play")
         return _pick(rng, [
-            f"{pfx} — Straight red card! {player} ({team}) is dismissed for {reason}. The numerical disadvantage will significantly affect tactics and game state.",
-            f"{pfx} — Red card shown to {player} of {team} for {reason}. A pivotal disciplinary moment that reshapes the contest at {score}.",
+            f"{pfx} — Straight red! {player} ({team}) is dismissed for {reason}. The match is reshaped at {ss}.",
+            f"{pfx} — Red card for {player}. {tref.capitalize()} must reorganize after that dismissal for {reason}.",
         ])
 
     if et == E.INJURY:
         severity = payload.get("severity", "knock")
         if payload.get("continued"):
             return _pick(rng, [
-                f"{pfx} — Concern for {team} as {player} goes down with a {severity}. After assessment and treatment, he is able to continue, though it is something to monitor.",
-                f"{pfx} — {player} requires medical attention for a {severity}. Thankfully for {team}, he returns to his feet and resumes, but the interruption breaks the rhythm.",
+                f"{pfx} — Concern as {player} goes down with a {severity}. After treatment, he's able to continue for {tref}.",
+                f"{pfx} — {player} needs medical attention ({severity}), but thankfully returns to the pitch.",
             ])
         if payload.get("substituted"):
             return _pick(rng, [
-                f"{pfx} — Injury setback for {team}. {player} cannot shake off a {severity} and is replaced, prompting a forced adjustment to personnel and possibly tactics.",
-                f"{pfx} — {player} is unable to continue after a {severity}. {team} must adapt quickly with an enforced substitution in this phase of the match.",
+                f"{pfx} — Injury blow for {team}: {player} can't shake off a {severity} and is replaced.",
+                f"{pfx} — {player} is unable to continue after a {severity}. Forced change for {tref}.",
             ])
         return _pick(rng, [
-            f"{pfx} — {player} ({team}) is forced off with a {severity}, leaving his side to reorganize under pressure at {score}.",
-            f"{pfx} — Blow for {team}: {player} cannot continue due to a {severity}, creating both a fitness and tactical concern.",
+            f"{pfx} — {player} ({team}) is forced off with a {severity}, leaving {tref} to reorganize at {ss}.",
         ])
 
     if et == E.SUBSTITUTION:
@@ -413,38 +463,38 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         reason = payload.get("reason")
         reason_txt = f" to provide {reason}" if reason else ""
         return _pick(rng, [
-            f"{pfx} — Substitution for {team}: {on_name} comes on for {off_name}{reason_txt}. A change that may influence energy levels, matchups, and tactical balance.",
-            f"{pfx} — {team} make a change {flav}. {off_name} makes way and {on_name} enters the action{reason_txt}, with fresh legs and new instructions.",
-            f"{pfx} — Personnel adjustment by {team}: {on_name} replaces {off_name}{reason_txt}, potentially altering pressing, width, or attacking threat.",
+            f"{pfx} — Substitution for {team}: {on_name} replaces {off_name}{reason_txt}. Fresh legs and new instructions.",
+            f"{pfx} — Change for {tref}: {on_name} comes on for {off_name}{reason_txt}, {flav}.",
+            f"{pfx} — {team} make a switch — {off_name} off, {on_name} on{reason_txt}. A tactical tweak in personnel.",
         ])
 
     if et == E.TACTICAL_CHANGE:
-        # Tactics are private - never reveal details publicly
         return _pick(rng, [
-            f"{pfx} — {team} make a tactical adjustment on the touchline {flav}.",
-            f"{pfx} — A tactical change from {team} as they look to influence the next phase at {score}.",
-            f"{pfx} — {team} adjust their approach as the match situation evolves.",
+            f"{pfx} — {tref.capitalize()} make a tactical adjustment on the touchline {flav}.",
+            f"{pfx} — A tactical tweak from {team} as they look to influence the next phase at {ss}.",
+            f"{pfx} — {tref.capitalize()} adjust their approach as the match situation evolves.",
         ])
 
     if et == E.VAR_REVIEW:
         reason = payload.get("reason", "a possible infringement")
         return _pick(rng, [
-            f"{pfx} — VAR review in progress for {reason}. Play is paused while the officials examine the incident in detail, with both sets of players waiting anxiously.",
-            f"{pfx} — The referee is asked to review a potential incident ({reason}). A careful check now, as the decision could have significant impact at {score}.",
+            f"{pfx} — VAR review in progress for {reason}. Play is paused while officials examine the incident.",
+            f"{pfx} — The referee is sent to check a potential incident ({reason}). A consequential decision could follow at {ss}.",
         ])
 
     if et == E.VAR_OVERTURN:
         outcome = payload.get("outcome", "Decision updated")
         reason = payload.get("reason", "after review")
         return _pick(rng, [
-            f"{pfx} — VAR decision confirmed: {outcome} {reason}. The match resumes with clarity, but the implications of that call may linger.",
-            f"{pfx} — After review, the official communicates the outcome: {outcome} {reason}. A consequential decision in the context of this game.",
+            f"{pfx} — VAR decision: {outcome} {reason}. The match resumes with clarity at {ss}.",
+            f"{pfx} — After review, the official confirms: {outcome} {reason}. A big call in this contest.",
         ])
 
     return _pick(rng, [
-        f"{pfx} — {team} and {opp} continue to contest every inch {flav}, with tactical discipline and execution in transitions shaping this phase at {score}.{t_hint}",
-        f"{pfx} — The battle for control remains finely balanced. {team} look to execute their plan while {opp} respond with organization and selective pressure.{s_hint}",
-        f"{pfx} — Play flows on at {score}. Spacing, timing, and decision-making in possession are defining the rhythm of this spell between {team} and {opp}.",
-        f"{pfx} — {team} keep probing, but {opp} hold their shape well {flav}, waiting for a chance to break.{s_hint}",
-        f"{pfx} — A cagey spell at {score}: {team} have the ball, {opp} have the block, and both sides are looking for the next mistake.{t_hint}",
+        f"{pfx} — {tref.capitalize()} and {oref} contest every inch {flav}, with transitions shaping this phase at {ss}.{t_hint}",
+        f"{pfx} — The battle for control remains balanced. {tref.capitalize()} probe while {oref} stay organized.{s_hint}",
+        f"{pfx} — Play flows on at {ss}. Spacing and decision-making define the rhythm between the two sides.",
+        f"{pfx} — {tref.capitalize()} keep probing, but {oref} hold their shape well {flav}, waiting for a break.{s_hint}",
+        f"{pfx} — A cagey spell at {ss}: possession against a compact block, both sides hunting the next mistake.{t_hint}",
+        f"{pfx} — {team} look to build momentum {flav}, but {opp} are disciplined in their defensive structure.",
     ])

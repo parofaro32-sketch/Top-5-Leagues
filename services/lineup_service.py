@@ -662,65 +662,148 @@ def format_squad_for_manager(squad: list[dict[str, Any]]) -> str:
 
 def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, Any]]:
     """Parse break substitution text into apply_break_actions payloads.
-    Accepts lines like: OFF -> ON, OFF > ON, OFF for ON. Names or shirt numbers.
+    Accepts flexible formats: OFF -> ON, ON for OFF, OFF out ON in, names/numbers, etc.
     """
     raw = str(text or "").replace("\r", "\n")
-    lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
-    if not lines:
+    # split by newlines, semicolons
+    chunks = []
+    for line in raw.replace(";", "\n").split("\n"):
+        line = line.strip()
+        if line:
+            chunks.append(line)
+    if not chunks:
         raise LineupValidationError("No substitutions provided.")
     team = state.team(side)
-    on_pitch = []
-    bench = []
-    for ps in state.player_states.values():
-        if ps.team_side != side:
-            continue
+
+    def row_for(ps):
         p = state.players_index.get(state.player_key(side, ps.player_api_id))
-        row = {
+        return {
             "api_id": int(ps.player_api_id),
             "name": ps.name,
             "number": getattr(p, "number", None) if p else None,
             "position": ps.position,
             "team_api_id": team.team.api_id,
+            "on_pitch": bool(ps.on_pitch),
+            "red_card": bool(ps.red_card),
+            "injured": bool(getattr(ps, "injured", False)),
         }
-        if ps.on_pitch:
-            on_pitch.append(row)
-        elif not ps.red_card and not bool(getattr(ps, "injured", False)):
-            bench.append(row)
-    if not bench:
-        for ps in state.player_states.values():
-            if ps.team_side != side or ps.on_pitch:
-                continue
-            p = state.players_index.get(state.player_key(side, ps.player_api_id))
-            bench.append({
-                "api_id": int(ps.player_api_id),
-                "name": ps.name,
-                "number": getattr(p, "number", None) if p else None,
-                "position": ps.position,
-                "team_api_id": team.team.api_id,
-            })
+
+    all_rows = [row_for(ps) for ps in state.player_states.values() if ps.team_side == side]
+    on_pitch = [r for r in all_rows if r["on_pitch"]]
+    bench = [r for r in all_rows if (not r["on_pitch"]) and (not r["red_card"]) and (not r["injured"])]
+
+    def clean_ref(r: str) -> str:
+        r = str(r or "").strip()
+        r = re.sub(r"^\s*\d+[\).\-\:]\s*", "", r).strip()  # leading list number
+        r = re.sub(r"\b(out|off|sub\s*out)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub(r"\b(in|on|sub\s*in)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub(r"\s+", " ", r).strip(" -:>.,")
+        return r.strip()
+
+    def resolve_in_pool(ref: str, pool: list[dict[str, Any]]):
+        if not ref:
+            return None
+        p = resolve_player_ref(ref, pool)
+        if p:
+            return p
+        # try cleaned
+        c = clean_ref(ref)
+        if c and c != ref:
+            p = resolve_player_ref(c, pool)
+            if p:
+                return p
+        return None
+
+    def find_player_any(ref: str):
+        p = resolve_in_pool(ref, on_pitch)
+        if p:
+            return p, "on_pitch"
+        p = resolve_in_pool(ref, bench)
+        if p:
+            return p, "bench"
+        p = resolve_in_pool(ref, all_rows)
+        if p:
+            return p, "on_pitch" if any(r["api_id"] == p["api_id"] and r["on_pitch"] for r in all_rows) else "bench"
+        return None, None
 
     out: list[dict[str, Any]] = []
     seen_off: set[int] = set()
     seen_on: set[int] = set()
-    for ln in lines:
-        m = re.split(r"\s*(?:->|=>|→|>| for | to )\s*", ln, maxsplit=1, flags=re.IGNORECASE)
-        if len(m) != 2:
-            m = re.split(r"\s+-\s+", ln, maxsplit=1)
-        if len(m) != 2:
-            raise LineupValidationError(f"Could not parse sub line: '{ln}'. Use 'OFF -> ON'.")
-        off_ref, on_ref = m[0].strip(), m[1].strip()
-        off_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", off_ref).strip()
-        on_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", on_ref).strip()
-        off_p = resolve_player_ref(off_ref, on_pitch)
-        on_p = resolve_player_ref(on_ref, bench)
-        if not off_p:
-            raise LineupValidationError(f"Could not find on-pitch player: '{off_ref}'.")
-        if not on_p:
-            raise LineupValidationError(f"Could not find bench player: '{on_ref}'.")
+
+    for ln in chunks:
+        orig = ln
+        # Remove common wrappers
+        ln = re.sub(r"(?i)^\s*(sub|substitution|change)\s*[:\-]\s*", "", ln).strip()
+        # Split by separators
+        parts = re.split(r"\s*(?:->|=>|→|<->|>|<|\/|\\| for | to | with | replaces | replace )\s*", ln, maxsplit=1, flags=re.IGNORECASE)
+        if len(parts) != 2:
+            parts = re.split(r"\s+-\s+", ln, maxsplit=1)
+        if len(parts) != 2:
+            # Try "IN X OUT Y" / "OUT X IN Y" / "X in Y out" patterns
+            m_in = re.search(r"\b(?:in|on)\b[:\s]+(.+)", ln, flags=re.IGNORECASE)
+            m_out = re.search(r"\b(?:out|off)\b[:\s]+(.+)", ln, flags=re.IGNORECASE)
+            if m_in and m_out:
+                # determine order by position in string
+                in_pos = re.search(r"\b(?:in|on)\b", ln, flags=re.IGNORECASE).start()
+                out_pos = re.search(r"\b(?:out|off)\b", ln, flags=re.IGNORECASE).start()
+                in_ref = re.split(r"\b(?:out|off)\b", m_in.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
+                out_ref = re.split(r"\b(?:in|on)\b", m_out.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
+                # parts: [off_ref, on_ref]
+                parts = [out_ref, in_ref]
+            else:
+                # Try "OFF ON" as two names/numbers (only if exactly 2 tokens that resolve)
+                tokens = ln.split()
+                if len(tokens) == 2:
+                    parts = tokens
+                else:
+                    # last resort: try splitting by comma
+                    parts = [p.strip() for p in ln.split(",", 1)]
+                    if len(parts) != 2 or not parts[0] or not parts[1]:
+                        raise LineupValidationError(f"Could not parse sub: '{orig}'. Use 'OFF -> ON'.")
+
+        a_ref, b_ref = parts[0].strip(), parts[1].strip()
+        a_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", a_ref).strip()
+        b_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", b_ref).strip()
+
+        a_p, a_loc = find_player_any(a_ref)
+        b_p, b_loc = find_player_any(b_ref)
+
+        # If one found and other not, try harder: search in full squad by cleaned ref
+        if not a_p:
+            c = clean_ref(a_ref)
+            if c:
+                a_p, a_loc = find_player_any(c)
+        if not b_p:
+            c = clean_ref(b_ref)
+            if c:
+                b_p, b_loc = find_player_any(c)
+
+        if not a_p or not b_p:
+            missing = []
+            if not a_p: missing.append(a_ref)
+            if not b_p: missing.append(b_ref)
+            raise LineupValidationError(f"Could not match player(s): {', '.join(missing)}. Use names or shirt numbers from the squad.")
+
+        # Decide direction: off is the one on pitch, on is the one on bench
+        off_p = on_p = None
+        if a_loc == "on_pitch" and b_loc == "bench":
+            off_p, on_p = a_p, b_p
+        elif a_loc == "bench" and b_loc == "on_pitch":
+            off_p, on_p = b_p, a_p
+        elif a_loc == "on_pitch" and b_loc == "on_pitch":
+            raise LineupValidationError(f"Both players are on the pitch: {a_p.get('name')} and {b_p.get('name')}.")
+        elif a_loc == "bench" and b_loc == "bench":
+            raise LineupValidationError(f"Both players are on the bench: {a_p.get('name')} and {b_p.get('name')}.")
+        else:
+            # fallback: assume A off, B on
+            off_p, on_p = a_p, b_p
+
         off_id = int(off_p["api_id"])
         on_id = int(on_p["api_id"])
         if off_id in seen_off or on_id in seen_on:
             raise LineupValidationError(f"Duplicate substitution: {off_p.get('name')} -> {on_p.get('name')}")
+        if off_id == on_id:
+            raise LineupValidationError("Cannot substitute a player for themselves.")
         seen_off.add(off_id)
         seen_on.add(on_id)
         out.append({

@@ -8821,6 +8821,26 @@
           "potential": 78,
           "status": "active",
           "injured": false
+        },
+        {
+          "name": "Jonathan Tah",
+          "firstname": "Jonathan",
+          "lastname": "Tah",
+          "age": 30,
+          "nationality": "Germany",
+          "position": "DEF",
+          "detailed_position": "CB",
+          "number": 4,
+          "preferred_foot": "Right",
+          "overall": 84,
+          "potential": 84,
+          "api_id": 955295769,
+          "status": "active",
+          "injured": false,
+          "dob": null,
+          "photo": null,
+          "height_cm": null,
+          "weight_kg": null
         }
       ]
     },

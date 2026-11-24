@@ -1100,9 +1100,18 @@ class SimCog(commands.Cog):
                         await inter.followup.send("No active tactical break for this match.", ephemeral=True)
                         return
                     subs = parse_break_subs_text(raw, sess.state, s)
-                    await sess.apply_break_actions(s, substitutions=subs, tactics_updates={}, summary=None, mark_done=False)
+                    evs = await sess.apply_break_actions(s, substitutions=subs, tactics_updates={}, summary=None, mark_done=False)
                     sub_txt = ", ".join([f"{x['off_name']}→{x['on_name']}" for x in subs])
                     await inter.followup.send(f"{s.title()} substitutions applied: {sub_txt}. You can still submit tactics or keep current tactics.".strip()[:1900], ephemeral=True)
+                    # Broadcast to match channel so everyone sees the subs
+                    try:
+                        ch = self.bot.get_channel(sess.state.channel_id) if sess.state.channel_id else None
+                        if ch is None and sess.state.channel_id:
+                            ch = await self.bot.fetch_channel(sess.state.channel_id)
+                        if ch and evs:
+                            await self._send_events_live(ch, evs, delay=0.5, state=sess.state)
+                    except Exception:
+                        logger.exception("Failed to broadcast substitution events match_id=%s", match_id)
                 except (LineupValidationError, ValueError) as e:
                     try:
                         await inter.followup.send(f"Invalid substitutions: {e}", ephemeral=True)
@@ -1162,12 +1171,21 @@ class SimCog(commands.Cog):
             try:
                 from engine.ai_manager import decide_ai_break_actions
                 actions = decide_ai_break_actions(session.state, side)
-                await session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Manager accepted AI adjustment")
+                evs = await session.apply_break_actions(side, substitutions=actions.get("substitutions", []), tactics_updates=actions.get("tactics_updates", {}), summary="Manager accepted AI adjustment")
                 subs = actions.get("substitutions", [])
                 txt = "AI adjustments applied and side marked ready."
                 if subs:
                     txt += " Subs: " + ", ".join([f"{s.get('on_name')} for {s.get('off_name')}" for s in subs])
                 await self._safe_send(interaction, txt[:1900], ephemeral=True)
+                # Broadcast substitution/tactical events to match channel
+                try:
+                    ch = self.bot.get_channel(session.state.channel_id) if session.state.channel_id else None
+                    if ch is None and session.state.channel_id:
+                        ch = await self.bot.fetch_channel(session.state.channel_id)
+                    if ch and evs:
+                        await self._send_events_live(ch, evs, delay=0.5, state=session.state)
+                except Exception:
+                    logger.exception("Failed to broadcast AI break events match_id=%s", match_id)
             except Exception:
                 logger.exception("br:ai failed match_id=%s side=%s", match_id, side)
                 await self._safe_send(interaction, "Failed to apply AI adjustments. Please try again.", ephemeral=True)
@@ -1565,22 +1583,50 @@ class SimCog(commands.Cog):
         if not events:
             logger.warning("MATCH_FLOW send_events_live: empty events list match_id=%s", match_id)
             return
+
+        # Presentation fast-forward: skip low-importance moments (no simulation speed change).
+        CRITICAL = {
+            "goal", "penalty_scored", "penalty_missed", "penalty_saved", "own_goal",
+            "second_yellow", "red_card", "injury", "substitution", "tactical_change",
+            "var_review", "var_overturn", "disallowed_goal",
+            "half_time", "full_time", "tactical_break", "break_resume",
+            "kickoff", "second_half_kickoff", "stoppage_time",
+        }
+        NOTABLE = {
+            "shot", "save", "block", "chance", "penalty_awarded", "yellow_card",
+            "corner", "free_kick",
+        }
+        # Routine events are fast-forwarded: no message, no pacing delay.
+        ROUTINE_SKIP = {"pass_sequence", "note"}
+
         sent = 0
         silent = 0
+        skipped = 0
         for ev in events:
+            et = ev.get("event_type")
             text = ev.get("commentary")
             payload = ev.get("payload") or {}
-            et = ev.get("event_type")
+
+            # Fast-forward: skip routine non-important events entirely (presentation only).
+            if et in ROUTINE_SKIP:
+                skipped += 1
+                continue
+
             if not text:
                 # CHANCE events are intentionally paired with rich outcome narratives; avoid duplicate display
                 if et != "chance":
                     text = payload.get("detail") or payload.get("summary") or ""
             if not text:
-                # fallback: skip silent/internal events but keep pacing sane
+                # silent/internal event: skip without adding pacing delay
                 silent += 1
-                if delay > 0:
-                    await asyncio.sleep(delay)
                 continue
+
+            # Fast-forward: hide low-signal routine fouls/offside unless notable; keep pacing light.
+            if et in {"foul", "offside"} and et not in CRITICAL:
+                # show occasionally? skip to keep match moving; still counted as skipped
+                skipped += 1
+                continue
+
             try:
                 et = ev.get("event_type")
                 if et in {"goal", "penalty_scored"} and state is not None:
@@ -1645,7 +1691,8 @@ class SimCog(commands.Cog):
                     mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
                     side = ev.get("team_side")
                     team_name = state.team(side).team.name if side else "Team"
-                    msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** tactical adjustments made."
+                    detail = (payload.get("detail") or payload.get("summary") or "tactical adjustments made").strip()
+                    msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** {detail}"
                     await channel.send(_clamp(msg, 1900))
                     sent += 1
                 else:
@@ -1653,9 +1700,17 @@ class SimCog(commands.Cog):
                     sent += 1
             except Exception:
                 logger.exception("Failed to send match event message")
+
+            # Presentation pacing: keep normal feel for important moments, faster for routine.
             if delay > 0:
-                await asyncio.sleep(delay)
-        logger.info("MATCH_FLOW send_events_live done match_id=%s total=%s sent=%s silent=%s", match_id, len(events), sent, silent)
+                if et in CRITICAL:
+                    await asyncio.sleep(delay)
+                elif et in NOTABLE:
+                    await asyncio.sleep(min(delay, 1.2))
+                else:
+                    # other non-critical events: minimal pacing
+                    await asyncio.sleep(min(delay, 0.4))
+        logger.info("MATCH_FLOW send_events_live done match_id=%s total=%s sent=%s silent=%s skipped=%s", match_id, len(events), sent, silent, skipped)
 
     async def _send_live_ratings(self, channel: discord.abc.Messageable, session) -> None:
         try:
