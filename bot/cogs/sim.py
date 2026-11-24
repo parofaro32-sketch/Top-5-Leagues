@@ -1107,9 +1107,32 @@ class SimCog(commands.Cog):
                     try:
                         ch = self.bot.get_channel(sess.state.channel_id) if sess.state.channel_id else None
                         if ch is None and sess.state.channel_id:
-                            ch = await self.bot.fetch_channel(sess.state.channel_id)
+                            try:
+                                ch = await self.bot.fetch_channel(sess.state.channel_id)
+                            except Exception:
+                                ch = None
+                        if ch is None:
+                            ch = getattr(inter, "channel", None)
                         if ch and evs:
-                            await self._send_events_live(ch, evs, delay=0.5, state=sess.state)
+                            try:
+                                await self._send_events_live(ch, evs, delay=0.5, state=sess.state)
+                            except Exception:
+                                logger.exception("Failed to broadcast substitution events via live sender match_id=%s", match_id)
+                                for ev in evs:
+                                    if ev.get("event_type") != "substitution":
+                                        continue
+                                    payload = ev.get("payload") or {}
+                                    minute = int(ev.get("minute", sess.state.minute) or 0)
+                                    extra = int(ev.get("extra_minute", sess.state.extra_minute) or 0)
+                                    mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                                    side_ev = ev.get("team_side")
+                                    team_name = sess.state.team(side_ev).team.name if side_ev else "Team"
+                                    on_name = payload.get("on_name") or "Substitute"
+                                    off_name = payload.get("off_name") or "Player"
+                                    await ch.send(f"- **{mtxt}** — 🔁 **Substitution ({team_name}):** {on_name} comes on for {off_name}."[:1900])
+                        elif ch:
+                            team_name = sess.state.team(s).team.name if s else "Team"
+                            await ch.send(f"🔁 **Substitution ({team_name}):** {sub_txt}"[:1900])
                     except Exception:
                         logger.exception("Failed to broadcast substitution events match_id=%s", match_id)
                 except (LineupValidationError, ValueError) as e:

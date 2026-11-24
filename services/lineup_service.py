@@ -385,15 +385,18 @@ def parse_lineup_text_block(text: str) -> list[str]:
 def _clean_player_ref(ref: str) -> str:
     r = str(ref or "").strip()
     # remove leading bullets/numbers like "1." "1)" "- "
-    r = re.sub(r"^\s*(?:\d+[\).\-\:]\s*|[-*]\s*)", "", r).strip()
+    r = re.sub(r"^\s*(?:\d+[\).\-\:]\s*|[-*•]\s*)", "", r).strip()
     # remove trailing/inline position hints like "(GK)" or "- MID"
     r = re.sub(r"\s*[\(\[]\s*(GK|DEF|MID|FWD|G|D|M|F|GOALKEEPER|DEFENDER|MIDFIELDER|FORWARD|ST|CF|LW|RW|CB|LB|RB|CDM|CAM|CM|RM|LM)\s*[\)\]]\s*$", "", r, flags=re.IGNORECASE)
     r = re.sub(r"\s*[-|:]\s*(GK|DEF|MID|FWD|G|D|M|F|GOALKEEPER|DEFENDER|MIDFIELDER|FORWARD|ST|CF|LW|RW|CB|LB|RB|CDM|CAM|CM|RM|LM)\s*$", "", r, flags=re.IGNORECASE)
     # remove leading "#10 " or "10 - " patterns
     r = re.sub(r"^\s*#\s*\d+\s*[-:.]?\s*", "", r)
     r = re.sub(r"^\s*\d+\s*[-:.]\s*", "", r)
-    # remove trailing "#10"
+    r = re.sub(r"(?i)^\s*no\.?\s*\d+\s*[-:.]?\s*", "", r)
+    # remove trailing "#10" or "(10)"
     r = re.sub(r"\s*#\s*\d+\s*$", "", r)
+    r = re.sub(r"\s*[\(\[]\s*#?\d{1,3}\s*[\)\]]\s*$", "", r)
+    r = re.sub(r"\s+", " ", r).strip(" -:,.")
     return r.strip()
 
 
@@ -411,6 +414,12 @@ def _extract_ref_number(ref: str) -> int | None:
         except Exception:
             return None
     m = re.match(r"^.*\s#\s*(\d{1,3})\s*$", r)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+    m = re.match(r"^.*[\(\[]\s*#?(\d{1,3})\s*[\)\]]\s*$", r)
     if m:
         try:
             return int(m.group(1))
@@ -507,6 +516,26 @@ def resolve_player_ref(ref: str, squad: list[dict[str, Any]]) -> dict[str, Any] 
     last_cands = [p for p in squad if _norm_name(p.get("name")).split()[-1:] == [last]]
     if len(last_cands) == 1:
         return last_cands[0]
+
+    # collapsed alnum match (handles N'Golo -> ngolo, hyphens, etc.)
+    rl_col = re.sub(r"[^a-z0-9]+", "", rl)
+    if len(rl_col) >= 3:
+        col_cands = []
+        for p in squad:
+            pn_col = re.sub(r"[^a-z0-9]+", "", _norm_name(p.get("name")))
+            if not pn_col:
+                continue
+            if rl_col == pn_col or (len(rl_col) >= 4 and (rl_col in pn_col or pn_col in rl_col)):
+                col_cands.append(p)
+        if len(col_cands) == 1:
+            return col_cands[0]
+
+    # single-token unique match anywhere in name tokens
+    if len(rl.split()) == 1:
+        tok = rl.split()[0]
+        tok_cands = [p for p in squad if tok in _norm_name(p.get("name")).split()]
+        if len(tok_cands) == 1:
+            return tok_cands[0]
 
     return None
 
@@ -664,22 +693,18 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
     """Parse break substitution text into apply_break_actions payloads.
     Accepts flexible formats: OFF -> ON, ON for OFF, OFF out ON in, names/numbers, etc.
     """
-    raw = str(text or "").replace("\r", "\n")
-    # split by newlines, semicolons
-    chunks = []
-    for line in raw.replace(";", "\n").split("\n"):
-        line = line.strip()
-        if line:
-            chunks.append(line)
-    if not chunks:
+    raw = str(text or "").replace("\r", "\n").strip()
+    if not raw:
         raise LineupValidationError("No substitutions provided.")
+
     team = state.team(side)
 
     def row_for(ps):
         p = state.players_index.get(state.player_key(side, ps.player_api_id))
+        p_name = getattr(p, "name", None) if p else None
         return {
             "api_id": int(ps.player_api_id),
-            "name": ps.name,
+            "name": ps.name or p_name or str(ps.player_api_id),
             "number": getattr(p, "number", None) if p else None,
             "position": ps.position,
             "team_api_id": team.team.api_id,
@@ -691,13 +716,28 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
     all_rows = [row_for(ps) for ps in state.player_states.values() if ps.team_side == side]
     on_pitch = [r for r in all_rows if r["on_pitch"]]
     bench = [r for r in all_rows if (not r["on_pitch"]) and (not r["red_card"]) and (not r["injured"])]
+    unavailable_bench = [r for r in all_rows if (not r["on_pitch"]) and (r["red_card"] or r["injured"])]
+
+    def _squad_hint() -> str:
+        op = ", ".join([f"{r['name']}" + (f" (#{r['number']})" if r.get('number') is not None else "") for r in on_pitch[:14]])
+        bn = ", ".join([f"{r['name']}" + (f" (#{r['number']})" if r.get('number') is not None else "") for r in bench[:14]])
+        parts = []
+        if op:
+            parts.append(f"On pitch: {op}")
+        if bn:
+            parts.append(f"Bench: {bn}")
+        hint = " | ".join(parts)
+        return hint[:600] if hint else ""
 
     def clean_ref(r: str) -> str:
         r = str(r or "").strip()
         r = re.sub(r"^\s*\d+[\).\-\:]\s*", "", r).strip()  # leading list number
-        r = re.sub(r"\b(out|off|sub\s*out)\b", " ", r, flags=re.IGNORECASE)
-        r = re.sub(r"\b(in|on|sub\s*in)\b", " ", r, flags=re.IGNORECASE)
-        r = re.sub(r"\s+", " ", r).strip(" -:>.,")
+        r = re.sub(r"^\s*[-*•]\s*", "", r).strip()
+        r = re.sub(r"\b(bring\s+on|take\s+off|come\s+on|come\s+off|put\s+on|swap\s+in|swap\s+out|sub\s*out|sub\s*in|sub\s*off|sub\s*on)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub(r"\b(out|off|in|on)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub("[\"'\u2018\u2019\u201c\u201d]", "", r)
+        r = re.sub(r"\b(please|pls|thanks|thank you|now)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub(r"\s+", " ", r).strip(" -:>.,;/\\")
         return r.strip()
 
     def resolve_in_pool(ref: str, pool: list[dict[str, Any]]):
@@ -706,25 +746,199 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
         p = resolve_player_ref(ref, pool)
         if p:
             return p
-        # try cleaned
         c = clean_ref(ref)
         if c and c != ref:
             p = resolve_player_ref(c, pool)
             if p:
                 return p
+        # try without numbers/punct noise
+        c2 = re.sub(r"[^a-zA-Z0-9\s]", " ", c or ref)
+        c2 = re.sub(r"\s+", " ", c2).strip()
+        if c2 and c2 not in {ref, c}:
+            p = resolve_player_ref(c2, pool)
+            if p:
+                return p
         return None
 
     def find_player_any(ref: str):
+        ref = str(ref or "").strip()
+        if not ref:
+            return None, None
         p = resolve_in_pool(ref, on_pitch)
         if p:
             return p, "on_pitch"
         p = resolve_in_pool(ref, bench)
         if p:
             return p, "bench"
+        p = resolve_in_pool(ref, unavailable_bench)
+        if p:
+            return p, "unavailable"
         p = resolve_in_pool(ref, all_rows)
         if p:
-            return p, "on_pitch" if any(r["api_id"] == p["api_id"] and r["on_pitch"] for r in all_rows) else "bench"
+            is_on = any(r["api_id"] == p["api_id"] and r["on_pitch"] for r in all_rows)
+            return p, ("on_pitch" if is_on else "bench")
         return None, None
+
+    def split_chunks(text: str) -> list[str]:
+        # Split by newlines and semicolons first
+        base = []
+        for line in str(text or "").replace(";", "\n").split("\n"):
+            line = line.strip()
+            if line:
+                base.append(line)
+        out = []
+        for line in base:
+            # If a line contains multiple substitution separators, split by comma.
+            sep_count = len(re.findall(r"(->|=>|→|<->|\bfor\b|\bto\b|\breplaces?\b|\bwith\b|/|\||\s-\s)", line, flags=re.IGNORECASE))
+            if sep_count > 1 and "," in line:
+                parts = [p.strip() for p in line.split(",") if p.strip()]
+                if len(parts) > 1:
+                    out.extend(parts)
+                    continue
+            out.append(line)
+        return out
+
+    def try_parse_in_out(ln: str):
+        # Prefix style: IN X OUT Y / OUT Y IN X
+        m_in = re.search(r"\b(?:in|on)\b\s*[:=\-]?\s+(.+)", ln, flags=re.IGNORECASE)
+        m_out = re.search(r"\b(?:out|off)\b\s*[:=\-]?\s+(.+)", ln, flags=re.IGNORECASE)
+        if m_in and m_out:
+            in_ref = re.split(r"\b(?:out|off)\b\s*[:=\-]?\s+", m_in.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,.;:-")
+            out_ref = re.split(r"\b(?:in|on)\b\s*[:=\-]?\s+", m_out.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,.;:-")
+            in_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", in_ref).strip()
+            out_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", out_ref).strip()
+            if in_ref and out_ref:
+                return out_ref, in_ref
+
+        # Suffix style: X out, Y in / X in, Y out
+        m_out_s = re.search(r"(.+?)\s+\b(?:out|off)\b(?=$|\s*[,.;]|\s+\b(?:and|,|in|on)\b)", ln, flags=re.IGNORECASE)
+        m_in_s = re.search(r"(.+?)\s+\b(?:in|on)\b(?=$|\s*[,.;]|\s+\b(?:and|,|out|off)\b)", ln, flags=re.IGNORECASE)
+        if m_out_s and m_in_s:
+            out_ref = m_out_s.group(1).strip(" ,.;:-")
+            in_ref = m_in_s.group(1).strip(" ,.;:-")
+            # clean up common leading words
+            out_ref = re.sub(r"(?i)^\s*(?:and|then|,)+\s*", "", out_ref).strip()
+            in_ref = re.sub(r"(?i)^\s*(?:and|then|,)+\s*", "", in_ref).strip()
+            # if they captured the whole prefix including the other keyword, re-split
+            if re.search(r"\b(?:in|on)\b", out_ref, flags=re.IGNORECASE):
+                out_ref = re.split(r"\b(?:in|on)\b", out_ref, maxsplit=1, flags=re.IGNORECASE)[-1].strip(" ,.;:-")
+            if re.search(r"\b(?:out|off)\b", in_ref, flags=re.IGNORECASE):
+                in_ref = re.split(r"\b(?:out|off)\b", in_ref, maxsplit=1, flags=re.IGNORECASE)[-1].strip(" ,.;:-")
+            out_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", out_ref).strip()
+            in_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", in_ref).strip()
+            if in_ref and out_ref and in_ref.lower() != out_ref.lower():
+                return out_ref, in_ref
+        return None
+
+    def try_parse_separator(ln: str):
+        seps = [
+            r"\s*(?:->|=>|→)\s*",
+            r"\s*(?:<->)\s*",
+            r"\s+(?:for|to|with|replaces|replace)\s+",
+            r"\s*/\s*",
+            r"\s*\|\s*",
+            r"\s+>\s+",
+            r"\s+<\s+",
+            r"\s+-\s+",
+        ]
+        for sep in seps:
+            parts = re.split(sep, ln, maxsplit=1, flags=re.IGNORECASE)
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                return parts[0].strip(), parts[1].strip()
+        # comma as separator if exactly two sides
+        if "," in ln:
+            parts = [p.strip() for p in ln.split(",", 1)]
+            if len(parts) == 2 and parts[0] and parts[1]:
+                return parts[0], parts[1]
+        return None
+
+    def try_smart_split(ln: str):
+        toks = ln.split()
+        if len(toks) < 2:
+            return None
+        candidates = []
+        for i in range(1, len(toks)):
+            left = " ".join(toks[:i]).strip()
+            right = " ".join(toks[i:]).strip()
+            if not left or not right:
+                continue
+            lp, lloc = find_player_any(left)
+            rp, rloc = find_player_any(right)
+            if not lp or not rp:
+                continue
+            if int(lp.get("api_id")) == int(rp.get("api_id")):
+                continue
+            score = 0
+            if {lloc, rloc} == {"on_pitch", "bench"}:
+                score += 100
+            elif {lloc, rloc} == {"on_pitch", "unavailable"} or {lloc, rloc} == {"bench", "unavailable"}:
+                score += 20
+            # prefer splits that use cleaned refs less ambiguously (longer names)
+            score += min(len(left), 30) * 0.1 + min(len(right), 30) * 0.1
+            candidates.append((score, left, right, lp, lloc, rp, rloc))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best = candidates[0]
+        # only accept if it looks like a real sub pair
+        if best[0] < 20:
+            return None
+        return best[1], best[2]
+
+    def pick_off_on(a_p, a_loc, b_p, b_loc, a_ref, b_ref):
+        if a_loc == "on_pitch" and b_loc == "bench":
+            return a_p, b_p
+        if a_loc == "bench" and b_loc == "on_pitch":
+            return b_p, a_p
+        if a_loc == "on_pitch" and b_loc == "on_pitch":
+            raise LineupValidationError(f"Both players are on the pitch: {a_p.get('name')} and {b_p.get('name')}. Pick one player on the pitch and one on the bench.")
+        if a_loc == "bench" and b_loc == "bench":
+            raise LineupValidationError(f"Both players are on the bench: {a_p.get('name')} and {b_p.get('name')}. Pick one player on the pitch and one on the bench.")
+        if a_loc == "unavailable" or b_loc == "unavailable":
+            bad = a_p if a_loc == "unavailable" else b_p
+            reason = "injured" if bad.get("injured") else ("sent off" if bad.get("red_card") else "unavailable")
+            raise LineupValidationError(f"{bad.get('name')} is {reason} and cannot be substituted.")
+        # fallback: assume first is off, second is on
+        return a_p, b_p
+
+    chunks = split_chunks(raw)
+    if not chunks:
+        raise LineupValidationError("No substitutions provided.")
+
+    # Pre-pass: if lines are single names (no separators/keywords), pair consecutive ones.
+    def _looks_like_pair(text: str) -> bool:
+        t = str(text or "").strip()
+        if try_parse_separator(t):
+            return True
+        if try_parse_in_out(t):
+            return True
+        if try_smart_split(t):
+            return True
+        if re.search(r"(->|=>|→|\bfor\b|\bto\b|\bwith\b|\breplaces?\b|\bin\b|\bout\b|\bon\b|\boff\b|/|\|)", t, flags=re.IGNORECASE):
+            return True
+        return False
+
+    expanded: list[str] = []
+    i = 0
+    while i < len(chunks):
+        cur = chunks[i].strip()
+        if not cur:
+            i += 1
+            continue
+        if _looks_like_pair(cur):
+            expanded.append(cur)
+            i += 1
+            continue
+        # single token/name line - try to pair with next single
+        if i + 1 < len(chunks):
+            nxt = chunks[i + 1].strip()
+            if nxt and not _looks_like_pair(nxt):
+                expanded.append(cur + " -> " + nxt)
+                i += 2
+                continue
+        expanded.append(cur)
+        i += 1
+    chunks = expanded
 
     out: list[dict[str, Any]] = []
     seen_off: set[int] = set()
@@ -732,43 +946,29 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
 
     for ln in chunks:
         orig = ln
-        # Remove common wrappers
-        ln = re.sub(r"(?i)^\s*(sub|substitution|change)\s*[:\-]\s*", "", ln).strip()
-        # Split by separators
-        parts = re.split(r"\s*(?:->|=>|→|<->|>|<|\/|\\| for | to | with | replaces | replace )\s*", ln, maxsplit=1, flags=re.IGNORECASE)
-        if len(parts) != 2:
-            parts = re.split(r"\s+-\s+", ln, maxsplit=1)
-        if len(parts) != 2:
-            # Try "IN X OUT Y" / "OUT X IN Y" / "X in Y out" patterns
-            m_in = re.search(r"\b(?:in|on)\b[:\s]+(.+)", ln, flags=re.IGNORECASE)
-            m_out = re.search(r"\b(?:out|off)\b[:\s]+(.+)", ln, flags=re.IGNORECASE)
-            if m_in and m_out:
-                # determine order by position in string
-                in_pos = re.search(r"\b(?:in|on)\b", ln, flags=re.IGNORECASE).start()
-                out_pos = re.search(r"\b(?:out|off)\b", ln, flags=re.IGNORECASE).start()
-                in_ref = re.split(r"\b(?:out|off)\b", m_in.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
-                out_ref = re.split(r"\b(?:in|on)\b", m_out.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
-                # parts: [off_ref, on_ref]
-                parts = [out_ref, in_ref]
-            else:
-                # Try "OFF ON" as two names/numbers (only if exactly 2 tokens that resolve)
-                tokens = ln.split()
-                if len(tokens) == 2:
-                    parts = tokens
-                else:
-                    # last resort: try splitting by comma
-                    parts = [p.strip() for p in ln.split(",", 1)]
-                    if len(parts) != 2 or not parts[0] or not parts[1]:
-                        raise LineupValidationError(f"Could not parse sub: '{orig}'. Use 'OFF -> ON'.")
+        ln = re.sub(r"(?i)^\s*(sub|substitution|change|subs?)\s*[:\-]\s*", "", ln).strip()
+        ln = re.sub(r"(?i)^\s*(please\s+)?(make|do|apply)\s+(a\s+)?(sub|substitution|change)s?\s*[:\-]?\s*", "", ln).strip()
+        if not ln:
+            continue
 
-        a_ref, b_ref = parts[0].strip(), parts[1].strip()
-        a_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", a_ref).strip()
-        b_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", b_ref).strip()
+        pair = try_parse_separator(ln)
+        if not pair:
+            pair = try_parse_in_out(ln)
+        if not pair:
+            pair = try_smart_split(ln)
+        if not pair:
+            hint = _squad_hint()
+            msg = f"Could not parse sub: '{orig}'. Use 'OFF -> ON' (example: Rashford -> Garnacho)."
+            if hint:
+                msg += f"\n{hint}"
+            raise LineupValidationError(msg)
+
+        a_ref, b_ref = pair[0].strip(), pair[1].strip()
+        a_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", a_ref).strip(" -:>.,")
+        b_ref = re.sub(r"^\s*\d+[\).\-\:]\s*", "", b_ref).strip(" -:>.,")
 
         a_p, a_loc = find_player_any(a_ref)
         b_p, b_loc = find_player_any(b_ref)
-
-        # If one found and other not, try harder: search in full squad by cleaned ref
         if not a_p:
             c = clean_ref(a_ref)
             if c:
@@ -780,30 +980,24 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
 
         if not a_p or not b_p:
             missing = []
-            if not a_p: missing.append(a_ref)
-            if not b_p: missing.append(b_ref)
-            raise LineupValidationError(f"Could not match player(s): {', '.join(missing)}. Use names or shirt numbers from the squad.")
+            if not a_p:
+                missing.append(a_ref)
+            if not b_p:
+                missing.append(b_ref)
+            hint = _squad_hint()
+            msg = f"Could not match player(s): {', '.join(missing)}. Use a name or shirt number from your squad."
+            if hint:
+                msg += f"\n{hint}"
+            raise LineupValidationError(msg)
 
-        # Decide direction: off is the one on pitch, on is the one on bench
-        off_p = on_p = None
-        if a_loc == "on_pitch" and b_loc == "bench":
-            off_p, on_p = a_p, b_p
-        elif a_loc == "bench" and b_loc == "on_pitch":
-            off_p, on_p = b_p, a_p
-        elif a_loc == "on_pitch" and b_loc == "on_pitch":
-            raise LineupValidationError(f"Both players are on the pitch: {a_p.get('name')} and {b_p.get('name')}.")
-        elif a_loc == "bench" and b_loc == "bench":
-            raise LineupValidationError(f"Both players are on the bench: {a_p.get('name')} and {b_p.get('name')}.")
-        else:
-            # fallback: assume A off, B on
-            off_p, on_p = a_p, b_p
+        off_p, on_p = pick_off_on(a_p, a_loc, b_p, b_loc, a_ref, b_ref)
 
         off_id = int(off_p["api_id"])
         on_id = int(on_p["api_id"])
-        if off_id in seen_off or on_id in seen_on:
-            raise LineupValidationError(f"Duplicate substitution: {off_p.get('name')} -> {on_p.get('name')}")
         if off_id == on_id:
             raise LineupValidationError("Cannot substitute a player for themselves.")
+        if off_id in seen_off or on_id in seen_on:
+            raise LineupValidationError(f"Duplicate substitution: {off_p.get('name')} -> {on_p.get('name')}")
         seen_off.add(off_id)
         seen_on.add(on_id)
         out.append({
@@ -813,6 +1007,7 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
             "on_name": str(on_p.get("name") or on_id),
             "reason": "manager substitution",
         })
+
     if not out:
         raise LineupValidationError("No valid substitutions found.")
     return out
