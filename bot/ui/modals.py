@@ -45,10 +45,7 @@ class TacticsTextModal(discord.ui.Modal, title="Confirm Tactics"):
         style=discord.TextStyle.paragraph,
         required=True,
         max_length=4000,
-        placeholder=(
-            "Example: 4-3-3, positive mentality, high press, high line, short build-up, "
-            "wide attacking width, fast transitions, overlapping fullbacks, counterpress on."
-        ),
+        placeholder="e.g. 4-3-3, high press, high line, short build-up, fast transitions",
     )
 
     def __init__(self, on_submit_data):
