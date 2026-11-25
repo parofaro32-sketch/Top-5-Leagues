@@ -233,12 +233,27 @@ class SeasonGroup(app_commands.Group):
             await interaction.followup.send(embed=error_embed("Squad Not Found", "Could not load squads for fixture."), ephemeral=True)
             return
 
+        # Detect claimed managers for this fixture
+        managers = await ss.get_fixture_managers(sid, fx)
+        hm_id = managers.get("home_manager_id")
+        am_id = managers.get("away_manager_id")
+        if hm_id is not None and am_id is not None and int(hm_id) == int(am_id):
+            await interaction.followup.send(embed=error_embed("Invalid Managers", "Home and away teams are claimed by the same user."), ephemeral=True)
+            return
+
+        if hm_id and am_id:
+            mode = "manager_vs_manager"
+        elif hm_id or am_id:
+            mode = "manager_vs_bot"
+        else:
+            mode = "bot_vs_bot"
+
         ms = self.cog.bot.match_service
         try:
             session = await ms.create_session(
-                guild_id=interaction.guild_id, channel_id=interaction.channel_id, mode="bot_vs_bot",
+                guild_id=interaction.guild_id, channel_id=interaction.channel_id, mode=mode,
                 home_team=home, away_team=away, home_squad=home_squad, away_squad=away_squad,
-                home_manager_id=None, away_manager_id=None,
+                home_manager_id=hm_id, away_manager_id=am_id,
                 season_id=sid, fixture_id=int(fx["id"]), league_key=fx.get("league_key"), competition_type="league",
             )
         except Exception as e:
@@ -251,6 +266,83 @@ class SeasonGroup(app_commands.Group):
         session.state.submission["match_type"] = "League"
         await session.save()
 
+        sim_cog = self.cog.bot.get_cog("SimCog")
+        if sim_cog is None:
+            await interaction.followup.send(embed=error_embed("Sim Unavailable", "Sim cog not loaded; match created but not started."), ephemeral=True)
+            return
+
+        channel = interaction.channel
+        if channel is None and session.state.channel_id:
+            try:
+                channel = await self.cog.bot.fetch_channel(session.state.channel_id)
+            except Exception:
+                channel = None
+        if channel is None:
+            await interaction.followup.send(embed=error_embed("Channel Error", "Could not resolve channel to start match flow."), ephemeral=True)
+            return
+
+        manager_ids = [uid for uid in (hm_id, am_id) if uid is not None]
+        if manager_ids:
+            # Manager setup flow (same as /sim manager flow)
+            from datetime import datetime, timezone, timedelta
+            from bot.cogs.sim import ManagerSetupView, build_match_setup_embed, _clamp
+
+            now = datetime.now(timezone.utc)
+            deadline = now + timedelta(seconds=int(session.state.submission.get("initial_deadline_seconds") or 1200))
+            session.state.submission["deadline_at"] = deadline.isoformat()
+            session.state.submission["match_started"] = False
+            await session.save()
+
+            view = ManagerSetupView(sim_cog, session, timeout=None)
+            try:
+                setup_msg = await channel.send(embed=build_match_setup_embed(session), view=view)
+                view.message = setup_msg
+                session.state.message_id = setup_msg.id
+                await session.save()
+            except Exception:
+                logger.exception("Failed to send season manager setup embed")
+                await interaction.followup.send(embed=error_embed("Setup Error", "Failed to post match setup embed in channel."), ephemeral=True)
+                return
+
+            deadline_ts = int(deadline.timestamp())
+            title = "Manager vs Manager — Submissions Open" if len(manager_ids) > 1 else "Manager vs Bot — Submission Open"
+            who_line = "Both managers have 20 minutes to submit their starting lineup and tactics." if len(manager_ids) > 1 else "You have 20 minutes to submit your starting lineup and tactics."
+            notice = (
+                f"**{title}**\n"
+                f"{home.get('name')} vs {away.get('name')}\n"
+                f"Season: {season.get('name')} | Matchday {fx.get('matchday')} | Fixture `{fx.get('id')}`\n"
+                f"{who_line}\n"
+                f"Deadline: <t:{deadline_ts}:R> (<t:{deadline_ts}:T>)\n"
+                f"Please select your starting XI, choose your bench and submit your tactics before the deadline."
+            )
+            for uid in manager_ids:
+                try:
+                    user = self.cog.bot.get_user(uid) or await self.cog.bot.fetch_user(uid)
+                    await user.send(notice + f"\nMatch ID: `{session.state.id}`")
+                except Exception:
+                    pass
+            try:
+                mentions = " ".join(f"<@{uid}>" for uid in manager_ids)
+                prefix = (mentions + " ") if mentions else ""
+                await channel.send(_clamp(prefix + notice, 1900))
+            except Exception:
+                pass
+
+            try:
+                await interaction.followup.send(embed=success_embed(
+                    "Season Match Setup",
+                    f"**{home.get('name')}** vs **{away.get('name')}**\n"
+                    f"Season: {season.get('name')} | Matchday {fx.get('matchday')} | Fixture `{fx.get('id')}`\n"
+                    f"Mode: {mode.replace('_', ' ').title()} | Match ID: `{session.state.id}`\n"
+                    f"Managers: {', '.join(f'<@{uid}>' for uid in manager_ids)}"
+                ), ephemeral=False)
+            except Exception:
+                pass
+
+            sim_cog._start_deadline_watcher(session, view)
+            return
+
+        # Bot vs bot
         await interaction.followup.send(embed=success_embed(
             "Season Match Starting",
             f"**{home.get('name')}** vs **{away.get('name')}**\n"
@@ -258,11 +350,6 @@ class SeasonGroup(app_commands.Group):
             f"Match ID: `{session.state.id}`"
         ))
 
-        sim_cog = self.cog.bot.get_cog("SimCog")
-        if sim_cog is None:
-            await interaction.channel.send("Sim cog not loaded; match created but not started.")
-            return
-        # launch match flow
         class _Shim:
             channel = interaction.channel
         shim = _Shim()
@@ -398,6 +485,82 @@ class SeasonCog(commands.Cog):
         except Exception as e:
             logger.exception("finalizetransfer failed")
             await interaction.followup.send(embed=error_embed("Transfer Failed", str(e)), ephemeral=True)
+
+
+    @app_commands.command(name="claim", description="Claim a team in the active season")
+    @app_commands.describe(team="Team name (e.g. Liverpool)", league="League (optional)")
+    @app_commands.choices(league=_league_choices())
+    async def claim(self, interaction: discord.Interaction, team: str, league: app_commands.Choice[str] | None = None):
+        await interaction.response.defer(ephemeral=True)
+        league_key = league.value if league else None
+        ss = self.bot.season_service
+        try:
+            res = await ss.claim_team(guild_id=interaction.guild_id, user_id=interaction.user.id, team_query=team, league_key=league_key)
+        except Exception as e:
+            logger.exception("claim failed")
+            await interaction.followup.send(embed=error_embed("Claim Failed", str(e)), ephemeral=True)
+            return
+
+        if not res.get("ok"):
+            reason = str(res.get("reason") or "unknown")
+            if reason == "team_not_found":
+                await interaction.followup.send(embed=error_embed("Team Not Found", f"No active-season team found for `{team}`. Create a season first with `/season create`."), ephemeral=True)
+                return
+            if reason == "already_claimed":
+                owner = res.get("owner_user_id")
+                t = res.get("team") or {}
+                owner_txt = f"<@{owner}>" if owner else "another manager"
+                await interaction.followup.send(embed=error_embed("Team Claimed", f"**{t.get('team_name', team)}** is already claimed by {owner_txt}."), ephemeral=True)
+                return
+            if reason == "user_already_has_team":
+                cur = res.get("current_team") or {}
+                await interaction.followup.send(embed=error_embed("Already Managing A Team", f"You already manage **{cur.get('team_name','a team')}** in this season. Release it first before claiming another."), ephemeral=True)
+                return
+            if reason == "ambiguous_team":
+                cands = res.get("candidates") or []
+                lines = [f"- **{c.get('team_name')}** ({c.get('season_name')})" for c in cands[:10]]
+                await interaction.followup.send(embed=error_embed("Ambiguous Team", "Multiple teams matched. Be more specific:\n" + "\n".join(lines)), ephemeral=True)
+                return
+            await interaction.followup.send(embed=error_embed("Claim Failed", reason), ephemeral=True)
+            return
+
+        t = res.get("team") or {}
+        season = res.get("season") or {}
+        team_name = t.get("team_name") or team
+        if res.get("already_claimed_by_you"):
+            await interaction.followup.send(embed=info_embed("Already Claimed", f"You already manage **{team_name}** in **{season.get('name', 'this season')}**."), ephemeral=True)
+            return
+        await interaction.followup.send(embed=success_embed("Team Claimed", f"{interaction.user.mention} is now the manager of **{team_name}** in **{season.get('name', 'the active season')}**."), ephemeral=True)
+
+    @app_commands.command(name="claimed", description="Show claimed teams and their managers in active seasons")
+    @app_commands.describe(league="League (optional)")
+    @app_commands.choices(league=_league_choices())
+    async def claimed(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None):
+        await interaction.response.defer(ephemeral=True)
+        league_key = league.value if league else None
+        ss = self.bot.season_service
+        try:
+            rows = await ss.list_claimed_teams(interaction.guild_id, league_key=league_key)
+        except Exception as e:
+            logger.exception("claimed failed")
+            await interaction.followup.send(embed=error_embed("Claimed Failed", str(e)), ephemeral=True)
+            return
+        if not rows:
+            await interaction.followup.send(embed=info_embed("Claimed Teams", "No teams have been claimed yet in active seasons."), ephemeral=True)
+            return
+        lines = []
+        for r in rows[:40]:
+            uid = r.get("manager_user_id")
+            manager_txt = f"<@{uid}>"
+            try:
+                m = interaction.guild.get_member(int(uid)) if interaction.guild and uid is not None else None
+                if m:
+                    manager_txt = f"{m.display_name} ({m.mention})"
+            except Exception:
+                pass
+            season_name = r.get("season_name") or LEAGUE_DISPLAY.get(r.get("season_league_key"), r.get("season_league_key"))
+            lines.append(f"• **{r.get('team_name')}** — {manager_txt} _{season_name}_")
+        await interaction.followup.send(embed=info_embed("Claimed Teams", "\n".join(lines)[:3900]), ephemeral=True)
 
 
 async def setup(bot):

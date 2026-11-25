@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 
 Side = Literal["home", "away"]
-MatchMode = Literal["bot_vs_bot", "manager_vs_manager"]
+MatchMode = Literal["bot_vs_bot", "manager_vs_bot", "manager_vs_manager"]
 MatchStatus = Literal["setup", "running", "break", "halftime", "finished", "cancelled", "error"]
 
 

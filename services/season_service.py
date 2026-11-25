@@ -874,3 +874,162 @@ class SeasonService:
         out["ok"] = True
         out["moved"] = moved_any
         return out
+
+    async def get_season_team(self, season_id: str, team_api_id: int) -> dict[str, Any] | None:
+        row = await self.db.fetchone(
+            "SELECT * FROM season_teams WHERE season_id=? AND team_api_id=?",
+            (str(season_id), int(team_api_id)),
+        )
+        return dict(row) if row else None
+
+    async def list_season_teams(self, season_id: str) -> list[dict[str, Any]]:
+        rows = await self.db.fetchall(
+            "SELECT * FROM season_teams WHERE season_id=? ORDER BY team_name ASC",
+            (str(season_id),),
+        )
+        return [dict(r) for r in rows]
+
+    async def find_team_in_active_seasons(self, guild_id: int | None, team_query: str, league_key: str | None = None) -> list[dict[str, Any]]:
+        """Find season_teams matching name in active seasons for a guild. Returns candidates with season info."""
+        q = (team_query or "").strip().lower()
+        if not q:
+            return []
+        seasons = await self.list_seasons(guild_id=guild_id, status="active")
+        if league_key:
+            seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        # fallback: include global active seasons if none for guild
+        if not seasons and guild_id is not None:
+            seasons = await self.list_seasons(guild_id=None, status="active")
+            if league_key:
+                seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        out: list[dict[str, Any]] = []
+        for s in seasons:
+            sid = str(s.get("id"))
+            teams = await self.list_season_teams(sid)
+            for t in teams:
+                name = str(t.get("team_name") or "").lower()
+                short = str(t.get("short_name") or "").lower()
+                if q == name or q == short or q in name or name.startswith(q):
+                    rec = dict(t)
+                    rec["season_name"] = s.get("name")
+                    rec["season_league_key"] = s.get("league_key")
+                    rec["season_guild_id"] = s.get("guild_id")
+                    rec["_match_score"] = 3 if (q == name or q == short) else (2 if name.startswith(q) else 1)
+                    out.append(rec)
+        out.sort(key=lambda r: (-int(r.get("_match_score", 0)), str(r.get("team_name") or "")))
+        # dedupe by (season_id, team_api_id)
+        seen = set()
+        deduped = []
+        for r in out:
+            k = (str(r.get("season_id")), int(r.get("team_api_id") or 0))
+            if k in seen:
+                continue
+            seen.add(k)
+            deduped.append(r)
+        return deduped
+
+    async def claim_team(self, *, guild_id: int | None, user_id: int, team_query: str, league_key: str | None = None) -> dict[str, Any]:
+        candidates = await self.find_team_in_active_seasons(guild_id, team_query, league_key=league_key)
+        if not candidates:
+            return {"ok": False, "reason": "team_not_found"}
+        # prefer exact match
+        exact = [c for c in candidates if int(c.get("_match_score", 0)) == 3]
+        pick = exact[0] if len(exact) == 1 else (candidates[0] if len(candidates) == 1 else None)
+        if pick is None:
+            # ambiguous
+            return {
+                "ok": False,
+                "reason": "ambiguous_team",
+                "candidates": [{"team_name": c.get("team_name"), "season_name": c.get("season_name"), "league_key": c.get("season_league_key"), "team_api_id": c.get("team_api_id"), "season_id": c.get("season_id")} for c in candidates[:10]],
+            }
+        season_id = str(pick.get("season_id"))
+        team_api_id = int(pick.get("team_api_id"))
+        existing = await self.get_season_team(season_id, team_api_id)
+        if not existing:
+            return {"ok": False, "reason": "team_not_found"}
+        owner = existing.get("manager_user_id")
+        if owner is not None and int(owner) == int(user_id):
+            return {"ok": True, "already_claimed_by_you": True, "team": existing, "season_id": season_id}
+        if owner is not None and int(owner) != int(user_id):
+            return {"ok": False, "reason": "already_claimed", "team": existing, "season_id": season_id, "owner_user_id": int(owner)}
+
+        # Optional: prevent claiming multiple teams in same season
+        already = await self.db.fetchone(
+            "SELECT * FROM season_teams WHERE season_id=? AND manager_user_id=?",
+            (season_id, int(user_id)),
+        )
+        if already:
+            a = dict(already)
+            return {"ok": False, "reason": "user_already_has_team", "team": existing, "season_id": season_id, "current_team": a}
+
+        now = utc_now_iso()
+        await self.db.execute(
+            "UPDATE season_teams SET manager_user_id=?, is_user_controlled=1, updated_at=? WHERE season_id=? AND team_api_id=?",
+            (int(user_id), now, season_id, team_api_id),
+        )
+        updated = await self.get_season_team(season_id, team_api_id)
+        season = await self.get_season(season_id)
+        return {"ok": True, "already_claimed_by_you": False, "team": updated, "season_id": season_id, "season": season}
+
+    async def release_team(self, *, guild_id: int | None, user_id: int, team_query: str, league_key: str | None = None) -> dict[str, Any]:
+        candidates = await self.find_team_in_active_seasons(guild_id, team_query, league_key=league_key)
+        if not candidates:
+            return {"ok": False, "reason": "team_not_found"}
+        exact = [c for c in candidates if int(c.get("_match_score", 0)) == 3]
+        pick = exact[0] if len(exact) == 1 else (candidates[0] if len(candidates) == 1 else None)
+        if pick is None:
+            return {"ok": False, "reason": "ambiguous_team", "candidates": candidates[:10]}
+        season_id = str(pick.get("season_id"))
+        team_api_id = int(pick.get("team_api_id"))
+        existing = await self.get_season_team(season_id, team_api_id)
+        if not existing:
+            return {"ok": False, "reason": "team_not_found"}
+        owner = existing.get("manager_user_id")
+        if owner is None:
+            return {"ok": False, "reason": "not_claimed", "team": existing}
+        if int(owner) != int(user_id):
+            return {"ok": False, "reason": "not_owner", "team": existing, "owner_user_id": int(owner)}
+        now = utc_now_iso()
+        await self.db.execute(
+            "UPDATE season_teams SET manager_user_id=NULL, is_user_controlled=0, updated_at=? WHERE season_id=? AND team_api_id=?",
+            (now, season_id, team_api_id),
+        )
+        updated = await self.get_season_team(season_id, team_api_id)
+        return {"ok": True, "team": updated, "season_id": season_id}
+
+    async def list_claimed_teams(self, guild_id: int | None, league_key: str | None = None) -> list[dict[str, Any]]:
+        seasons = await self.list_seasons(guild_id=guild_id, status="active")
+        if league_key:
+            seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        if not seasons and guild_id is not None:
+            seasons = await self.list_seasons(guild_id=None, status="active")
+            if league_key:
+                seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        out = []
+        for s in seasons:
+            sid = str(s.get("id"))
+            rows = await self.db.fetchall(
+                "SELECT * FROM season_teams WHERE season_id=? AND manager_user_id IS NOT NULL ORDER BY team_name ASC",
+                (sid,),
+            )
+            for r in rows:
+                d = dict(r)
+                d["season_name"] = s.get("name")
+                d["season_league_key"] = s.get("league_key")
+                out.append(d)
+        return out
+
+    async def get_fixture_managers(self, season_id: str, fixture: dict[str, Any]) -> dict[str, int | None]:
+        """Return manager user IDs for home/away if claimed in this season."""
+        home_id = int(fixture.get("home_team_api_id") or 0)
+        away_id = int(fixture.get("away_team_api_id") or 0)
+        home_row = await self.get_season_team(season_id, home_id) if home_id else None
+        away_row = await self.get_season_team(season_id, away_id) if away_id else None
+        home_mgr = home_row.get("manager_user_id") if home_row else None
+        away_mgr = away_row.get("manager_user_id") if away_row else None
+        return {
+            "home_manager_id": int(home_mgr) if home_mgr is not None else None,
+            "away_manager_id": int(away_mgr) if away_mgr is not None else None,
+            "home_team": home_row,
+            "away_team": away_row,
+        }

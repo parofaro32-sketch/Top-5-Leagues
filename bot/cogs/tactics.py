@@ -58,11 +58,11 @@ class TacticsCog(commands.Cog):
             try:
                 team_state = session.state.team(s)
                 team_state.tactics = normalize_tactics({**(team_state.tactics or {}), **updates})
-                if session.state.mode == "manager_vs_manager" and mgr is not None and session.state.status == "setup":
+                if session.state.mode in ("manager_vs_manager", "manager_vs_bot") and mgr is not None and session.state.status == "setup":
                     session.state.submission[f"{s}_tactics_submitted"] = True
                     session.state.submission[f"{s}_tactics_submitted_at"] = discord.utils.utcnow().isoformat()
                 await session.save()
-                if session.state.mode == "manager_vs_manager" and session.state.status == "setup":
+                if session.state.mode in ("manager_vs_manager", "manager_vs_bot") and session.state.status == "setup":
                     sim_cog = self.bot.get_cog("SimCog")
                     if sim_cog and hasattr(sim_cog, "_after_submission_update"):
                         try:

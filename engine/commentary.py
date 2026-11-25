@@ -42,6 +42,26 @@ def _score(state: MatchState) -> str:
     return f"{state.home.team.name} {state.home.score}–{state.away.score} {state.away.team.name}"
 
 
+def _short_score(state: MatchState) -> str:
+    return f"{state.home.score}-{state.away.score}"
+
+
+def _tref(state: MatchState, side: str | None, rng: random.Random) -> str:
+    if side == "home":
+        return _pick(rng, [state.home.team.name, state.home.team.name, "the hosts", state.home.team.name])
+    if side == "away":
+        return _pick(rng, [state.away.team.name, state.away.team.name, "the visitors", state.away.team.name])
+    return "the side"
+
+
+def _oref(state: MatchState, side: str | None, rng: random.Random) -> str:
+    if side in {"home", "away"}:
+        opp = state.team(state.opp_side(side)).team.name
+        label = "the visitors" if side == "home" else "the hosts"
+        return _pick(rng, [opp, opp, opp, label])
+    return "the opposition"
+
+
 def _pick(rng: random.Random, options: list[str]) -> str:
     return rng.choice(options) if options else ""
 
@@ -289,6 +309,9 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
             f"{pfx} — {tref.capitalize()} work it wide, then back inside, keeping {oref} moving at {ss}.",
             f"{pfx} — {tref.capitalize()} string passes together in midfield, looking for a runner beyond {oref}'s defensive line.{t_hint}",
             f"{pfx} — Neat possession from {tref}, who move the ball with purpose and wait for {oref} to overcommit.{s_hint}",
+            f"{pfx} — {tref.capitalize()} probe down the flank, combining neatly before {oref} close the passing lane.{t_hint}",
+            f"{pfx} — Measured buildup from {tref}: one-touch combinations draw {oref} out, then the ball is recycled to keep control.{s_hint}",
+            f"{pfx} — {tref.capitalize()} keep the ball moving, switching tempo to unsettle {oref}'s midfield screen.{t_hint}",
         ])
 
     if et == E.CHANCE:
@@ -523,4 +546,8 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         f"{pfx} — {team} look to build momentum {flav}, but {opp} are disciplined in their defensive structure.",
         f"{pfx} — The tempo dips briefly as both sides reset. {tref.capitalize()} look for a cleaner route forward at {ss}.{s_hint}",
         f"{pfx} — Midfield becomes the battleground {flav}, with neither side giving an inch in the duel for control.",
+        f"{pfx} — {tref.capitalize()} try to raise the tempo, but {oref} match their intensity and keep the lanes closed.{s_hint}",
+        f"{pfx} — A tactical chess match at {ss}: {tref} circulate, {oref} shuffle, and the next pass could unlock everything.{t_hint}",
+        f"{pfx} — {flav.capitalize()}, {tref} push bodies forward while {oref} stay compact and look ready to spring.{s_hint}",
+        f"{pfx} — The crowd senses a shift as {tref} increase the pressure, forcing {oref} into a deeper defensive posture.",
     ])

@@ -156,8 +156,8 @@ def tactics_summary(t: dict[str, Any]) -> str:
 
 
 def parse_tactics_text(text: str) -> dict[str, Any]:
-    """Parse free-text tactics into a structured updates dict. Best-effort, deterministic, SAFE.
-    This never accepts outcome-manipulation instructions (score/cards/ref bias)."""
+    """Parse free-text tactics into structured updates. Best-effort, deterministic, SAFE.
+    Understands natural football language; never accepts outcome-manipulation instructions."""
     raw = (text or "").strip()
     if not raw:
         return {}
@@ -173,115 +173,197 @@ def parse_tactics_text(text: str) -> dict[str, Any]:
 
     t = default_tactics()
     low = raw.lower()
+    # normalize punctuation for matching
+    compact = re.sub(r"[^a-z0-9+#\s-]", " ", low)
+    compact = re.sub(r"\s+", " ", compact).strip()
 
     def has(*words: str) -> bool:
-        return any(w in low for w in words)
+        return any(w in compact for w in words)
+
+    def has_re(*patterns: str) -> bool:
+        return any(re.search(p, compact) for p in patterns)
 
     def pick(patterns: list[tuple[str, str]], default: str | None = None) -> str | None:
         for pat, val in patterns:
-            if re.search(pat, low):
+            if re.search(pat, compact):
                 return val
         return default
 
-    # Formation mention
-    fm = re.search(r"\b(3-4-3|3-5-2|3-4-1-2|4-1-4-1|4-2-3-1|4-2-2-2|4-3-1-2|4-3-3|4-4-1-1|4-4-2|4-5-1|5-3-2|5-4-1)\b", low)
+    # Formation
+    fm = re.search(r"\b(3-4-3|3-5-2|3-4-1-2|4-1-4-1|4-2-3-1|4-2-2-2|4-3-1-2|4-3-3|4-4-1-1|4-4-2|4-5-1|5-3-2|5-4-1)\b", compact)
     if fm:
         t["formation"] = fm.group(1)
+    else:
+        # natural language formation hints
+        if has_re(r"\bfour at the back\b", r"\bback four\b", r"\b4 at the back\b"):
+            # don't override if a specific 4-x-x was implied; leave default unless other clues
+            pass
+        if has_re(r"\bthree at the back\b", r"\bback three\b", r"\b3 at the back\b", r"\b3 cb\b"):
+            t["formation"] = "3-5-2"
+        if has_re(r"\bfive at the back\b", r"\bback five\b", r"\b5 at the back\b"):
+            t["formation"] = "5-3-2"
 
+    # Mentality / intent
     ment = pick([
-        (r"\bvery attacking\b|\ball[- ]?out attack\b|\bgo all out\b", "very_attacking"),
-        (r"\battacking\b|\battack\b", "attacking"),
-        (r"\bpositive\b", "positive"),
-        (r"\bcautious\b|\bdefensive mentality\b|\bplay safe\b", "cautious"),
-        (r"\bbalanced\b", "balanced"),
+        (r"\bvery attacking\b|\ball out attack\b|\ball-out attack\b|\bgo all out\b|\bfull attack\b|\bthrow everything forward\b", "very_attacking"),
+        (r"\battacking\b|\battack\b|\bgo forward\b|\bpush forward\b|\bplay on the front foot\b|\bfront foot\b", "attacking"),
+        (r"\bpositive\b|\bproactive\b", "positive"),
+        (r"\bcautious\b|\bcareful\b|\bdefensive mentality\b|\bplay safe\b|\bplay it safe\b|\bmore defensive\b|\bsit back\b", "cautious"),
+        (r"\bbalanced\b|\bneutral\b", "balanced"),
     ])
     if ment:
         t["attacking"]["mentality"] = ment
 
+    # Build-up / passing style
     build = pick([
-        (r"\bshort passing\b|\bshort build\b|\bplay out from the back\b|\bpossession\b|\btiki[- ]?taka\b", "short"),
-        (r"\bdirect\b|\blong ball\b|\bgo long\b|\bdirect passing\b|\bpump it long\b", "direct"),
-        (r"\bmixed build\b", "mixed"),
+        (r"\btiki taka\b|\btiki-taka\b|\bshort passing\b|\bshort passes\b|\bplay out from the back\b|\bbuild from the back\b|\bkeep possession\b|\bpossession football\b|\bpossession based\b|\bpass it around\b", "short"),
+        (r"\bdirect\b|\blong ball\b|\blong balls\b|\bgo long\b|\bpump it long\b|\bhit long\b|\bplay direct\b|\bdirect football\b|\broute one\b", "direct"),
+        (r"\bmixed build\b|\bmixed passing\b", "mixed"),
     ])
     if build:
         t["attacking"]["build_up"] = build
         t["attacking"]["passing_directness"] = build if build in {"short", "direct", "mixed"} else "mixed"
+        if build == "short":
+            t["attacking"]["possession_style"] = "patient"
+        elif build == "direct":
+            t["attacking"]["possession_style"] = "fast"
 
+    # Possession/tempo
+    poss = pick([
+        (r"\bpatient\b|\bslow tempo\b|\bkeep the ball\b|\bcontrol the game\b|\bcontrol possession\b|\bslow it down\b", "patient"),
+        (r"\bfast tempo\b|\bhigh tempo\b|\bquick tempo\b|\bplay fast\b|\bquick passing\b|\bmove the ball quickly\b", "fast"),
+        (r"\bbalanced tempo\b", "balanced"),
+    ])
+    if poss:
+        t["attacking"]["possession_style"] = poss
+
+    # Width
     width = pick([
-        (r"\bwide\b|\buse wings\b|\bstretch\b|\bwing play\b", "wide"),
-        (r"\bnarrow\b|\bthrough the middle\b|\bcentral\b|\bhalf spaces\b", "narrow"),
+        (r"\bwide\b|\buse the wings\b|\buse wings\b|\bstretch\b|\bwing play\b|\bstay wide\b|\bget wide\b|\bhug the touchline\b", "wide"),
+        (r"\bnarrow\b|\bthrough the middle\b|\bcentral\b|\bhalf spaces\b|\bplay narrow\b|\binside\b", "narrow"),
+        (r"\bbalanced width\b", "balanced"),
     ])
     if width:
         t["attacking"]["attacking_width"] = width
+        t["defensive"]["defensive_width"] = "balanced" if width == "narrow" else width
 
+    # Transitions
     trans = pick([
-        (r"\bfast transition\b|\bquick transition\b|\btransition quickly\b|\bbreak fast\b", "fast"),
-        (r"\bslow transition\b|\bpatient transition\b|\bsettle\b", "slow"),
+        (r"\bfast transition\b|\bquick transition\b|\btransition quickly\b|\bbreak fast\b|\bfast breaks\b|\bhit on the break\b", "fast"),
+        (r"\bslow transition\b|\bpatient transition\b|\bsettle back\b", "slow"),
     ])
     if trans:
         t["attacking"]["attacking_transitions"] = trans
+        if trans == "fast":
+            t["attacking"]["counterattacking"] = True
 
-    if has("counterattack", "counter-attack", "counter attack", "hit on the break", "break quickly", "counter"):
+    # Counterattacking
+    if has_re(r"\bcounterattack\b", r"\bcounter attack\b", r"\bcounter-attack\b", r"\bhit them on the break\b", r"\bbreak quickly\b", r"\bplay on the counter\b"):
         t["attacking"]["counterattacking"] = True
-    if has("no counterattack", "no counter-attack", "don't counter"):
+    if has_re(r"\bno counterattack\b", r"\bno counter attack\b", r"\bdon t counter\b", r"\bdo not counter\b"):
         t["attacking"]["counterattacking"] = False
-    if has("overlap", "overlapping fullbacks", "overlapping full-backs"):
+
+    # Fullback/width movement
+    if has_re(r"\boverlap\b", r"\boverlapping fullbacks\b", r"\boverlapping full backs\b", r"\bfullbacks push up\b"):
         t["attacking"]["overlapping_fullbacks"] = True
-    if has("underlap", "underlapping"):
+    if has_re(r"\bunderlap\b", r"\bunderlapping\b", r"\binverted fullbacks\b"):
         t["attacking"]["underlapping_movements"] = True
 
+    # Crossing
+    cross = pick([
+        (r"\bcross a lot\b|\blots of crosses\b|\bwhip crosses\b|\bget crosses in\b|\bcross early\b|\bhigh crossing\b", "high"),
+        (r"\blow crossing\b|\bfew crosses\b|\bdon t cross\b|\bavoid crosses\b", "low"),
+    ])
+    if cross:
+        t["attacking"]["crossing"] = cross
+
+    # Pressing
     press = pick([
-        (r"\bvery high press\b|\bgegenpress\b|\brelentless press\b|\bpress like crazy\b", "very_high"),
-        (r"\bhigh press\b|\bpress high\b|\bpress intensely\b|\bpress hard\b", "high"),
-        (r"\bmedium press\b|\bbalanced press\b", "medium"),
-        (r"\blow press\b|\bdrop off\b|\bstand off\b|\blow block press\b", "low"),
+        (r"\bgegenpress\b|\bgegenpressing\b|\bvery high press\b|\brelentless press\b|\bpress like crazy\b|\bpress everywhere\b", "very_high"),
+        (r"\bhigh press\b|\bpress high\b|\bpress intensely\b|\bpress hard\b|\bpress them\b|\bclose down\b|\bpress aggressively\b", "high"),
+        (r"\bmedium press\b|\bbalanced press\b|\bmid press\b", "medium"),
+        (r"\blow press\b|\bno press\b|\bdon t press\b|\bdrop off\b|\bstand off\b|\bsit off\b|\bdo not press\b", "low"),
     ])
     if press:
         t["defensive"]["pressing_intensity"] = press
+        if press in ("high", "very_high"):
+            t["defensive"]["pressing_triggers"] = "aggressive"
+            t["defensive"]["counterpressing"] = True
+        elif press == "low":
+            t["defensive"]["pressing_triggers"] = "conservative"
 
+    # Defensive line / block
     line = pick([
-        (r"\bvery high line\b", "very_high"),
-        (r"\bhigh line\b", "high"),
-        (r"\bdeep line\b|\blow block\b|\bdrop deep\b|\bsit deep\b|\bpark the bus\b", "deep"),
-        (r"\bstandard line\b|\bnormal line\b", "standard"),
+        (r"\bvery high line\b|\bextremely high line\b", "very_high"),
+        (r"\bhigh line\b|\bpush up\b|\bhold a high line\b", "high"),
+        (r"\bdeep line\b|\blow block\b|\bdrop deep\b|\bsit deep\b|\bpark the bus\b|\bdefend deep\b|\blow defensive line\b", "deep"),
+        (r"\bstandard line\b|\bnormal line\b|\bmid line\b", "standard"),
     ])
     if line:
         t["defensive"]["defensive_line"] = line
+        if line == "deep":
+            t["defensive"]["defensive_block"] = "low"
+        elif line in ("high", "very_high"):
+            t["defensive"]["defensive_block"] = "high"
 
     block = pick([
-        (r"\blow block\b|\bsit deep\b|\bpark the bus\b", "low"),
-        (r"\bmid block\b", "mid"),
+        (r"\blow block\b|\bpark the bus\b|\bsit deep\b|\bdeep block\b", "low"),
+        (r"\bmid block\b|\bmiddle block\b", "mid"),
         (r"\bhigh block\b", "high"),
     ])
     if block:
         t["defensive"]["defensive_block"] = block
 
-    compact = pick([
-        (r"\bvery compact\b|\bcompact\b|\bstay compact\b", "high"),
-        (r"\bnot compact\b|\bloose shape\b|\bstretch defense\b", "low"),
+    # Compactness
+    compactness = pick([
+        (r"\bvery compact\b|\bstay compact\b|\bcompact\b|\bkeep it tight\b|\btight shape\b", "high"),
+        (r"\bnot compact\b|\bloose shape\b|\bstretch defense\b|\bspread out\b", "low"),
     ])
-    if compact:
-        t["defensive"]["compactness"] = compact
+    if compactness:
+        t["defensive"]["compactness"] = compactness
 
-    if has("counterpress", "counter-press", "press after loss"):
+    # Counterpress
+    if has_re(r"\bcounterpress\b", r"\bcounter press\b", r"\bpress after loss\b", r"\bwin it back quickly\b"):
         t["defensive"]["counterpressing"] = True
-    if has("offside trap"):
+    if has_re(r"\bno counterpress\b", r"\bdon t counterpress\b"):
+        t["defensive"]["counterpressing"] = False
+
+    # Marking / traps
+    if has_re(r"\boffside trap\b"):
         t["defensive"]["offside_trap"] = True
-    if has("man mark", "man-mark", "man marking"):
+    if has_re(r"\bman mark\b", r"\bman marking\b", r"\bmark man to man\b"):
         t["defensive"]["marking"] = "man"
-    elif has("zonal", "zone marking"):
+    elif has_re(r"\bzonal\b", r"\bzone marking\b"):
         t["defensive"]["marking"] = "zonal"
 
-    if has("slow tempo", "patient", "keep possession"):
+    # Style presets / natural phrases
+    if has_re(r"\bpark the bus\b", r"\bcatenaccio\b", r"\ball behind the ball\b"):
+        t["attacking"]["mentality"] = "cautious"
+        t["attacking"]["build_up"] = "direct"
+        t["attacking"]["passing_directness"] = "direct"
+        t["attacking"]["counterattacking"] = True
+        t["attacking"]["attacking_transitions"] = "fast"
+        t["defensive"]["defensive_line"] = "deep"
+        t["defensive"]["defensive_block"] = "low"
+        t["defensive"]["pressing_intensity"] = "low"
+        t["defensive"]["compactness"] = "high"
+    if has_re(r"\bgegenpress\b", r"\bheavy metal football\b"):
+        t["attacking"]["mentality"] = "attacking"
+        t["attacking"]["attacking_transitions"] = "fast"
+        t["defensive"]["pressing_intensity"] = "very_high"
+        t["defensive"]["defensive_line"] = "high"
+        t["defensive"]["counterpressing"] = True
+        t["defensive"]["compactness"] = "high"
+    if has_re(r"\btiki taka\b", r"\btotal football\b", r"\bpossession football\b"):
+        t["attacking"]["mentality"] = "positive"
+        t["attacking"]["build_up"] = "short"
+        t["attacking"]["passing_directness"] = "short"
         t["attacking"]["possession_style"] = "patient"
-    elif has("fast tempo", "high tempo", "quick tempo"):
-        t["attacking"]["possession_style"] = "fast"
-
-    if has("cross a lot", "lots of crosses", "whip crosses", "crossing"):
-        t["attacking"]["crossing"] = "high"
+        t["attacking"]["attacking_transitions"] = "slow"
+        t["defensive"]["pressing_intensity"] = "high"
+        t["defensive"]["defensive_line"] = "high"
 
     return normalize_tactics(t)
-
 
 LLM_TACTICS_SYSTEM_PROMPT = """You are a football tactics parser for a fair match simulation engine.
 Convert the user's natural-language tactics request into a JSON object ONLY.
@@ -327,69 +409,8 @@ If the user asks for something forbidden, ignore it and return only valid tactic
 
 
 async def parse_tactics_text_async(text: str, *, settings: Any = None) -> dict[str, Any]:
-    """LLM-first natural language tactics parsing, with strict validation and deterministic fallback."""
-    raw = (text or "").strip()
-    if not raw:
-        return {}
-
-    # Always safe fallback available
-    fallback = parse_tactics_text(raw)
-
-    # Try LLM if configured
-    try:
-        cfg = settings
-        if cfg is None:
-            try:
-                from config import load_settings
-                cfg = load_settings()
-            except Exception:
-                cfg = None
-        if not cfg or not getattr(cfg, "has_llm", False):
-            return fallback
-
-        import aiohttp
-        base = str(getattr(cfg, "llm_base_url", "https://api.openai.com/v1")).rstrip("/")
-        url = base + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {getattr(cfg, 'llm_api_key', '')}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": getattr(cfg, "llm_model", "gpt-4o-mini"),
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": LLM_TACTICS_SYSTEM_PROMPT},
-                {"role": "user", "content": raw[:2000]},
-            ],
-            "response_format": {"type": "json_object"},
-        }
-        timeout = aiohttp.ClientTimeout(total=int(getattr(cfg, "llm_timeout", 20) or 20))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                if resp.status >= 400:
-                    logger.warning("LLM tactics parse failed status=%s", resp.status)
-                    return fallback
-                data = await resp.json(content_type=None)
-        content = (((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        content = str(content).strip()
-        # extract JSON if wrapped
-        if "{" in content:
-            jstart = content.find("{")
-            jend = content.rfind("}")
-            if jend > jstart:
-                content = content[jstart:jend+1]
-        obj = json.loads(content)
-        if not isinstance(obj, dict):
-            return fallback
-        parsed = normalize_tactics(obj)
-        # If LLM returned empty but rule-based got something, prefer rule-based; else parsed
-        if parsed == default_tactics() and fallback != default_tactics():
-            return fallback
-        return parsed
-    except Exception:
-        logger.exception("LLM tactics parse error; using deterministic fallback")
-        return fallback
-
+    """Natural language tactics parsing using the deterministic rule engine (no external LLM API)."""
+    return parse_tactics_text(text)
 
 def sanitize_tactics_summary(text: str | None) -> str:
     return _sanitize_text_summary(text)

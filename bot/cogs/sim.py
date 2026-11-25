@@ -1561,7 +1561,7 @@ class SimCog(commands.Cog):
                     continue
                 if state.get("status") != "setup":
                     continue
-                if state.get("mode") != "manager_vs_manager":
+                if state.get("mode") not in ("manager_vs_manager", "manager_vs_bot"):
                     continue
                 match_id = state.get("id") or (row["id"] if "id" in row.keys() else None)
                 if not match_id:
@@ -2366,6 +2366,21 @@ class SimCog(commands.Cog):
             if hm_id == am_id:
                 await interaction.followup.send("Home and away managers must be different users.", ephemeral=True)
                 return
+        elif mode == "manager_vs_bot":
+            # One human manager vs AI. Prefer explicitly provided manager, else command user.
+            hm_id = home_manager.id if home_manager else (away_manager.id if away_manager else interaction.user.id)
+            am_id = None
+            # If caller specified which side is human via which arg is filled, respect it.
+            if home_manager and not away_manager:
+                hm_id = home_manager.id
+                am_id = None
+            elif away_manager and not home_manager:
+                hm_id = None
+                am_id = away_manager.id
+            elif home_manager and away_manager:
+                # ambiguous - treat as mvm
+                hm_id = home_manager.id
+                am_id = away_manager.id
 
         try:
             home_squad = await fd.get_squad(int(home["api_id"]))
@@ -2403,8 +2418,8 @@ class SimCog(commands.Cog):
 
         setup_embed = build_match_setup_embed(session, competition=competition, match_type=match_type, stadium=stadium)
 
-        if mode == "manager_vs_manager":
-            # 20-minute initial deadline for both managers
+        if mode in ("manager_vs_manager", "manager_vs_bot"):
+            # 20-minute initial deadline for human manager(s)
             now = datetime.now(timezone.utc)
             deadline = now + timedelta(seconds=int(session.state.submission.get("initial_deadline_seconds") or 1200))
             session.state.submission["deadline_at"] = deadline.isoformat()
@@ -2426,22 +2441,27 @@ class SimCog(commands.Cog):
                 return
 
             # Notify managers (private DM best-effort + channel mention)
+            manager_ids = [uid for uid in (hm_id, am_id) if uid is not None]
             deadline_ts = int(deadline.timestamp())
+            title = "Manager vs Manager — Submissions Open" if len(manager_ids) > 1 else "Manager vs Bot — Submission Open"
+            who_line = "Both managers have 20 minutes to submit their starting lineup and tactics." if len(manager_ids) > 1 else "You have 20 minutes to submit your starting lineup and tactics."
             notice = (
-                f"**Manager vs Manager — Submissions Open**\n"
+                f"**{title}**\n"
                 f"{home.get('name')} vs {away.get('name')}\n"
-                f"Both managers have 20 minutes to submit their starting lineup and tactics.\n"
+                f"{who_line}\n"
                 f"Deadline: <t:{deadline_ts}:R> (<t:{deadline_ts}:T>)\n"
                 f"Please select your starting XI, choose your bench and submit your tactics before the deadline."
             )
-            for uid in (hm_id, am_id):
+            for uid in manager_ids:
                 try:
                     user = self.bot.get_user(uid) or await self.bot.fetch_user(uid)
                     await user.send(notice + f"\nMatch ID: `{session.state.id}`")
                 except Exception:
                     pass
             try:
-                await channel.send(_clamp(f"<@{hm_id}> <@{am_id}> " + notice, 1900))
+                mentions = " ".join(f"<@{uid}>" for uid in manager_ids)
+                prefix = (mentions + " ") if mentions else ""
+                await channel.send(_clamp(prefix + notice, 1900))
             except Exception:
                 pass
 

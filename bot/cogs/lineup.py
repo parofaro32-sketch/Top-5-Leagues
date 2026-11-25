@@ -140,12 +140,12 @@ class LineupCog(commands.Cog):
             team_state.lineup = lu
 
         # Mark setup submission flags for manager mode
-        if session.state.mode == "manager_vs_manager" and mgr is not None and session.state.status == "setup":
+        if session.state.mode in ("manager_vs_manager", "manager_vs_bot") and mgr is not None and session.state.status == "setup":
             session.state.submission[f"{s}_lineup_submitted"] = True
             session.state.submission[f"{s}_lineup_submitted_at"] = discord.utils.utcnow().isoformat()
         await session.save()
         # Nudge sim cog to check setup completion
-        if session.state.mode == "manager_vs_manager" and session.state.status == "setup":
+        if session.state.mode in ("manager_vs_manager", "manager_vs_bot") and session.state.status == "setup":
             sim_cog = self.bot.get_cog("SimCog")
             if sim_cog and hasattr(sim_cog, "_after_submission_update"):
                 try:
