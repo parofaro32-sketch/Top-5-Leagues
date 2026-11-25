@@ -2177,6 +2177,17 @@ class SimCog(commands.Cog):
                                 await channel.send(_clamp("🏁 Season completed! All matchdays have been played.", 1900))
             except Exception:
                 logger.exception("Failed to finalize season fixture match_id=%s", session.state.id)
+            # Post-match press conference auto-generation
+            try:
+                press_cog = self.bot.get_cog("PressCog")
+                if press_cog and hasattr(press_cog, "send_post_match_press"):
+                    try:
+                        rep_obj = session.report()
+                    except Exception:
+                        rep_obj = None
+                    await press_cog.send_post_match_press(channel, state=session.state, report=rep_obj)
+            except Exception:
+                logger.exception("Failed to send post-match press match_id=%s", session.state.id)
         except Exception:
             logger.exception("MATCH_FLOW fatal unhandled error match_id=%s", getattr(getattr(session, 'state', None), 'id', None))
             try:

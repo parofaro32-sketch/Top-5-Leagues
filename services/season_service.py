@@ -24,6 +24,20 @@ LEAGUE_DISPLAY = {
     "ligue_1": "Ligue 1",
 }
 
+# Realistic but fair defaults (same for every team in a league: no advantages).
+DEFAULT_SEASON_BUDGETS: dict[str, dict[str, int]] = {
+    "premier_league": {"transfer_budget": 120_000_000, "wage_budget": 3_000_000},
+    "la_liga": {"transfer_budget": 110_000_000, "wage_budget": 2_800_000},
+    "bundesliga": {"transfer_budget": 105_000_000, "wage_budget": 2_700_000},
+    "serie_a": {"transfer_budget": 105_000_000, "wage_budget": 2_700_000},
+    "ligue_1": {"transfer_budget": 100_000_000, "wage_budget": 2_500_000},
+}
+
+
+def default_season_budgets(league_key: str | None) -> dict[str, int]:
+    d = DEFAULT_SEASON_BUDGETS.get(str(league_key or ""), {"transfer_budget": 100_000_000, "wage_budget": 2_500_000})
+    return {"transfer_budget": int(d["transfer_budget"]), "wage_budget": int(d["wage_budget"])}
+
 
 def _season_id() -> str:
     return f"sea_{uuid.uuid4().hex[:12]}"
@@ -72,6 +86,20 @@ class SeasonService:
         row = await self.db.fetchone("SELECT * FROM seasons WHERE id=?", (season_id,))
         return dict(row) if row else None
 
+    async def ensure_season_budgets(self, season_id: str) -> None:
+        season = await self.get_season(str(season_id))
+        if not season:
+            return
+        budgets = default_season_budgets(season.get("league_key"))
+        now = utc_now_iso()
+        # Only backfill teams that look uninitialized (both zero).
+        await self.db.execute(
+            """UPDATE season_teams
+               SET transfer_budget=?, wage_budget=?, updated_at=?
+               WHERE season_id=? AND COALESCE(transfer_budget,0)=0 AND COALESCE(wage_budget,0)=0""",
+            (int(budgets["transfer_budget"]), int(budgets["wage_budget"]), now, str(season_id)),
+        )
+
     async def get_active_season(self, guild_id: int | None, league_key: str | None = None) -> dict[str, Any] | None:
         if league_key:
             row = await self.db.fetchone(
@@ -94,6 +122,11 @@ class SeasonService:
                 row = await self.db.fetchone(
                     "SELECT * FROM seasons WHERE status='active' ORDER BY created_at DESC LIMIT 1",
                 )
+        if row:
+            try:
+                await self.ensure_season_budgets(str(dict(row).get("id")))
+            except Exception:
+                pass
         return dict(row) if row else None
 
     async def list_seasons(self, guild_id: int | None = None, status: str | None = None) -> list[dict[str, Any]]:
@@ -152,15 +185,16 @@ class SeasonService:
         )
 
         # season teams + standings
+        budgets = default_season_budgets(league_key)
         for t in teams:
             tid = int(t["api_id"])
             tname = str(t.get("name") or tid)
             short = t.get("short_name") or t.get("code")
             logo = t.get("logo")
             await self.db.execute(
-                """INSERT OR REPLACE INTO season_teams(season_id,team_api_id,team_name,league_key,manager_user_id,is_user_controlled,short_name,logo,created_at,updated_at)
-                   VALUES(?,?,?,?,NULL,0,?,?,?,?)""",
-                (season_id, tid, tname, league_key, short, logo, now, now),
+                """INSERT OR REPLACE INTO season_teams(season_id,team_api_id,team_name,league_key,manager_user_id,is_user_controlled,short_name,logo,transfer_budget,wage_budget,created_at,updated_at)
+                   VALUES(?,?,?,?,NULL,0,?,?,?,?,?,?)""",
+                (season_id, tid, tname, league_key, short, logo, int(budgets["transfer_budget"]), int(budgets["wage_budget"]), now, now),
             )
             await self.db.execute(
                 """INSERT OR REPLACE INTO standings(season_id,league_key,team_api_id,team_name,played,won,drawn,lost,goals_for,goals_against,goal_difference,points,home_played,home_won,home_drawn,home_lost,home_gf,home_ga,away_played,away_won,away_drawn,away_lost,away_gf,away_ga,form,updated_at)
@@ -749,7 +783,7 @@ class SeasonService:
             await self._apply_standings_for_fixture(season_id, dict(fx), reverse=False)
         return await self.get_standings(season_id)
 
-    async def create_pending_transfer(self, *, season_id: str | None, guild_id: int | None, player_api_id: int, to_team_api_id: int, requested_by: int | None = None, note: str | None = None, transfer_type: str = "manual") -> dict[str, Any]:
+    async def create_pending_transfer(self, *, season_id: str | None, guild_id: int | None, player_api_id: int, to_team_api_id: int, requested_by: int | None = None, note: str | None = None, transfer_type: str = "manual", fee: int = 0, wage: int = 0, signing_bonus: int = 0, contract_years: int | None = None, role: str | None = None, meta: dict[str, Any] | None = None) -> dict[str, Any]:
         season_year = 2026
         if season_id:
             s = await self.get_season(season_id)
@@ -769,10 +803,13 @@ class SeasonService:
         if from_team_api_id == int(to_team_api_id):
             return {"ok": False, "reason": "player_already_in_team"}
         now = utc_now_iso()
+        meta_obj = {"season_year": season_year}
+        if isinstance(meta, dict):
+            meta_obj.update(meta)
         cur = await self.db.execute(
-            """INSERT INTO season_transfers(season_id,guild_id,player_api_id,player_name,from_team_api_id,from_team_name,to_team_api_id,to_team_name,status,requested_by,transfer_type,note,meta_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?, 'pending', ?,?,?,?, ?,?)""",
-            (season_id, guild_id, int(player_api_id), player_name, from_team_api_id, from_team_name, int(to_team_api_id), to_team_name, requested_by, transfer_type, note, json.dumps({"season_year": season_year}), now, now),
+            """INSERT INTO season_transfers(season_id,guild_id,player_api_id,player_name,from_team_api_id,from_team_name,to_team_api_id,to_team_name,status,requested_by,transfer_type,note,fee,wage,signing_bonus,contract_years,role,meta_json,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?, 'pending', ?,?,?,?,?,?,?,?, ?,?,?)""",
+            (season_id, guild_id, int(player_api_id), player_name, from_team_api_id, from_team_name, int(to_team_api_id), to_team_name, requested_by, transfer_type, note, int(fee or 0), int(wage or 0), int(signing_bonus or 0), int(contract_years) if contract_years is not None else None, role, json.dumps(meta_obj), now, now),
         )
         # fetch id
         row = await self.db.fetchone("SELECT * FROM season_transfers WHERE rowid=?", (cur.lastrowid,))
@@ -889,6 +926,35 @@ class SeasonService:
         except Exception:
             pass
 
+        # Auto-deduct budgets (buying club) when fee/wage are present.
+        fee = int(tr.get("fee") or 0)
+        wage = int(tr.get("wage") or 0)
+        budget_applied = False
+        if season_id and (fee > 0 or wage > 0):
+            try:
+                now_b = utc_now_iso()
+                # deduct from buying team
+                await self.db.execute(
+                    """UPDATE season_teams
+                       SET transfer_budget = MAX(0, COALESCE(transfer_budget,0) - ?),
+                           wage_budget = MAX(0, COALESCE(wage_budget,0) - ?),
+                           updated_at=?
+                       WHERE season_id=? AND team_api_id=?""",
+                    (max(0, fee), max(0, wage), now_b, str(season_id), int(to_team_api_id)),
+                )
+                # credit selling team transfer budget with fee
+                if from_team_api_id is not None and fee > 0:
+                    await self.db.execute(
+                        """UPDATE season_teams
+                           SET transfer_budget = COALESCE(transfer_budget,0) + ?,
+                               updated_at=?
+                           WHERE season_id=? AND team_api_id=?""",
+                        (max(0, fee), now_b, str(season_id), int(from_team_api_id)),
+                    )
+                budget_applied = True
+            except Exception:
+                logger.exception("Failed to apply transfer budget deductions transfer_id=%s", transfer_id)
+
         now = utc_now_iso()
         await self.db.execute(
             "UPDATE season_transfers SET status='confirmed', confirmed_by=?, confirmed_at=?, updated_at=?, from_team_api_id=? WHERE id=?",
@@ -898,6 +964,9 @@ class SeasonService:
         out = dict(tr2) if tr2 else tr
         out["ok"] = True
         out["moved"] = moved_any
+        out["budget_applied"] = budget_applied
+        out["fee"] = fee
+        out["wage"] = wage
         return out
 
     async def get_season_team(self, season_id: str, team_api_id: int) -> dict[str, Any] | None:
@@ -1058,3 +1127,25 @@ class SeasonService:
             "home_team": home_row,
             "away_team": away_row,
         }
+
+    async def get_user_team_in_active_season(self, guild_id: int | None, user_id: int, league_key: str | None = None) -> dict[str, Any] | None:
+        seasons = await self.list_seasons(guild_id=guild_id, status="active")
+        if league_key:
+            seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        if not seasons and guild_id is not None:
+            seasons = await self.list_seasons(guild_id=None, status="active")
+            if league_key:
+                seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        for s in seasons:
+            row = await self.db.fetchone(
+                "SELECT * FROM season_teams WHERE season_id=? AND manager_user_id=? LIMIT 1",
+                (str(s.get("id")), int(user_id)),
+            )
+            if row:
+                d = dict(row)
+                d["season_name"] = s.get("name")
+                d["season_league_key"] = s.get("league_key")
+                d["season_year"] = s.get("season_year")
+                d["_season"] = dict(s)
+                return d
+        return None

@@ -40,6 +40,9 @@ class FootballBot(commands.Bot):
             "bot.cogs.ratings",
             "bot.cogs.squad",
             "bot.cogs.season",
+            "bot.cogs.club",
+            "bot.cogs.transfers",
+            "bot.cogs.press",
         ):
             try:
                 await self.load_extension(ext)

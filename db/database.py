@@ -348,6 +348,108 @@ CREATE TABLE IF NOT EXISTS season_transfers (
     confirmed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_season_transfers_status ON season_transfers(status, season_id);
+
+CREATE TABLE IF NOT EXISTS bot_transfer_usage (
+    season_id TEXT NOT NULL,
+    team_api_id INTEGER NOT NULL,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (season_id, team_api_id)
+);
+
+CREATE TABLE IF NOT EXISTS transfer_offers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id TEXT,
+    guild_id INTEGER,
+    channel_id INTEGER,
+    message_id INTEGER,
+    kind TEXT NOT NULL, -- bot_offer|ask_about|contract_nego
+    status TEXT NOT NULL DEFAULT 'pending', -- pending|accepted|rejected|negotiating|agreed|cancelled|expired|countered
+    buying_user_id INTEGER,
+    buying_team_api_id INTEGER,
+    buying_team_name TEXT,
+    selling_team_api_id INTEGER,
+    selling_team_name TEXT,
+    selling_manager_user_id INTEGER,
+    player_api_id INTEGER,
+    player_name TEXT,
+    fee INTEGER,
+    wage_offer INTEGER,
+    signing_bonus INTEGER,
+    contract_years INTEGER,
+    role TEXT,
+    stage TEXT,
+    round INTEGER NOT NULL DEFAULT 0,
+    pressure INTEGER NOT NULL DEFAULT 0,
+    meta_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_transfer_offers_status ON transfer_offers(status, kind, season_id);
+CREATE INDEX IF NOT EXISTS idx_transfer_offers_users ON transfer_offers(buying_user_id, selling_manager_user_id, status);
+
+CREATE TABLE IF NOT EXISTS press_conferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT,
+    season_id TEXT,
+    guild_id INTEGER,
+    channel_id INTEGER,
+    message_id INTEGER,
+    league_key TEXT,
+    team_api_id INTEGER,
+    team_name TEXT,
+    manager_user_id INTEGER,
+    question TEXT,
+    context_json TEXT,
+    status TEXT NOT NULL DEFAULT 'open', -- open|answered|closed
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_press_match ON press_conferences(match_id, status);
+
+CREATE TABLE IF NOT EXISTS press_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    press_id INTEGER NOT NULL,
+    user_id INTEGER,
+    answer_text TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (press_id) REFERENCES press_conferences(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS training_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id TEXT,
+    guild_id INTEGER,
+    team_api_id INTEGER NOT NULL,
+    team_name TEXT,
+    user_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'scheduled', -- scheduled|running|completed|cancelled
+    starts_at TEXT,
+    completes_at TEXT,
+    assignments_json TEXT,
+    result_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_training_team_status ON training_sessions(team_api_id, season_id, status);
+
+CREATE TABLE IF NOT EXISTS board_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id TEXT,
+    guild_id INTEGER,
+    channel_id INTEGER,
+    user_id INTEGER,
+    team_api_id INTEGER NOT NULL,
+    team_name TEXT,
+    kind TEXT NOT NULL, -- funds|wage
+    amount INTEGER,
+    reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending', -- pending|approved|rejected|negotiating
+    meta_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_board_requests_status ON board_requests(status, kind, team_api_id);
 """
 
 
@@ -393,6 +495,26 @@ class Database:
         ]:
             try:
                 await self._ensure_column("matches", col, defn)
+            except Exception:
+                pass
+        for col, defn in [
+            ("transfer_budget", "INTEGER NOT NULL DEFAULT 0"),
+            ("wage_budget", "INTEGER NOT NULL DEFAULT 0"),
+        ]:
+            try:
+                await self._ensure_column("season_teams", col, defn)
+            except Exception:
+                pass
+        for col, defn in [
+            ("fee", "INTEGER DEFAULT 0"),
+            ("wage", "INTEGER DEFAULT 0"),
+            ("signing_bonus", "INTEGER DEFAULT 0"),
+            ("contract_years", "INTEGER"),
+            ("role", "TEXT"),
+            ("negotiation_json", "TEXT"),
+        ]:
+            try:
+                await self._ensure_column("season_transfers", col, defn)
             except Exception:
                 pass
         await self.require_conn().commit()
