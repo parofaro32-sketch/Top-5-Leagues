@@ -186,25 +186,36 @@ class ClubCog(commands.Cog):
                 tb = 0
                 wb = 0
             squad_value = 0
+            total_wage = 0
             try:
                 from services.transfer_market_service import TransferMarketService
                 _ms = TransferMarketService(self.bot.db)
                 _tid = int(team.get("team_api_id") or 0)
                 _sy = int(team.get("season_year") or 2026)
-                prow = await self.bot.db.fetchall("SELECT api_id, name, age, position, overall, potential FROM players WHERE team_api_id=? AND season=?", (_tid, _sy))
+                prow = await self.bot.db.fetchall("SELECT api_id, name, age, position, overall, potential, market_value, wage, team_api_id FROM players WHERE team_api_id=? AND season=?", (_tid, _sy))
                 for pr in prow:
+                    pd = dict(pr)
                     try:
-                        squad_value += int(_ms.value_player(dict(pr)).market_value)
+                        squad_value += int(_ms.value_player(pd).market_value)
+                    except Exception:
+                        pass
+                    try:
+                        w = pd.get("wage")
+                        if w is None or int(w) <= 0:
+                            w = _ms.fair_wage_weekly(pd)
+                        total_wage += int(w or 0)
                     except Exception:
                         pass
             except Exception:
                 squad_value = 0
+                total_wage = 0
             lines = [
                 f"**Team:** {team.get('team_name')}",
                 f"**Manager:** <@{interaction.user.id}>",
                 f"**League:** {league_name}",
                 f"**Budgets (default):** Transfer {_money(tb)} • Wage {_money(wb)}/wk",
                 f"**Squad Value:** {_money(squad_value)}",
+                f"**Total Squad Wage:** {_money(total_wage)}/wk",
                 "",
                 "No season is set up yet for this team. Your claim is saved — once a season is created, your team will be ready.",
             ]
@@ -261,23 +272,33 @@ class ClubCog(commands.Cog):
             except Exception:
                 pass
 
-        # total squad value
+        # total squad value and total squad wage
         squad_value = 0
+        total_wage = 0
         try:
             from services.transfer_market_service import TransferMarketService
             _ms = TransferMarketService(self.bot.db)
             season_year = int(season.get("season_year") or 2026)
             prow = await self.bot.db.fetchall(
-                "SELECT api_id, name, age, position, overall, potential FROM players WHERE team_api_id=? AND season=?",
+                "SELECT api_id, name, age, position, overall, potential, market_value, wage, team_api_id FROM players WHERE team_api_id=? AND season=?",
                 (team_id, season_year),
             )
             for pr in prow:
+                pd = dict(pr)
                 try:
-                    squad_value += int(_ms.value_player(dict(pr)).market_value)
+                    squad_value += int(_ms.value_player(pd).market_value)
+                except Exception:
+                    pass
+                try:
+                    w = pd.get("wage")
+                    if w is None or int(w) <= 0:
+                        w = _ms.fair_wage_weekly(pd)
+                    total_wage += int(w or 0)
                 except Exception:
                     pass
         except Exception:
             squad_value = 0
+            total_wage = 0
 
         lines = []
         lines.append(f"**Team:** {team.get('team_name')} ({season.get('name')})")
@@ -285,6 +306,7 @@ class ClubCog(commands.Cog):
         lines.append(f"**Table:** #{pos} • {pts} pts • GD {gd:+} • {rec} • Form {form}")
         lines.append(f"**Budgets:** Transfer {_money(tb)} • Wage {_money(wb)}/wk")
         lines.append(f"**Squad Value:** {_money(squad_value)}")
+        lines.append(f"**Total Squad Wage:** {_money(total_wage)}/wk")
         lines.append(f"**Training:** {training_txt}")
         if next_fx:
             opp = next_fx.get("away_team_name") if int(next_fx.get("home_team_api_id") or 0) == team_id else next_fx.get("home_team_name")
@@ -469,212 +491,320 @@ class ClubCog(commands.Cog):
             (json.dumps(result), utc_now_iso(), int(session_id)),
         )
 
-    @app_commands.command(name="requestfunds", description="Request transfer funds from the board (board meeting)")
-    @app_commands.describe(amount="Amount requested (e.g. 50000000)", reason="Why you need the funds")
-    @app_commands.choices(league=LEAGUE_CHOICES)
-    async def requestfunds(self, interaction: discord.Interaction, amount: int, reason: str, league: app_commands.Choice[str] | None = None):
-        await interaction.response.defer(ephemeral=True)
-        await self._handle_board_request(interaction, kind="funds", amount=amount, reason=reason, league_key=league.value if league else None)
+    @app_commands.command(name="requestfunds", description="Request transfer funds from the board (reply to the board's message)")
+    async def requestfunds(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        await self._start_board_request(interaction, kind="funds")
 
-    @app_commands.command(name="requestwage", description="Request wage budget increase from the board (board meeting)")
-    @app_commands.describe(amount="Weekly wage amount requested (e.g. 250000)", reason="Why you need the wage increase")
-    @app_commands.choices(league=LEAGUE_CHOICES)
-    async def requestwage(self, interaction: discord.Interaction, amount: int, reason: str, league: app_commands.Choice[str] | None = None):
-        await interaction.response.defer(ephemeral=True)
-        await self._handle_board_request(interaction, kind="wage", amount=amount, reason=reason, league_key=league.value if league else None)
+    @app_commands.command(name="requestwage", description="Request a wage budget increase from the board (reply to the board's message)")
+    async def requestwage(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        await self._start_board_request(interaction, kind="wage")
 
-    async def _handle_board_request(self, interaction: discord.Interaction, *, kind: str, amount: int, reason: str, league_key: str | None):
-        team = await self._get_manager_team(interaction, league_key=league_key)
+    async def _start_board_request(self, interaction: discord.Interaction, *, kind: str):
+        team = await self._get_manager_team(interaction, league_key=None)
         if not team:
             await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
             return
-        amount = int(amount)
-        if amount <= 0:
-            await interaction.followup.send(embed=error_embed("Invalid Amount", "Amount must be greater than 0."), ephemeral=True)
-            return
-        reason = (reason or "").strip()
-        if len(reason) < 10:
-            await interaction.followup.send(embed=error_embed("Reason Required", "Please provide a clear reason for your request (at least 10 characters)."), ephemeral=True)
-            return
-
         _sid = team.get("season_id")
         season = team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
         if not season:
-            await interaction.followup.send(embed=error_embed("No Season Set", "Your claim is saved, but no season is set up yet. A season is needed for budget requests."), ephemeral=True)
+            await interaction.followup.send(embed=error_embed("No Season Set", "Your claim is saved, but no season is set up yet. A season is needed for board requests."), ephemeral=True)
             return
         season_id = str(season.get("id"))
         team_id = int(team.get("team_api_id"))
         team_name = str(team.get("team_name"))
-        current_transfer = int(team.get("transfer_budget") or 0)
-        current_wage = int(team.get("wage_budget") or 0)
 
-        # Request limits: 2 per kind per team per season
+        # Request limits: 2 per kind per team per season (approved+rejected count)
         req_row = await self.bot.db.fetchone(
-            "SELECT COUNT(*) AS c FROM board_requests WHERE season_id=? AND team_api_id=? AND kind=?",
+            "SELECT COUNT(*) AS c FROM board_requests WHERE season_id=? AND team_api_id=? AND kind=? AND status IN ('approved','rejected')",
             (season_id, team_id, kind),
         )
         used_requests = int((req_row["c"] if req_row else 0) or 0)
         limit = 2
+        kind_label = "transfer budget" if kind == "funds" else "wage budget"
         if used_requests >= limit:
-            kind_label = "transfer budget" if kind == "funds" else "wage budget"
             await interaction.followup.send(
                 embed=error_embed("Request Limit Reached", f"You hit max requests for {kind_label}. Limit: **{limit}/{limit}** used for {team_name} this season."),
                 ephemeral=True,
             )
             return
 
-        text = reason.lower()
-        # Natural-language need detection (deterministic, no randomness)
-        need_signals = [
-            "injur", "depth", "squad", "sign", "transfer", "reinforc", "replace", "rebuild", "compete",
-            "window", "striker", "midfield", "defend", "goalkeeper", "winger", "fullback", "centre-back",
-            "center-back", "contract", "renew", "wage", "salary", "upgrade", "cover", "short", "thin",
-            "promotion", "relegation", "europe", "title", "cup", "season objective", "project", "finance",
-            "budget", "fund", "cash", "sell", "loan", "youth", "academy"
-        ]
-        need_hits = [w for w in need_signals if w in text]
-        need_score = min(1.0, 0.25 + 0.12 * len(set(need_hits)) + min(0.25, len(reason) / 400.0))
-
-        # Insurance requirement: must promise to win league and cup
-        commitment_words = ["win", "guarantee", "promise", "commit", "deliver", "secure", "bring home", "lift", "ensure"]
-        has_commitment = any(w in text for w in commitment_words)
-        league_win_phrase = any(k in text for k in [
-            "win the league", "win league", "league title", "win the title", "champions of the league",
-            "win la liga", "win premier league", "win bundesliga", "win serie a", "win ligue 1",
-            "league champions",
-        ])
-        cup_win_phrase = any(k in text for k in [
-            "win the cup", "win cup", "domestic cup", "cup title", "win both cups",
-            "win fa cup", "win copa", "win dfb", "win coppa", "win coupe",
-        ])
-        combined_promise = any(k in text for k in [
-            "league and cup", "cup and league", "league and the cup", "cup and the league",
-            "league and a cup", "cup and a league", "both the league and the cup", "both league and cup",
-            "domestic double", "league & cup", "cup & league", "league + cup",
-        ])
-        if combined_promise and has_commitment:
-            league_win_phrase = True
-            cup_win_phrase = True
-        # Accept clear natural phrasing where both competitions are named with a win commitment
-        if has_commitment and ("league" in text) and ("cup" in text):
-            # "win ... league ... cup" / "promise ... league ... cup" in same request
-            if re.search(r"\b(win|guarantee|promise|deliver|secure|bring|lift|ensure)\b.*\bleague\b", text) and re.search(r"\b(win|guarantee|promise|deliver|secure|bring|lift|ensure)\b.*\bcup\b", text):
-                league_win_phrase = True
-                cup_win_phrase = True
-            # also handle "league and cup" style already covered; and "win the league and domestic cup"
-            if "league" in text and "cup" in text and any(w in text for w in ["win both", "win the league", "win league"]):
-                if "cup" in text:
-                    cup_win_phrase = cup_win_phrase or True
-        insurance_ok = bool(league_win_phrase and cup_win_phrase and has_commitment)
-
-        # Reasonableness caps (FC27-style, needs-based)
-        if kind == "funds":
-            max_reasonable = 120_000_000
-            soft_cap = 60_000_000
-            current = current_transfer
-            kind_label = "transfer funds"
-        else:
-            max_reasonable = 750_000
-            soft_cap = 350_000
-            current = current_wage
-            kind_label = "wage budget increase"
-
-        amount_reasonable = amount <= max_reasonable
-        amount_soft = amount <= soft_cap
-        clear_need = need_score >= 0.45 and len(reason.strip()) >= 25
-
-        # Deterministic decision (no dice)
-        reasons = []
-        approved = False
-        approved_amount = amount
-
-        if not insurance_ok:
-            reasons.append("Missing required insurance: you must clearly promise to win **the league and the cup** (e.g., 'I guarantee we will win the league and cup').")
-        if not clear_need:
-            reasons.append("The request is not detailed enough on footballing needs. Explain the squad need clearly (positions, injuries, depth, competition objectives).")
-        if not amount_reasonable:
-            reasons.append(f"The requested amount ({_money(amount)}) is above the reasonable board limit for a single request ({_money(max_reasonable)}).")
-        if insurance_ok and clear_need and amount_reasonable:
-            # needs-based approval; trim if amount is high relative to need
-            if not amount_soft and need_score < 0.75:
-                approved_amount = int(soft_cap + (amount - soft_cap) * 0.5)
-                approved_amount = max(1, min(approved_amount, amount))
-                reasons.append(f"Board adjusted amount based on stated needs: {_money(amount)} → {_money(approved_amount)}.")
-            approved = True
-        else:
-            approved = False
-
-        # store request
-        meta = {
-            "need_score": round(need_score, 3),
-            "need_hits": sorted(set(need_hits))[:20],
-            "insurance_ok": insurance_ok,
-            "league_promise": league_promise,
-            "cup_promise": cup_promise,
-            "amount_reasonable": amount_reasonable,
-            "amount_soft": amount_soft,
-            "approved_amount": approved_amount if approved else 0,
-            "request_count_before": used_requests,
-            "request_limit": limit,
-        }
-        status = "approved" if approved else "rejected"
+        # Cancel any previous awaiting_reply for same user/team/kind
         await self.bot.db.execute(
-            """INSERT INTO board_requests(season_id,guild_id,channel_id,user_id,team_api_id,team_name,kind,amount,reason,status,meta_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?, ?,?)""",
-            (season_id, interaction.guild_id, interaction.channel_id, interaction.user.id, team_id, team_name, kind, int(amount), reason, status, json.dumps(meta), utc_now_iso(), utc_now_iso()),
+            "UPDATE board_requests SET status='cancelled', updated_at=? WHERE season_id=? AND team_api_id=? AND user_id=? AND kind=? AND status='awaiting_reply'",
+            (utc_now_iso(), season_id, team_id, interaction.user.id, kind),
         )
 
-        board_lines = []
-        board_lines.append(f"**Board Meeting — {team_name}**")
-        board_lines.append(f"Manager: <@{interaction.user.id}>")
-        board_lines.append(f"Request: {'Transfer funds' if kind=='funds' else 'Weekly wage budget increase'} of **{_money(amount)}**")
-        board_lines.append(f"Request usage: **{used_requests + 1}/{limit}** ({'transfer' if kind=='funds' else 'wage'} requests this season)")
-        board_lines.append(f"Reason provided: {reason}")
-        board_lines.append("")
-        board_lines.append("**Board assessment (needs-based, FC27-style)**")
+        current_transfer = int(team.get("transfer_budget") or 0)
+        current_wage = int(team.get("wage_budget") or 0)
+        if current_transfer == 0 and current_wage == 0:
+            try:
+                from services.season_service import default_season_budgets
+                defaults = default_season_budgets(season.get("league_key"), team_name)
+                current_transfer = int(defaults.get("transfer_budget") or 0)
+                current_wage = int(defaults.get("wage_budget") or 0)
+            except Exception:
+                pass
+
         if kind == "funds":
-            board_lines.append(f"- Current transfer budget: {_money(current_transfer)}")
+            ask = f"**Transfer Funds Request — {team_name}**"
+            detail = (
+                f"Manager: <@{interaction.user.id}>\n"
+                f"Current transfer budget: **{_money(current_transfer)}**\n"
+                f"Request usage: **{used_requests}/{limit}** (transfer requests used this season)\n\n"
+                "You are now in a **board meeting**. The board expects a clear, professional case. "
+                "Reply to **this message** with your request and include all of the following:\n\n"
+                "1. **Amount requested** (e.g. `€50M`, `75,000,000`)\n"
+                "2. **Footballing need** - which positions/roles you need, squad depth issues, injuries, tactical reasons\n"
+                "3. **Competition objectives** - what you are competing for this season\n"
+                "4. **Insurance/commitment** - you must clearly promise to **win the league and the cup** (be explicit)\n"
+                "5. **Plan** - how the funds will be used responsibly\n\n"
+                "The board is strict and needs-based. Vague requests, unrealistic amounts, or missing league+cup commitment will be rejected. "
+                "Do not send a one-liner - make your case properly."
+            )
         else:
-            board_lines.append(f"- Current wage budget: {_money(current_wage)}/wk")
-        board_lines.append(f"- Identified needs: {', '.join(sorted(set(need_hits))[:8]) if need_hits else 'none clearly identified'}")
-        board_lines.append(f"- League+Cup insurance promise: {'✅ provided' if insurance_ok else '❌ missing'}")
+            ask = f"**Wage Budget Request — {team_name}**"
+            detail = (
+                f"Manager: <@{interaction.user.id}>\n"
+                f"Current wage budget: **{_money(current_wage)}/wk**\n"
+                f"Request usage: **{used_requests}/{limit}** (wage requests used this season)\n\n"
+                "You are now in a **board meeting**. The board expects a clear, professional case. "
+                "Reply to **this message** with your request and include all of the following:\n\n"
+                "1. **Weekly wage increase requested** (e.g. `€200k/wk`, `250000`)\n"
+                "2. **Why it is needed** - contract renewals, new signings, squad role balance, retention risks\n"
+                "3. **Competition objectives** - what you are competing for this season\n"
+                "4. **Insurance/commitment** - you must clearly promise to **win the league and the cup** (be explicit)\n"
+                "5. **Sustainability** - how this wage increase fits the club plan\n\n"
+                "The board is strict and needs-based. Vague requests, unrealistic amounts, or missing league+cup commitment will be rejected. "
+                "Do not send a one-liner - make your case properly."
+            )
 
-        if approved:
-            final_amount = int(approved_amount)
+        embed = info_embed(ask, detail[:3900])
+        embed.set_footer(text="Reply to this message with your detailed case. The board will respond after reviewing it.")
+        sent = await interaction.followup.send(embed=embed, wait=True)
+        msg_id = getattr(sent, "id", None)
+
+        await self.bot.db.execute(
+            """INSERT INTO board_requests(season_id,guild_id,channel_id,message_id,user_id,team_api_id,team_name,kind,amount,reason,status,meta_json,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?, ?,?,?)""",
+            (season_id, interaction.guild_id, interaction.channel_id, int(msg_id) if msg_id else None, interaction.user.id, team_id, team_name, kind, None, None, "awaiting_reply", json.dumps({"request_count_before": used_requests, "request_limit": limit}), utc_now_iso(), utc_now_iso()),
+        )
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Handle replies to board request prompts
+        try:
+            if message.author.bot or not message.guild:
+                return
+            ref = getattr(message, "reference", None)
+            if not ref or not getattr(ref, "message_id", None):
+                return
+            reply_to_id = int(ref.message_id)
+            row = await self.bot.db.fetchone(
+                "SELECT * FROM board_requests WHERE message_id=? AND status='awaiting_reply' ORDER BY id DESC LIMIT 1",
+                (reply_to_id,),
+            )
+            if not row:
+                return
+            req = dict(row)
+            # Only the requesting manager can reply
+            if int(req.get("user_id") or 0) != int(message.author.id):
+                return
+            # Basic channel/guild sanity
+            if req.get("guild_id") and int(req.get("guild_id")) != int(message.guild.id):
+                return
+
+            reason = (message.content or "").strip()
+            if not reason:
+                await message.reply(embed=error_embed("Empty Reply", "Please reply with your detailed board request (amount, need, and league+cup commitment)."))
+                return
+
+            kind = str(req.get("kind") or "funds")
+            team_id = int(req.get("team_api_id") or 0)
+            season_id = str(req.get("season_id") or "")
+            team_name = str(req.get("team_name") or "Your club")
+            meta = {}
+            try:
+                meta = json.loads(req.get("meta_json") or "{}")
+            except Exception:
+                meta = {}
+            used_requests = int(meta.get("request_count_before") or 0)
+            limit = int(meta.get("request_limit") or 2)
+
+            # Load team/season for budgets
+            season = await self.bot.season_service.get_season(season_id) if season_id else None
+            team = await self.bot.season_service.get_season_team(season_id, team_id) if season_id else None
+            current_transfer = int((team or {}).get("transfer_budget") or 0)
+            current_wage = int((team or {}).get("wage_budget") or 0)
+            if team and current_transfer == 0 and current_wage == 0:
+                try:
+                    from services.season_service import default_season_budgets
+                    d = default_season_budgets((season or {}).get("league_key"), team_name)
+                    current_transfer = int(d.get("transfer_budget") or 0)
+                    current_wage = int(d.get("wage_budget") or 0)
+                except Exception:
+                    pass
+
+            # Parse amount from reply
+            from services.transfer_market_service import money_to_int
+            amount = money_to_int(reason)
+            # If multiple numbers, try to pick one that looks like a budget request (largest plausible)
+            nums = []
+            for m in re.finditer(r"[€£$]?\s*\d[\d,\.]*\s*[kmb]?", reason, re.I):
+                v = money_to_int(m.group(0))
+                if v is not None:
+                    nums.append(v)
+            if nums:
+                # pick the largest plausible amount for the request kind
+                plausible = [v for v in nums if (v >= 10000 if kind == "funds" else v >= 5000)]
+                amount = max(plausible) if plausible else max(nums)
+
+            if amount is None or amount <= 0:
+                await self.bot.db.execute("UPDATE board_requests SET status='rejected', reason=?, updated_at=? WHERE id=?", (reason, utc_now_iso(), int(req["id"])))
+                await message.reply(embed=error_embed("Board Meeting Result", (
+                    f"**Board Meeting — {team_name}**\n"
+                    f"Manager: <@{message.author.id}>\n\n"
+                    "**Decision: REJECTED ❌**\n"
+                    "- No clear requested amount was found in your message.\n"
+                    "- Reply to the board request with a clear amount (e.g. `€50M` for transfer funds or `€200k/wk` for wage budget) and a detailed case."
+                )))
+                return
+
+            text = reason.lower()
+            need_signals = [
+                "injur", "depth", "squad", "sign", "transfer", "reinforc", "replace", "rebuild", "compete",
+                "window", "striker", "midfield", "defend", "goalkeeper", "winger", "fullback", "centre-back",
+                "center-back", "contract", "renew", "wage", "salary", "upgrade", "cover", "short", "thin",
+                "promotion", "relegation", "europe", "title", "cup", "season objective", "project", "finance",
+                "budget", "fund", "cash", "sell", "loan", "youth", "academy"
+            ]
+            need_hits = [w for w in need_signals if w in text]
+            need_score = min(1.0, 0.25 + 0.12 * len(set(need_hits)) + min(0.25, len(reason) / 400.0))
+
+            commitment_words = ["win", "guarantee", "promise", "commit", "deliver", "secure", "bring home", "lift", "ensure"]
+            has_commitment = any(w in text for w in commitment_words)
+            league_win_phrase = any(k in text for k in [
+                "win the league", "win league", "league title", "win the title", "champions of the league",
+                "win la liga", "win premier league", "win bundesliga", "win serie a", "win ligue 1", "league champions",
+            ])
+            cup_win_phrase = any(k in text for k in [
+                "win the cup", "win cup", "domestic cup", "cup title", "win both cups",
+                "win fa cup", "win copa", "win dfb", "win coppa", "win coupe",
+            ])
+            combined_promise = any(k in text for k in [
+                "league and cup", "cup and league", "league and the cup", "cup and the league",
+                "league and a cup", "cup and a league", "both the league and the cup", "both league and cup",
+                "domestic double", "league & cup", "cup & league", "league + cup",
+            ])
+            if combined_promise and has_commitment:
+                league_win_phrase = True
+                cup_win_phrase = True
+            if has_commitment and ("league" in text) and ("cup" in text):
+                if re.search(r"\b(win|guarantee|promise|deliver|secure|bring|lift|ensure)\b.*\bleague\b", text) and re.search(r"\b(win|guarantee|promise|deliver|secure|bring|lift|ensure)\b.*\bcup\b", text):
+                    league_win_phrase = True
+                    cup_win_phrase = True
+                if any(w in text for w in ["win both", "win the league", "win league"]) and "cup" in text:
+                    cup_win_phrase = True
+            insurance_ok = bool(league_win_phrase and cup_win_phrase and has_commitment)
+
             if kind == "funds":
-                await self.bot.db.execute(
-                    "UPDATE season_teams SET transfer_budget=COALESCE(transfer_budget,0)+?, updated_at=? WHERE season_id=? AND team_api_id=?",
-                    (final_amount, utc_now_iso(), season_id, team_id),
-                )
-                new_val = current_transfer + final_amount
-                board_lines.append("")
-                board_lines.append("**Decision: APPROVED ✅**")
-                for r in reasons:
-                    board_lines.append(f"- {r}")
-                board_lines.append(f"- Approved transfer funds: **{_money(final_amount)}**")
-                board_lines.append(f"- Transfer budget updated: {_money(current_transfer)} → **{_money(new_val)}**")
+                max_reasonable = 120_000_000
+                soft_cap = 60_000_000
+                current = current_transfer
             else:
-                await self.bot.db.execute(
-                    "UPDATE season_teams SET wage_budget=COALESCE(wage_budget,0)+?, updated_at=? WHERE season_id=? AND team_api_id=?",
-                    (final_amount, utc_now_iso(), season_id, team_id),
-                )
-                new_val = current_wage + final_amount
+                max_reasonable = 750_000
+                soft_cap = 350_000
+                current = current_wage
+
+            amount_reasonable = amount <= max_reasonable
+            amount_soft = amount <= soft_cap
+            clear_need = need_score >= 0.45 and len(reason.strip()) >= 25
+
+            reasons = []
+            approved = False
+            approved_amount = int(amount)
+            if not insurance_ok:
+                reasons.append("Missing required insurance: you must clearly promise to win **the league and the cup**.")
+            if not clear_need:
+                reasons.append("The case is not detailed enough. Explain the footballing need clearly (positions, depth, injuries, objectives).")
+            if not amount_reasonable:
+                reasons.append(f"Requested amount ({_money(amount)}) is above the reasonable single-request board limit ({_money(max_reasonable)}).")
+            if insurance_ok and clear_need and amount_reasonable:
+                if not amount_soft and need_score < 0.75:
+                    approved_amount = int(soft_cap + (amount - soft_cap) * 0.5)
+                    approved_amount = max(1, min(approved_amount, amount))
+                    reasons.append(f"Board adjusted amount based on stated need: {_money(amount)} → {_money(approved_amount)}.")
+                approved = True
+
+            status = "approved" if approved else "rejected"
+            meta_out = {
+                **meta,
+                "need_score": round(need_score, 3),
+                "need_hits": sorted(set(need_hits))[:20],
+                "insurance_ok": insurance_ok,
+                "league_promise": league_win_phrase,
+                "cup_promise": cup_win_phrase,
+                "amount_reasonable": amount_reasonable,
+                "amount_soft": amount_soft,
+                "approved_amount": approved_amount if approved else 0,
+            }
+            await self.bot.db.execute(
+                "UPDATE board_requests SET amount=?, reason=?, status=?, meta_json=?, updated_at=? WHERE id=?",
+                (int(amount), reason, status, json.dumps(meta_out), utc_now_iso(), int(req["id"])),
+            )
+
+            board_lines = []
+            board_lines.append(f"**Board Meeting — {team_name}**")
+            board_lines.append(f"Manager: <@{message.author.id}>")
+            board_lines.append(f"Request: {'Transfer funds' if kind=='funds' else 'Weekly wage budget increase'} of **{_money(amount)}**")
+            board_lines.append(f"Request usage: **{used_requests + 1}/{limit}** ({'transfer' if kind=='funds' else 'wage'} requests this season)")
+            board_lines.append("")
+            board_lines.append("**Board assessment (strict, needs-based):**")
+            if kind == "funds":
+                board_lines.append(f"- Current transfer budget: {_money(current_transfer)}")
+            else:
+                board_lines.append(f"- Current wage budget: {_money(current_wage)}/wk")
+            board_lines.append(f"- Identified needs: {', '.join(sorted(set(need_hits))[:8]) if need_hits else 'none clearly identified'}")
+            board_lines.append(f"- League+Cup insurance promise: {'✅ provided' if insurance_ok else '❌ missing'}")
+
+            if approved:
+                final_amount = int(approved_amount)
+                if kind == "funds":
+                    await self.bot.db.execute(
+                        "UPDATE season_teams SET transfer_budget=COALESCE(transfer_budget,0)+?, updated_at=? WHERE season_id=? AND team_api_id=?",
+                        (final_amount, utc_now_iso(), season_id, team_id),
+                    )
+                    new_val = current_transfer + final_amount
+                    board_lines.append("")
+                    board_lines.append("**Decision: APPROVED ✅**")
+                    for r in reasons:
+                        board_lines.append(f"- {r}")
+                    board_lines.append(f"- Approved transfer funds: **{_money(final_amount)}**")
+                    board_lines.append(f"- Transfer budget updated: {_money(current_transfer)} → **{_money(new_val)}**")
+                else:
+                    await self.bot.db.execute(
+                        "UPDATE season_teams SET wage_budget=COALESCE(wage_budget,0)+?, updated_at=? WHERE season_id=? AND team_api_id=?",
+                        (final_amount, utc_now_iso(), season_id, team_id),
+                    )
+                    new_val = current_wage + final_amount
+                    board_lines.append("")
+                    board_lines.append("**Decision: APPROVED ✅**")
+                    for r in reasons:
+                        board_lines.append(f"- {r}")
+                    board_lines.append(f"- Approved wage increase: **{_money(final_amount)}/wk**")
+                    board_lines.append(f"- Wage budget updated: {_money(current_wage)}/wk → **{_money(new_val)}/wk**")
+                board_lines.append("- Board note: approval is conditional on your stated commitment to compete for the league and cup.")
+                await message.reply(embed=success_embed("Board Meeting Result", "\n".join(board_lines)[:3900]))
+            else:
                 board_lines.append("")
-                board_lines.append("**Decision: APPROVED ✅**")
+                board_lines.append("**Decision: REJECTED ❌**")
                 for r in reasons:
                     board_lines.append(f"- {r}")
-                board_lines.append(f"- Approved wage increase: **{_money(final_amount)}/wk**")
-                board_lines.append(f"- Wage budget updated: {_money(current_wage)}/wk → **{_money(new_val)}/wk**")
-            board_lines.append("- Board note: approval is conditional on your stated commitment to compete for the league and cup.")
-        else:
-            board_lines.append("")
-            board_lines.append("**Decision: REJECTED ❌**")
-            for r in reasons:
-                board_lines.append(f"- {r}")
-            board_lines.append("- Provide a clear needs-based case and include your insurance that you will win the league and cup.")
-
-        embed = success_embed("Board Meeting Result", "\n".join(board_lines)[:3900]) if approved else error_embed("Board Meeting Result", "\n".join(board_lines)[:3900])
-        await interaction.followup.send(embed=embed, ephemeral=True)
+                board_lines.append("- Reply with a stronger, detailed case and explicitly include your promise to win the league and the cup.")
+                await message.reply(embed=error_embed("Board Meeting Result", "\n".join(board_lines)[:3900]))
+        except Exception:
+            logger.exception("Failed to process board request reply")
 
 async def setup(bot):
     await bot.add_cog(ClubCog(bot))

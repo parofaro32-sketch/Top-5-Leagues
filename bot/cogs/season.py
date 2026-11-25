@@ -147,10 +147,10 @@ class SeasonGroup(app_commands.Group):
         txt = _fmt_fixtures(rows, limit=25)
         await interaction.followup.send(embed=info_embed(f"Fixtures — {season.get('name')} (MD {md})", txt[:3900]), ephemeral=True)
 
-    @app_commands.command(name="advance", description="Quick-sim remaining fixtures in current matchday and advance to next matchday when complete")
-    @app_commands.describe(league="League (optional)")
+    @app_commands.command(name="advance", description="Quick-sim up to 5 remaining fixtures in current matchday, then advance if complete")
+    @app_commands.describe(league="League (optional)", count="How many matches to sim now (1-5, default 5)")
     @app_commands.choices(league=_league_choices())
-    async def advance(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None):
+    async def advance(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None, count: app_commands.Range[int, 1, 5] = 5):
         await interaction.response.defer(ephemeral=True)
         league_key = league.value if league else None
         ss = self.cog.bot.season_service
@@ -166,9 +166,10 @@ class SeasonGroup(app_commands.Group):
         if live:
             await interaction.followup.send(embed=error_embed("Matchday Has Live Fixture", f"Matchday {md} has {len(live)} live fixture(s). Finish them before advancing."), ephemeral=True)
             return
-        # quick-sim remaining pending fixtures
+        # quick-sim up to `count` pending fixtures (batch sim, max 5 at a time)
+        to_sim = pending[: int(count)]
         simmed = []
-        for fx in pending:
+        for fx in to_sim:
             try:
                 res = await ss.quick_sim_fixture(season_id=sid, fixture_id=int(fx["id"]), guild_id=interaction.guild_id, channel_id=interaction.channel_id)
                 simmed.append(res)
@@ -176,7 +177,7 @@ class SeasonGroup(app_commands.Group):
                 logger.exception("Failed to quick-sim fixture %s", fx.get("id"))
                 simmed.append({"ok": False, "fixture_id": fx.get("id"), "reason": str(e)})
 
-        # advance
+        # advance if complete
         adv = await ss.advance_matchday_if_complete(sid)
         season2 = await ss.get_season(sid)
         played_lines = []
@@ -185,13 +186,14 @@ class SeasonGroup(app_commands.Group):
             hs = fx.get("home_score"); as_ = fx.get("away_score")
             score = f"{hs}-{as_}" if hs is not None and as_ is not None else "vs"
             played_lines.append(f"**{fx.get('home_team_name')}** {score} **{fx.get('away_team_name')}**")
-        msg = f"**{season.get('name')} — Matchday {md}**\n" + "\n".join(played_lines)
+        remaining_after = [f for f in fixtures2 if f.get("status") not in ("played", "cancelled") and int(f.get("finalized") or 0) == 0]
+        msg = f"**{(season2 or season).get('name')} — Matchday {md}**\nSimmed now: **{len(simmed)}** (max 5 per run)\n\n" + "\n".join(played_lines)
         if adv.get("advanced"):
             msg += f"\n\n✅ Advanced to **Matchday {adv.get('to_matchday')}**."
         elif adv.get("reason") == "season_completed":
             msg += "\n\n🏁 **Season completed.**"
         else:
-            msg += f"\n\nMatchday status: {adv.get('reason')}."
+            msg += f"\n\nRemaining this matchday: **{len(remaining_after)}**. Run `/season advance` again to sim the next batch."
         await interaction.followup.send(embed=success_embed("Season Advanced", msg[:3900]), ephemeral=True)
 
     @app_commands.command(name="play", description="Play next pending season fixture in live sim (bot vs bot by default)")

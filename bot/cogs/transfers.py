@@ -13,7 +13,7 @@ from discord.ext import commands
 
 from bot.ui.embeds import error_embed, info_embed, success_embed
 from db.database import utc_now_iso
-from services.transfer_market_service import TransferMarketService, fmt_money, money_to_int, normalize_role
+from services.transfer_market_service import TransferMarketService, fmt_money, money_to_int, negotiation_pressure_bar, normalize_role
 
 logger = logging.getLogger(__name__)
 
@@ -350,18 +350,22 @@ class TransfersCog(commands.Cog):
             (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0}), utc_now_iso(), int(offer_id)),
         )
         view = ContractNegView(self, int(offer_id))
+        bar = negotiation_pressure_bar(0, 10)
+        p = player
         embed = success_embed(
             "Offer Accepted — Contract Negotiation",
             (
-                f"**{selling_team_name}** (bot manager): {decision['reason']}\n\n"
-                f"Fee agreed: **{fmt_money(offer_fee)}** for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR / {int(player.get('potential') or 0)} POT).\n"
-                f"Now starting **FC27-style contract negotiation** with the buying club.\n\n"
-                f"**Player demands (opening):**\n"
+                f"{bar}\n\n"
+                f"**{selling_team_name} (bot manager):** {decision['reason']}\n\n"
+                f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** "
+                f"({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'}).\n"
+                f"We are now moving to contract terms. I am representing the player's interests and I will be firm but fair.\n\n"
+                f"**Opening contract demands:**\n"
                 f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                f"• Role: **{demand['role']}**\n"
+                f"• Requested role: **{demand['role']}**\n"
                 f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
                 f"• Contract length: **{demand['contract_years']} years**\n\n"
-                f"Use **Submit Contract Offer** to respond. The negotiation includes pressure and counter-offers."
+                f"Submit a serious contract offer using the button below. Lowballing, stalling, or disrespecting the player's value will increase pressure and can end the negotiation."
             ),
         )
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
@@ -427,28 +431,58 @@ class TransfersCog(commands.Cog):
 
         round_no = int(meta.get("contract_round") or 0) + 1
         pressure = int(meta.get("pressure") or 0)
-        # pressure increases on lowball or long negotiation
-        if wage < int(demand.get("wage") or 0) * 0.85:
+        is_free_agent = bool(meta.get("is_free_agent")) or str(offer.get("kind") or "") == "free_agent_contract" or int(offer.get("selling_team_api_id") or 0) == 9000001
+
+        # Pressure increases on lowball / disrespectful offers, stalling, and repeated rounds.
+        demand_wage = int(demand.get("wage") or 0)
+        wage_ratio = (wage / max(1, demand_wage)) if demand_wage else 1.0
+        if wage_ratio < 0.75:
+            pressure += 3
+        elif wage_ratio < 0.85:
+            pressure += 2
+        elif wage_ratio < 0.93:
+            pressure += 1
+        role_rank = {"Crucial": 0, "Important": 1, "Rotation": 2, "Sporadic": 3, "Prospect": 4}
+        offered_role = normalize_role(role) or "Rotation"
+        demand_role = str(demand.get("role") or "Rotation")
+        role_gap = role_rank.get(offered_role, 2) - role_rank.get(demand_role, 2)
+        if role_gap > 0:
             pressure += 1
         if round_no >= 3:
             pressure += 1
+        if round_no >= 5:
+            pressure += 1
+        pressure = max(0, min(10, int(pressure)))
 
         season_year = int((await self.bot.season_service.get_season(str(offer.get("season_id")) or "") or {}).get("season_year") or 2026)
         player = await self.market.get_player(int(offer.get("player_api_id") or 0), season_year) or {"name": offer.get("player_name"), "overall": valuation.get("market_value", 0) and 75, "potential": 75}
         # ensure ovr/pot
-        if not player.get("overall"):
-            p2 = await self.bot.db.fetchone("SELECT overall,potential,name,age,position FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1", (int(offer.get("player_api_id") or 0),))
+        if not player.get("overall") or not player.get("potential"):
+            p2 = await self.bot.db.fetchone("SELECT overall,potential,name,age,position,detailed_position,height_cm FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1", (int(offer.get("player_api_id") or 0),))
             if p2:
                 d2 = dict(p2)
-                player = {**player, **d2}
+                player = {**d2, **{k: v for k, v in player.items() if v is not None}}
 
         offered = {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years}
-        result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure)
+        result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure, is_free_agent=is_free_agent)
 
         meta["contract_round"] = round_no
         meta["pressure"] = pressure
         meta["last_offer"] = offered
         meta["last_counter"] = result.get("counter")
+        bar = result.get("pressure_bar") or negotiation_pressure_bar(pressure, 10)
+
+        if result.get("walked_away"):
+            meta["ended_reason"] = "pressure_walkaway"
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET status='cancelled', stage='ended', meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
+            )
+            await interaction.followup.send(embed=error_embed(
+                "Negotiation Ended",
+                result["message"]
+            ), ephemeral=True)
+            return
 
         if result.get("accepted"):
             meta["agreed_contract"] = offered
@@ -467,7 +501,7 @@ class TransfersCog(commands.Cog):
             else:
                 await interaction.followup.send(embed=error_embed(
                     "Contract Agreed But Finalization Failed",
-                    result["message"] + f"\n\nTransfer finalization failed: {fin.get('reason','unknown')}. The transfer was agreed but could not be auto-finalized; please retry or check season/team state."
+                    result["message"] + f"\n\nTransfer finalization failed: {fin.get('reason','unknown')}. The agreement was recorded but could not be auto-finalized; check budgets/team state."
                 ), ephemeral=True)
             return
 
@@ -478,13 +512,17 @@ class TransfersCog(commands.Cog):
         )
         counter = result.get("counter") or {}
         view = ContractNegView(self, int(offer.get("id")))
+        counter_line = ""
+        if counter:
+            counter_line = (
+                f"\n\n**Your offer:** {fmt_money(wage)}/wk • {role} • bonus {fmt_money(bonus)} • {years} yrs\n"
+                f"**Counter-demand:** {fmt_money(counter.get('wage'))}/wk • {counter.get('role')} • bonus {fmt_money(counter.get('signing_bonus'))} • {counter.get('contract_years')} yrs\n"
+                f"Round: {round_no} • {bar}\n"
+                "Submit a revised offer or pull out. Lowballing or stalling will raise pressure."
+            )
         await interaction.followup.send(embed=info_embed(
             "Contract Counter-Offer",
-            result["message"] + "\n\n"
-            f"**Your offer:** {fmt_money(wage)}/wk • {role} • bonus {fmt_money(bonus)} • {years} yrs\n"
-            f"**Counter demand:** {fmt_money(counter.get('wage'))}/wk • {counter.get('role')} • bonus {fmt_money(counter.get('signing_bonus'))} • {counter.get('contract_years')} yrs\n"
-            f"Round: {round_no} • Pressure: {pressure}/5\n"
-            "Submit a new offer or pull out."
+            (result["message"] + counter_line)[:3900]
         ), view=view, ephemeral=True)
 
     async def _finalize_agreed_offer(self, offer: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
@@ -762,7 +800,9 @@ class TransfersCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Invalid Fee", "Enter a valid fee (e.g. 20M)."), ephemeral=True)
             return
 
-        # If selling team is bot/unclaimed, act as bot manager. If human-claimed, still allow bot-style negotiation for contract with player as requested (approach club to buy)
+        # If selling team is bot/unclaimed, bot manager evaluates the fee realistically.
+        # If selling team is human-managed, the managers have agreed the fee between themselves -
+        # go straight to contract negotiation with NO fee refusal.
         is_bot = selling_team.get("manager_user_id") is None
         if is_bot:
             used = await self.market.get_bot_transfer_count(season_id, buying_team_id)
@@ -771,6 +811,13 @@ class TransfersCog(commands.Cog):
                 return
         val = self.market.value_player(player)
         decision = self.market.evaluate_bot_offer(val, offer_fee, player)
+        if not is_bot:
+            # Manager-to-manager: fee is already agreed, no bot valuation refusal.
+            decision = {
+                "accept": True,
+                "reason": f"Manager-to-manager agreement confirmed. The fee of {fmt_money(offer_fee)} for {player.get('name')} ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT) has been accepted by the clubs. Moving straight to contract negotiation.",
+                "manager_agreed": True,
+            }
 
         now = utc_now_iso()
         status = "negotiating" if decision["accept"] else "rejected"
@@ -782,9 +829,10 @@ class TransfersCog(commands.Cog):
         offer_id = cur.lastrowid
 
         if not decision["accept"]:
+            bar = negotiation_pressure_bar(0)
             await interaction.followup.send(embed=error_embed(
                 "Club Offer Rejected",
-                f"**{selling_team_name}** response for **{player.get('name')}**:\n\n{decision['reason']}\n\n"
+                f"{bar}\n\n**{selling_team_name}** response for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT):\n\n{decision['reason']}\n\n"
                 f"Your offer: {fmt_money(offer_fee)} • Valuation: {fmt_money(val.market_value)}"
             ), ephemeral=True)
             return
@@ -795,19 +843,23 @@ class TransfersCog(commands.Cog):
             (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot}), utc_now_iso(), int(offer_id)),
         )
         view = ContractNegView(self, int(offer_id))
+        bar = negotiation_pressure_bar(0, 10)
+        p = player
+        seller_label = f"**{selling_team_name} (bot manager)**" if is_bot else f"**{selling_team_name} manager**"
         embed = success_embed(
             "Fee Accepted — Contract Negotiation",
             (
-                f"**{selling_team_name}** {'(bot manager)' if is_bot else 'manager'} accepted the fee discussion for **{player.get('name')}**.\n"
-                f"{decision['reason']}\n\n"
-                f"Fee: **{fmt_money(offer_fee)}**\n"
-                f"Player: **{player.get('name')}** ({int(player.get('overall') or 0)} OVR / {int(player.get('potential') or 0)} POT)\n\n"
-                f"**Opening contract demands (FC27-style):**\n"
+                f"{bar}\n\n"
+                f"{seller_label}: {decision['reason']}\n\n"
+                f"**Player:** {p.get('name')} ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'})\n"
+                f"**Agreed fee:** {fmt_money(offer_fee)}\n\n"
+                f"I am representing the player in this contract negotiation. The demands below are based on the player's quality, age, and market standing.\n\n"
+                f"**Opening contract demands:**\n"
                 f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
                 f"• Requested role: **{demand['role']}**\n"
                 f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
                 f"• Contract length: **{demand['contract_years']} years**\n\n"
-                f"Submit your contract offer. The bot will respond as the negotiating side with counter-offers and pressure."
+                f"Submit a realistic offer. This negotiation is strict - pressure will rise on lowball offers or stalling, and at high pressure talks will end."
             ),
         )
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
@@ -884,21 +936,23 @@ class TransfersCog(commands.Cog):
         offer_id = cur.lastrowid
 
         view = ContractNegView(self, int(offer_id))
+        bar = negotiation_pressure_bar(0, 10)
+        p = player
         embed = success_embed(
             "Free Agent Contract Negotiation",
             (
-                f"**{player.get('name')}** is available as a free agent (no transfer fee).\n"
-                f"Player: **{player.get('name')}** ({int(player.get('overall') or 0)} OVR / {int(player.get('potential') or 0)} POT)\n"
-                f"Position: {player.get('detailed_position') or player.get('position') or '?'} • Age: {player.get('age') or '?'} • Height: {int(player.get('height_cm') or 0) or '?'}cm\n"
-                f"Market Value (Transfermarkt model): **{fmt_money(val.market_value)}**\n\n"
-                f"**Opening contract demands (FC27-style, natural language negotiation):**\n"
+                f"{bar}\n\n"
+                f"I am representing **{p.get('name')}** as a high-profile free agent. Following talks, **{buying_team_name}** is a potential destination, but this will be handled strictly and professionally.\n\n"
+                f"**Player profile (database):** {int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT • "
+                f"{p.get('detailed_position') or p.get('position') or '?'} • Age {p.get('age') or '?'} • Height {int(p.get('height_cm') or 0) or '?'}cm\n"
+                f"**Estimated market value:** {fmt_money(val.market_value)}\n\n"
+                f"**Opening demands:**\n"
                 f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
                 f"• Requested role: **{demand['role']}**\n"
                 f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
                 f"• Contract length: **{demand['contract_years']} years**\n\n"
-                f"Only <@{interaction.user.id}> (the buying manager) can negotiate this deal.\n"
-                f"Click **Submit Contract Offer** and describe your offer in natural language (e.g. `180k per week, important role, 2M signing bonus, 4 years`).\n"
-                f"When agreement is reached, the player is automatically added to **{buying_team_name}**."
+                f"Only <@{interaction.user.id}> may negotiate this deal. Submit a natural-language offer (e.g. `180k per week, important role, 2M signing bonus, 4 years`).\n"
+                f"Lowball offers or stalling will raise pressure. At high pressure, {p.get('name')}'s camp will walk away and explore other clubs."
             ),
         )
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)

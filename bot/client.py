@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from config import Settings
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class FootballBot(commands.Bot):
     def __init__(self, settings: Settings, db: Database):
         intents = discord.Intents.default()
-        intents.message_content = False
+        intents.message_content = True
         super().__init__(command_prefix=settings.command_prefix, intents=intents)
         self.settings = settings
         self.db = db
@@ -65,6 +66,18 @@ class FootballBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (%s)", self.user, getattr(self.user, "id", "?"))
+
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        orig = getattr(error, "original", error)
+        logger.exception("App command error: %s", error, exc_info=orig)
+        msg = "Something went wrong while running that command. Please try again."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            pass
 
 
 def create_bot(settings: Settings, db: Database) -> FootballBot:

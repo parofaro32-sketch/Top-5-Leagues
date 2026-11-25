@@ -24,6 +24,29 @@ def _clamp(text: str, limit: int = 1900) -> str:
     return text[: limit - 20] + "\n…(truncated)"
 
 
+_DISPLAY_POS = {
+    "LCB": "CB", "RCB": "CB", "CB": "CB",
+    "LCM": "CM", "RCM": "CM", "CM": "CM",
+    "LDM": "CDM", "RDM": "CDM", "CDM": "CDM",
+    "LAM": "CAM", "RAM": "CAM", "CAM": "CAM",
+    "LS": "ST", "RS": "ST",
+    "LB": "LB", "RB": "RB", "LWB": "LWB", "RWB": "RWB",
+    "LM": "LM", "RM": "RM",
+    "LW": "LW", "RW": "RW", "ST": "ST", "CF": "CF",
+    "GK": "GK",
+}
+
+
+def _display_pos(slot: str | None, position: str | None = None) -> str:
+    s = (slot or "").upper().strip()
+    if s in _DISPLAY_POS:
+        return _DISPLAY_POS[s]
+    p = (position or "").upper().strip()
+    if p in {"GK", "DEF", "MID", "FWD"}:
+        return p
+    return s or p or "POS"
+
+
 def _slot_group(slot: str | None, position: str | None) -> str:
     s = (slot or "").upper()
     p = (position or "MID").upper()
@@ -86,7 +109,7 @@ def _format_lineup(state, side: str) -> str:
                 lines.append("")
             lines.append(f"**{group_labels.get(grp, grp)}**")
             current_group = grp
-        pos_label = (e.slot or e.position or "POS").upper()
+        pos_label = _display_pos(e.slot, e.position)
         ps = state.player_states.get(state.player_key(side, int(getattr(e, "player_api_id", 0) or 0)))
         pidx = state.players_index.get(state.player_key(side, int(getattr(e, "player_api_id", 0) or 0)))
         num = getattr(pidx, "number", None) if pidx else None
@@ -107,7 +130,7 @@ def _format_lineup(state, side: str) -> str:
             pidx = state.players_index.get(state.player_key(side, int(getattr(b, "player_api_id", 0) or 0)))
             num = getattr(pidx, "number", None) if pidx else None
             num_txt = f"#{int(num)} " if num is not None else ""
-            bpos = (b.slot or b.position or "SUB").upper()
+            bpos = _display_pos(b.slot, b.position)
             bench_parts.append(f"{num_txt}{b.name} (`{bpos}`)")
         lines.append("**🪑 Bench:** " + ", ".join(bench_parts))
     else:
@@ -338,7 +361,7 @@ def _format_live_player_ratings_block(home_name: str, away_name: str, home_playe
         return sorted(ps, key=key)
 
     def line(team_name: str, p: dict[str, Any], conceded: int) -> str:
-        pos = p.get("slot") or p.get("position") or "POS"
+        pos = _display_pos(p.get("slot"), p.get("position"))
         rating = p.get("rating")
         try:
             rating_txt = f"{float(rating):.1f}" if rating is not None else "-"
@@ -381,20 +404,31 @@ def _format_minute_label(minute: int, phase: str | None = None, extra: int = 0, 
     return f"Minute {minute}"
 
 
-def _format_match_stat_sheet(home_name: str, away_name: str, home_stats: dict[str, Any], away_stats: dict[str, Any], home_score: int, away_score: int, minute_label: str) -> str:
+def _format_match_stat_sheet(
+    home_name: str,
+    away_name: str,
+    home_stats: dict[str, Any],
+    away_stats: dict[str, Any],
+    home_score: int,
+    away_score: int,
+    minute_label: str,
+    discipline: list[dict[str, Any]] | None = None,
+) -> str:
     def pct(v):
         try:
             return f"{int(round(float(v)))}%"
         except Exception:
             return f"{v}%"
+
     def num(v):
         try:
             fv = float(v)
             if abs(fv - round(fv)) < 1e-9:
                 return str(int(round(fv)))
-            return f"{fv:.2f}".rstrip('0').rstrip('.')
+            return f"{fv:.2f}".rstrip("0").rstrip(".")
         except Exception:
             return str(v)
+
     def xg(v):
         try:
             return f"{float(v):.2f}"
@@ -405,39 +439,82 @@ def _format_match_stat_sheet(home_name: str, away_name: str, home_stats: dict[st
     a_pos = pct(away_stats.get("possession", 0))
     h_pass = home_stats.get("passes_attempted", home_stats.get("passes_completed", 0))
     a_pass = away_stats.get("passes_attempted", away_stats.get("passes_completed", 0))
-    h_cards = int(home_stats.get("yellow_cards", 0) or 0) + int(home_stats.get("red_cards", 0) or 0)
-    a_cards = int(away_stats.get("yellow_cards", 0) or 0) + int(away_stats.get("red_cards", 0) or 0)
+    h_y = int(home_stats.get("yellow_cards", 0) or 0)
+    a_y = int(away_stats.get("yellow_cards", 0) or 0)
+    h_r = int(home_stats.get("red_cards", 0) or 0)
+    a_r = int(away_stats.get("red_cards", 0) or 0)
 
     rows = [
-        ("**Possession %**", h_pos, a_pos),
-        ("**Shots**", num(home_stats.get("shots", 0)), num(away_stats.get("shots", 0))),
-        ("**Shots on Target**", num(home_stats.get("shots_on_target", 0)), num(away_stats.get("shots_on_target", 0))),
-        ("**xG**", xg(home_stats.get("xg", 0)), xg(away_stats.get("xg", 0))),
-        ("**Passes**", num(h_pass), num(a_pass)),
-        ("**Pass Accuracy %**", pct(home_stats.get("pass_accuracy", 0)), pct(away_stats.get("pass_accuracy", 0))),
-        ("**Fouls**", num(home_stats.get("fouls", 0)), num(away_stats.get("fouls", 0))),
-        ("**Cards**", str(h_cards), str(a_cards)),
-        ("**Goals**", str(home_score), str(away_score)),
-        ("**Corners**", num(home_stats.get("corners", 0)), num(away_stats.get("corners", 0))),
-        ("**Offsides**", num(home_stats.get("offsides", 0)), num(away_stats.get("offsides", 0))),
+        ("Possession", h_pos, a_pos),
+        ("Shots", num(home_stats.get("shots", 0)), num(away_stats.get("shots", 0))),
+        ("Shots on Target", num(home_stats.get("shots_on_target", 0)), num(away_stats.get("shots_on_target", 0))),
+        ("Expected Goals (xG)", xg(home_stats.get("xg", 0)), xg(away_stats.get("xg", 0))),
+        ("Passes", num(h_pass), num(a_pass)),
+        ("Pass Accuracy", pct(home_stats.get("pass_accuracy", 0)), pct(away_stats.get("pass_accuracy", 0))),
+        ("Fouls", num(home_stats.get("fouls", 0)), num(away_stats.get("fouls", 0))),
+        ("Yellow Cards", str(h_y), str(a_y)),
+        ("Red Cards", str(h_r), str(a_r)),
+        ("Corners", num(home_stats.get("corners", 0)), num(away_stats.get("corners", 0))),
+        ("Offsides", num(home_stats.get("offsides", 0)), num(away_stats.get("offsides", 0))),
+        ("Saves", num(home_stats.get("saves", 0)), num(away_stats.get("saves", 0))),
     ]
     lines = [
-        f"📊 Match Stat Sheet ({minute_label})",
+        f"📊 **Match Stat Sheet — {minute_label}**",
+        f"**{home_name} {home_score} - {away_score} {away_name}**",
+        "",
         f"| Statistic | {home_name} | {away_name} |",
-        "|---|---|---|",
+        "|:--|:--:|:--:|",
     ]
     for label, hv, av in rows:
         lines.append(f"| {label} | {hv} | {av} |")
+
+    # Discipline summary
+    disc_lines: list[str] = []
+    seen: set[tuple[Any, ...]] = set()
+    for ev in (discipline or []):
+        minute = ev.get("minute", 0)
+        ex = ev.get("extra_minute", 0)
+        mtxt = f"{minute}+{ex}'" if ex else f"{minute}'"
+        player = ev.get("player") or "Unknown"
+        team = ev.get("team") or ""
+        etype = str(ev.get("type") or "").lower()
+        reason = ev.get("reason")
+        key = (mtxt, player, team, etype)
+        if key in seen:
+            continue
+        seen.add(key)
+        if etype == "yellow_card":
+            icon = "🟨"
+            label_txt = "Yellow card"
+        elif etype == "second_yellow":
+            icon = "🟨🟥"
+            label_txt = "Second yellow"
+        elif etype == "red_card":
+            icon = "🟥"
+            label_txt = "Red card"
+        else:
+            icon = "▪️"
+            label_txt = etype.replace("_", " ").title() if etype else "Card"
+        reason_txt = f" — {reason}" if reason else ""
+        disc_lines.append(f"- {icon} {mtxt} **{player}** ({team}) — {label_txt}{reason_txt}")
+    if disc_lines:
+        lines.append("")
+        lines.append("**Discipline Summary**")
+        lines.extend(disc_lines)
+    else:
+        lines.append("")
+        lines.append("**Discipline Summary**")
+        lines.append("- No cards issued.")
+
     return "\n".join(lines)
 
 
 def _format_injury_consistency(injuries: list[dict[str, Any]]) -> str:
-    lines = ["", "### 🚑 INJURY CONSISTENCY (MANDATORY)"]
+    lines = ["", "### 🚑 Injury Report"]
     if not injuries:
-        lines.append("- No injuries occurred.")
+        lines.append("- No injuries reported.")
         return "\n".join(lines)
-    # de-duplicate roughly by player+minute
-    seen = set()
+    seen: set[tuple[Any, ...]] = set()
     for inj in injuries:
         minute = inj.get("minute", 0)
         ex = inj.get("extra_minute", 0)
@@ -458,9 +535,9 @@ def _format_injury_consistency(injuries: list[dict[str, Any]]) -> str:
         else:
             status = "unable to continue"
         team_txt = f" ({team})" if team else ""
-        lines.append(f"- {mtxt} {player}{team_txt} — {sev}, {status}.")
+        lines.append(f"- {mtxt} **{player}**{team_txt} — {sev}, {status}.")
     if len(lines) == 2:
-        lines.append("- No injuries occurred.")
+        lines.append("- No injuries reported.")
     return "\n".join(lines)
 
 
@@ -478,7 +555,7 @@ def _format_physical_condition_sheet(home_name: str, away_name: str, home_player
         return sorted(ps, key=key)
 
     def line(team_name: str, p: dict[str, Any]) -> str:
-        pos = p.get("slot") or p.get("position") or "POS"
+        pos = _display_pos(p.get("slot"), p.get("position"))
         name = p.get("name") or "Unknown"
         try:
             stamina = int(round(max(0.0, min(100.0, float(p.get("stamina", 100))))))
@@ -525,84 +602,104 @@ def _format_report(report: dict[str, Any]) -> list[str]:
     a = stats.get("away", {})
     msgs: list[str] = []
 
-    scoreline = fs.get('scoreline') or f"{fs.get('home_team','Home')} {fs.get('home_score',0)} - {fs.get('away_score',0)} {fs.get('away_team','Away')}"
+    scoreline = fs.get("scoreline") or f"{fs.get('home_team', 'Home')} {fs.get('home_score', 0)} - {fs.get('away_score', 0)} {fs.get('away_team', 'Away')}"
+    home_name = fs.get("home_team", "Home")
+    away_name = fs.get("away_team", "Away")
+    home_score = int(fs.get("home_score", 0) or 0)
+    away_score = int(fs.get("away_score", 0) or 0)
     goals = report.get("goalscorers", []) or []
 
     summary_lines = [
-        "🏆 MATCH SUMMARY (Full-Time Only)",
+        "🏆 FULL-TIME SUMMARY",
         scoreline,
     ]
     if goals:
         summary_lines.append("")
+        summary_lines.append("Goalscorers:")
         for g in goals:
-            m = f"{g.get('minute',0)}{('+'+str(g.get('extra_minute'))) if g.get('extra_minute') else ''}'"
-            who = g.get('scorer') or 'Unknown'
-            assist = g.get('assist') or 'None'
-            summary_lines.append(f"⚽  {m}: {who} (Assist: {assist})")
+            m = f"{g.get('minute', 0)}{('+' + str(g.get('extra_minute'))) if g.get('extra_minute') else ''}'"
+            who = g.get("scorer") or "Unknown"
+            team = g.get("team") or ""
+            assist = g.get("assist")
+            assist_txt = f" (assist: {assist})" if assist else ""
+            team_txt = f" — {team}" if team else ""
+            summary_lines.append(f"• {m} {who}{assist_txt}{team_txt}")
     else:
         summary_lines.append("")
-        summary_lines.append("⚽  No goals")
+        summary_lines.append("Goalscorers: None")
 
     motm = report.get("man_of_the_match")
     if motm:
         reason = _motm_reason(report, motm)
-        motm_name = motm.get('name') or 'Unknown'
-        motm_rating = motm.get('rating', '-')
+        motm_name = motm.get("name") or "Unknown"
+        motm_rating = motm.get("rating", "-")
         summary_lines.append("")
-        summary_lines.append(f"MOTM: {motm_name} - {motm_rating} *({reason})*")
+        summary_lines.append(f"Man of the Match: {motm_name} ({motm_rating})")
+        summary_lines.append(f"Reason: {reason}")
 
-    summary_block = "🏆 **Match Summary & Post-Match Wrap-Up**\n```\n" + "\n".join(summary_lines) + "\n```"
+    summary_block = "```\n" + "\n".join(summary_lines) + "\n```"
     msgs.append(_clamp(summary_block, 1900))
 
-    detail_lines = [
-        f"**Full-Time Details: {scoreline}**",
-        "",
-        "**Match Statistics**",
-        f"Possession: {h.get('possession',0)}% - {a.get('possession',0)}%",
-        f"Shots (on target): {h.get('shots',0)} ({h.get('shots_on_target',0)}) - {a.get('shots',0)} ({a.get('shots_on_target',0)})",
-        f"xG: {h.get('xg',0)} - {a.get('xg',0)}",
-        f"Corners: {h.get('corners',0)} - {a.get('corners',0)}",
-        f"Fouls: {h.get('fouls',0)} - {a.get('fouls',0)}",
-        f"Saves: {h.get('saves',0)} - {a.get('saves',0)}",
-        f"Cards (Y/R): {h.get('yellow_cards',0)}/{h.get('red_cards',0)} - {a.get('yellow_cards',0)}/{a.get('red_cards',0)}",
-        f"Pass accuracy: {h.get('pass_accuracy',0)}% - {a.get('pass_accuracy',0)}%",
-    ]
-    msgs.append(_clamp("\n".join(detail_lines)))
-
-    # Live player ratings format (requested for full time as well)
+    # Player ratings
     ratings = report.get("player_ratings") or {}
     msgs.extend(_format_live_player_ratings_block(
-        fs.get('home_team', 'Home'), fs.get('away_team', 'Away'),
-        ratings.get('home', []), ratings.get('away', []),
-        int(fs.get('home_score', 0) or 0), int(fs.get('away_score', 0) or 0),
+        home_name, away_name,
+        ratings.get("home", []), ratings.get("away", []),
+        home_score, away_score,
         is_live=False,
     ))
 
-    extra_lines = []
-    disc = report.get('discipline') or []
+    # Discipline + injuries + substitutions
+    extra_lines: list[str] = []
+    disc = report.get("discipline") or []
+    extra_lines.append("**Discipline Summary**")
     if disc:
-        extra_lines.append("**Discipline**")
-        for x in disc[:15]:
-            extra_lines.append(f"- {x.get('minute')}' {x.get('player')} ({x.get('team')}) — {str(x.get('type','')).replace('_',' ')}")
-    inj = report.get('injuries') or []
-    if inj:
-        if extra_lines:
-            extra_lines.append("")
-        extra_lines.append("**Injuries**")
-        for x in inj[:12]:
-            status = 'continued' if x.get('continued') else 'substituted off' if x.get('substituted') else 'forced off'
-            extra_lines.append(f"- {x.get('minute')}' {x.get('player')} ({x.get('team')}) — {x.get('severity')} ({status})")
-    subs = report.get('substitutions') or []
-    if subs:
-        if extra_lines:
-            extra_lines.append("")
-        extra_lines.append("**Substitutions**")
-        for x in subs[:20]:
-            reason = f" ({x.get('reason')})" if x.get('reason') else ''
-            extra_lines.append(f"- {x.get('minute')}' {x.get('team')}: {x.get('on_name')} for {x.get('off_name')}{reason}")
-    if extra_lines:
-        msgs.append(_clamp("\n".join(extra_lines)))
+        for x in disc[:20]:
+            minute = x.get("minute", 0)
+            ex = x.get("extra_minute", 0)
+            mtxt = f"{minute}+{ex}'" if ex else f"{minute}'"
+            player = x.get("player") or "Unknown"
+            team = x.get("team") or ""
+            etype = str(x.get("type") or "").lower()
+            if etype == "yellow_card":
+                icon, label = "🟨", "Yellow card"
+            elif etype == "second_yellow":
+                icon, label = "🟨🟥", "Second yellow"
+            elif etype == "red_card":
+                icon, label = "🟥", "Red card"
+            else:
+                icon, label = "▪️", etype.replace("_", " ").title() or "Card"
+            reason = x.get("reason")
+            reason_txt = f" — {reason}" if reason else ""
+            extra_lines.append(f"- {icon} {mtxt} **{player}** ({team}) — {label}{reason_txt}")
+    else:
+        extra_lines.append("- No cards issued.")
 
+    inj = report.get("injuries") or []
+    extra_lines.append("")
+    extra_lines.append("**Injury Report**")
+    if inj:
+        for x in inj[:15]:
+            minute = x.get("minute", 0)
+            ex = x.get("extra_minute", 0)
+            mtxt = f"{minute}+{ex}'" if ex else f"{minute}'"
+            status = "continued" if x.get("continued") else "substituted off" if x.get("substituted") else "forced off"
+            extra_lines.append(f"- {mtxt} **{x.get('player', 'Unknown')}** ({x.get('team', '')}) — {x.get('severity', 'knock')} ({status})")
+    else:
+        extra_lines.append("- No injuries reported.")
+
+    subs = report.get("substitutions") or []
+    if subs:
+        extra_lines.append("")
+        extra_lines.append("**Substitutions**")
+        for x in subs[:24]:
+            minute = x.get("minute", 0)
+            ex = x.get("extra_minute", 0)
+            mtxt = f"{minute}+{ex}'" if ex else f"{minute}'"
+            reason = f" ({x.get('reason')})" if x.get("reason") else ""
+            extra_lines.append(f"- {mtxt} {x.get('team', '')}: {x.get('on_name')} ↔ {x.get('off_name')}{reason}")
+
+    msgs.append(_clamp("\n".join(extra_lines), 1900))
     return [m for m in msgs if m.strip()]
 
 
@@ -1802,6 +1899,7 @@ class SimCog(commands.Cog):
                 minute = int(mstats.get("minute", st.minute) or st.minute)
                 extra = int(st.extra_minute or 0)
                 injuries = rep.get("injuries") or []
+                discipline = rep.get("discipline") or []
                 minute_label = _format_minute_label(minute, st.phase, extra, is_full_time=True)
             else:
                 bs = session.break_status()
@@ -1818,14 +1916,16 @@ class SimCog(commands.Cog):
                 away_score = int(score.get("away", st.away.score) or 0)
                 minute = int(bs.get("minute", st.minute) or st.minute)
                 injuries = []
-                from engine.report import injuries as _inj
+                discipline = []
                 try:
+                    from engine.report import discipline as _disc, injuries as _inj
                     injuries = _inj(st)
+                    discipline = _disc(st)
                 except Exception:
-                    injuries = []
+                    pass
                 minute_label = _format_minute_label(minute, st.phase, is_full_time=False)
 
-            sheet = _format_match_stat_sheet(home_name, away_name, home_stats, away_stats, home_score, away_score, minute_label)
+            sheet = _format_match_stat_sheet(home_name, away_name, home_stats, away_stats, home_score, away_score, minute_label, discipline=discipline)
             injury_block = _format_injury_consistency(injuries)
             await channel.send(_clamp(sheet + "\n" + injury_block, 1900))
             for msg in _format_physical_condition_sheet(home_name, away_name, home_players, away_players, minute_label):

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS players (
     potential REAL,
     status TEXT DEFAULT 'active',
     market_value INTEGER,
+    wage INTEGER,
     attributes_json TEXT,
     statistics_json TEXT,
     raw_json TEXT,
@@ -440,6 +441,7 @@ CREATE TABLE IF NOT EXISTS board_requests (
     season_id TEXT,
     guild_id INTEGER,
     channel_id INTEGER,
+    message_id INTEGER,
     user_id INTEGER,
     team_api_id INTEGER NOT NULL,
     team_name TEXT,
@@ -502,6 +504,7 @@ class Database:
             ("preferred_foot", "TEXT"), ("overall", "REAL"), ("potential", "REAL"),
             ("status", "TEXT DEFAULT 'active'"),
             ("market_value", "INTEGER"),
+            ("wage", "INTEGER"),
         ]:
             try:
                 await self._ensure_column("players", col, defn)
@@ -543,6 +546,24 @@ class Database:
                 await self._ensure_column("training_sessions", col, defn)
             except Exception:
                 pass
+        for col, defn in [
+            ("message_id", "INTEGER"),
+        ]:
+            try:
+                await self._ensure_column("board_requests", col, defn)
+            except Exception:
+                pass
+        # One-time: reset Arsenal board requests so they can do 2 funds + 2 wage requests
+        try:
+            mig = await self.get_cache_meta("arsenal_board_requests_reset_v1")
+            if not mig:
+                await self.execute(
+                    "DELETE FROM board_requests WHERE (team_api_id=? OR lower(team_name)=lower(?)) AND kind IN ('funds','wage')",
+                    (133604, "Arsenal"),
+                )
+                await self.set_cache_meta("arsenal_board_requests_reset_v1", {"ok": True}, None)
+        except Exception:
+            pass
         await self.require_conn().commit()
 
     def require_conn(self) -> aiosqlite.Connection:
@@ -608,21 +629,26 @@ class Database:
                 mv = int(mv) if mv is not None and str(mv).strip() != "" else None
             except Exception:
                 mv = None
+            wage = p.get("wage")
+            try:
+                wage = int(wage) if wage is not None and str(wage).strip() != "" else None
+            except Exception:
+                wage = None
             rows.append((
                 int(p["api_id"]), season, team_api_id, p.get("name") or "", p.get("firstname"), p.get("lastname"),
                 p.get("age"), p.get("dob"), p.get("nationality"), p.get("photo"), p.get("position"), p.get("detailed_position"),
                 p.get("number"), 1 if p.get("injured") else 0, p.get("height_cm"), p.get("weight_kg"), p.get("preferred_foot"),
-                p.get("overall"), p.get("potential"), p.get("status") or "active", mv,
+                p.get("overall"), p.get("potential"), p.get("status") or "active", mv, wage,
                 self.dumps(p.get("attributes") or {}), self.dumps(p.get("statistics") or {}), self.dumps(p.get("raw") or p), utc_now_iso(),
             ))
         await self.executemany(
-            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,dob,nationality,photo,position,detailed_position,number,injured,height_cm,weight_kg,preferred_foot,overall,potential,status,market_value,attributes_json,statistics_json,raw_json,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,dob,nationality,photo,position,detailed_position,number,injured,height_cm,weight_kg,preferred_foot,overall,potential,status,market_value,wage,attributes_json,statistics_json,raw_json,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(api_id,team_api_id,season) DO UPDATE SET
                name=excluded.name,firstname=excluded.firstname,lastname=excluded.lastname,age=excluded.age,dob=excluded.dob,nationality=excluded.nationality,
                photo=excluded.photo,position=excluded.position,detailed_position=excluded.detailed_position,number=excluded.number,
                injured=excluded.injured,height_cm=excluded.height_cm,weight_kg=excluded.weight_kg,preferred_foot=excluded.preferred_foot,
-               overall=excluded.overall,potential=excluded.potential,status=excluded.status,market_value=excluded.market_value,
+               overall=excluded.overall,potential=excluded.potential,status=excluded.status,market_value=excluded.market_value,wage=excluded.wage,
                attributes_json=excluded.attributes_json,statistics_json=excluded.statistics_json,raw_json=excluded.raw_json,updated_at=excluded.updated_at""", rows)
 
     async def delete_stale_players_for_team(self, team_api_id: int, season: int, keep_api_ids: list[int]) -> None:

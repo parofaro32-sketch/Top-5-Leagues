@@ -27,9 +27,11 @@
           "weight_kg": 83,
           "preferred_foot": "Right",
           "overall": 84,
-          "potential": 94,
+          "potential": 92,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 105000,
+          "market_value": 37000000
         },
         {
           "api_id": 9000102,
@@ -49,7 +51,9 @@
           "overall": 84,
           "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 32000000
         },
         {
           "api_id": 9000103,
@@ -69,7 +73,9 @@
           "overall": 83,
           "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 97500,
+          "market_value": 29750000
         },
         {
           "api_id": 9000104,
@@ -87,9 +93,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 90,
+          "potential": 88,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 97500,
+          "market_value": 31250000
         },
         {
           "api_id": 9000105,
@@ -107,9 +115,11 @@
           "weight_kg": 69,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 90,
+          "potential": 88,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 30750000
         },
         {
           "api_id": 9000106,
@@ -129,7 +139,9 @@
           "overall": 82,
           "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 90000,
+          "market_value": 27500000
         },
         {
           "api_id": 9000107,
@@ -149,7 +161,9 @@
           "overall": 79,
           "potential": 79,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 77500,
+          "market_value": 21250000
         },
         {
           "api_id": 9000108,
@@ -167,9 +181,11 @@
           "weight_kg": 89,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 89,
+          "potential": 87,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 90000,
+          "market_value": 28750000
         },
         {
           "api_id": 9000109,
@@ -187,9 +203,11 @@
           "weight_kg": 86,
           "preferred_foot": "Left",
           "overall": 84,
-          "potential": 87,
+          "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 125000,
+          "market_value": 38500000
         },
         {
           "api_id": 9000110,
@@ -209,7 +227,9 @@
           "overall": 81,
           "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 92500,
+          "market_value": 30500000
         },
         {
           "api_id": 9000111,
@@ -227,9 +247,11 @@
           "weight_kg": 76,
           "preferred_foot": "Right",
           "overall": 84,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 125000,
+          "market_value": 46000000
         },
         {
           "api_id": 9000112,
@@ -249,7 +271,9 @@
           "overall": 81,
           "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 37500000
         },
         {
           "api_id": 9000113,
@@ -269,7 +293,9 @@
           "overall": 85,
           "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 145000,
+          "market_value": 57500000
         },
         {
           "api_id": 9000115,
@@ -287,9 +313,11 @@
           "weight_kg": 93,
           "preferred_foot": "Right",
           "overall": 81,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 90000,
+          "market_value": 25000000
         },
         {
           "api_id": 9000116,
@@ -307,9 +335,11 @@
           "weight_kg": 78,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 85000,
+          "market_value": 26000000
         },
         {
           "api_id": 9000117,
@@ -327,9 +357,11 @@
           "weight_kg": 72,
           "preferred_foot": "Left",
           "overall": 89,
-          "potential": 94,
+          "potential": 92,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 145000,
+          "market_value": 46250000
         },
         {
           "api_id": 9000118,
@@ -347,9 +379,11 @@
           "weight_kg": 86,
           "preferred_foot": "Right",
           "overall": 78,
-          "potential": 92,
+          "potential": 90,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 67500,
+          "market_value": 29250000
         },
         {
           "api_id": 9000119,
@@ -369,7 +403,9 @@
           "overall": 78,
           "potential": 78,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 62500,
+          "market_value": 19000000
         },
         {
           "api_id": 9000120,
@@ -389,7 +425,9 @@
           "overall": 77,
           "potential": 77,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 57500,
+          "market_value": 17000000
         },
         {
           "api_id": 9000121,
@@ -407,9 +445,11 @@
           "weight_kg": 71,
           "preferred_foot": "Right",
           "overall": 78,
-          "potential": 88,
+          "potential": 86,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 65000,
+          "market_value": 23750000
         },
         {
           "api_id": 9000122,
@@ -427,9 +467,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 73,
-          "potential": 82,
+          "potential": 80,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 48000,
+          "market_value": 23250000
         },
         {
           "api_id": 9000123,
@@ -449,7 +491,9 @@
           "overall": 76,
           "potential": 76,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 52500,
+          "market_value": 16000000
         },
         {
           "api_id": 9000124,
@@ -469,7 +513,9 @@
           "overall": 79,
           "potential": 79,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 77500,
+          "market_value": 25750000
         },
         {
           "api_id": 9000125,
@@ -489,7 +535,9 @@
           "overall": 79,
           "potential": 79,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 85000,
+          "market_value": 26500000
         },
         {
           "api_id": 9000126,
@@ -507,9 +555,11 @@
           "weight_kg": 75,
           "preferred_foot": "Left",
           "overall": 81,
-          "potential": 87,
+          "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 82500,
+          "market_value": 27000000
         },
         {
           "api_id": 9000127,
@@ -527,9 +577,11 @@
           "weight_kg": 73,
           "preferred_foot": "Right",
           "overall": 76,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 55000,
+          "market_value": 21000000
         },
         {
           "api_id": 9000128,
@@ -547,9 +599,11 @@
           "weight_kg": 70,
           "preferred_foot": "Left",
           "overall": 78,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 72500,
+          "market_value": 28250000
         },
         {
           "api_id": 9000129,
@@ -567,9 +621,11 @@
           "weight_kg": 78,
           "preferred_foot": "Left",
           "overall": 78,
-          "potential": 79,
+          "potential": 78,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 80000,
+          "market_value": 33500000
         },
         {
           "api_id": 9000130,
@@ -587,9 +643,11 @@
           "weight_kg": 71,
           "preferred_foot": "Right",
           "overall": 73,
-          "potential": 84,
+          "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 40000,
+          "market_value": 17250000
         },
         {
           "api_id": 9000131,
@@ -607,9 +665,11 @@
           "weight_kg": 80,
           "preferred_foot": "Right",
           "overall": 79,
-          "potential": 89,
+          "potential": 87,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 67500,
+          "market_value": 24750000
         },
         {
           "api_id": 9000132,
@@ -629,7 +689,9 @@
           "overall": 77,
           "potential": 77,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 70000,
+          "market_value": 26250000
         },
         {
           "api_id": 9000133,
@@ -647,9 +709,11 @@
           "weight_kg": 76,
           "preferred_foot": "Right",
           "overall": 74,
-          "potential": 75,
+          "potential": 74,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 50000,
+          "market_value": 18750000
         },
         {
           "api_id": 9000134,
@@ -669,7 +733,9 @@
           "overall": 74,
           "potential": 74,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 47000,
+          "market_value": 15500000
         },
         {
           "api_id": 9000135,
@@ -687,9 +753,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 73,
-          "potential": 81,
+          "potential": 79,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 48000,
+          "market_value": 17750000
         },
         {
           "api_id": 9000136,
@@ -707,9 +775,11 @@
           "weight_kg": 74,
           "preferred_foot": "Right",
           "overall": 76,
-          "potential": 82,
+          "potential": 80,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 65000,
+          "market_value": 25500000
         },
         {
           "api_id": 9000137,
@@ -727,9 +797,11 @@
           "weight_kg": 68,
           "preferred_foot": "Left",
           "overall": 82,
-          "potential": 84,
+          "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 49750000
         },
         {
           "api_id": 9000138,
@@ -747,9 +819,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 76,
-          "potential": 78,
+          "potential": 76,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 67500,
+          "market_value": 27750000
         },
         {
           "api_id": 9000139,
@@ -767,9 +841,11 @@
           "weight_kg": 65,
           "preferred_foot": "Left",
           "overall": 81,
-          "potential": 82,
+          "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 105000,
+          "market_value": 43750000
         },
         {
           "api_id": 9000140,
@@ -789,7 +865,9 @@
           "overall": 80,
           "potential": 80,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 92500,
+          "market_value": 33500000
         },
         {
           "api_id": 9000141,
@@ -809,7 +887,9 @@
           "overall": 81,
           "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 30500000
         },
         {
           "api_id": 9000142,
@@ -827,9 +907,11 @@
           "weight_kg": 72,
           "preferred_foot": "Right",
           "overall": 70,
-          "potential": 76,
+          "potential": 74,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 30000,
+          "market_value": 9600000
         },
         {
           "api_id": 9000143,
@@ -847,9 +929,11 @@
           "weight_kg": 77,
           "preferred_foot": "Right",
           "overall": 78,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 72500,
+          "market_value": 26500000
         },
         {
           "api_id": 9000144,
@@ -867,9 +951,11 @@
           "weight_kg": 76,
           "preferred_foot": "Right",
           "overall": 75,
-          "potential": 82,
+          "potential": 80,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 48000,
+          "market_value": 17000000
         },
         {
           "api_id": 9000145,
@@ -889,7 +975,9 @@
           "overall": 75,
           "potential": 75,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 47000,
+          "market_value": 14000000
         },
         {
           "api_id": 9000201,
@@ -907,9 +995,11 @@
           "weight_kg": 77,
           "preferred_foot": "Right",
           "overall": 86,
-          "potential": 88,
+          "potential": 86,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 155000,
+          "market_value": 63500000
         },
         {
           "api_id": 9000202,
@@ -927,9 +1017,11 @@
           "weight_kg": 84,
           "preferred_foot": "Right",
           "overall": 86,
-          "potential": 88,
+          "potential": 86,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 145000,
+          "market_value": 63000000
         },
         {
           "api_id": 9000203,
@@ -947,9 +1039,11 @@
           "weight_kg": 73,
           "preferred_foot": "Right",
           "overall": 84,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 135000,
+          "market_value": 53500000
         },
         {
           "api_id": 9000204,
@@ -969,7 +1063,9 @@
           "overall": 84,
           "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 135000,
+          "market_value": 55000000
         },
         {
           "api_id": 9000205,
@@ -987,9 +1083,11 @@
           "weight_kg": 84,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 89,
+          "potential": 87,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 30500000
         },
         {
           "api_id": 9000206,
@@ -1007,9 +1105,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 87,
+          "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 125000,
+          "market_value": 53500000
         },
         {
           "api_id": 9000207,
@@ -1027,9 +1127,11 @@
           "weight_kg": 75,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 120000,
+          "market_value": 43000000
         },
         {
           "api_id": 9000208,
@@ -1047,9 +1149,11 @@
           "weight_kg": 74,
           "preferred_foot": "Left",
           "overall": 83,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 125000,
+          "market_value": 52500000
         },
         {
           "api_id": 9000209,
@@ -1067,9 +1171,11 @@
           "weight_kg": 80,
           "preferred_foot": "Left",
           "overall": 83,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 120000,
+          "market_value": 52500000
         },
         {
           "api_id": 9000210,
@@ -1087,9 +1193,11 @@
           "weight_kg": 76,
           "preferred_foot": "Left",
           "overall": 83,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 97500,
+          "market_value": 28500000
         },
         {
           "api_id": 9000211,
@@ -1107,9 +1215,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 44000000
         },
         {
           "api_id": 9000212,
@@ -1127,9 +1237,11 @@
           "weight_kg": 73,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 125000,
+          "market_value": 49250000
         },
         {
           "api_id": 9000213,
@@ -1147,9 +1259,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 84,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 35750000
         },
         {
           "api_id": 9000214,
@@ -1167,9 +1281,11 @@
           "weight_kg": 82,
           "preferred_foot": "Right",
           "overall": 83,
-          "potential": 84,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 125000,
+          "market_value": 51000000
         },
         {
           "api_id": 9000215,
@@ -1189,7 +1305,9 @@
           "overall": 83,
           "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 44000000
         },
         {
           "api_id": 9000216,
@@ -1207,9 +1325,11 @@
           "weight_kg": 85,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 90,
+          "potential": 88,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 97500,
+          "market_value": 28750000
         },
         {
           "api_id": 9000217,
@@ -1227,9 +1347,11 @@
           "weight_kg": 74,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 88,
+          "potential": 86,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 95000,
+          "market_value": 59000000
         },
         {
           "api_id": 9000218,
@@ -1247,9 +1369,11 @@
           "weight_kg": 82,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 87,
+          "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 49750000
         },
         {
           "api_id": 9000219,
@@ -1267,9 +1391,11 @@
           "weight_kg": 81,
           "preferred_foot": "Left",
           "overall": 82,
-          "potential": 87,
+          "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 47500000
         },
         {
           "api_id": 9000220,
@@ -1287,9 +1413,11 @@
           "weight_kg": 72,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 87,
+          "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 50500000
         },
         {
           "api_id": 9000221,
@@ -1307,9 +1435,11 @@
           "weight_kg": 75,
           "preferred_foot": "Left",
           "overall": 82,
-          "potential": 87,
+          "potential": 85,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 49750000
         },
         {
           "api_id": 9000222,
@@ -1327,9 +1457,11 @@
           "weight_kg": 86,
           "preferred_foot": "Left",
           "overall": 82,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 95000,
+          "market_value": 26500000
         },
         {
           "api_id": 9000223,
@@ -1347,9 +1479,11 @@
           "weight_kg": 81,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 48500000
         },
         {
           "api_id": 9000224,
@@ -1367,9 +1501,11 @@
           "weight_kg": 73,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 33500000
         },
         {
           "api_id": 9000225,
@@ -1387,9 +1523,11 @@
           "weight_kg": 76,
           "preferred_foot": "Left",
           "overall": 82,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 40000000
         },
         {
           "api_id": 9000226,
@@ -1407,9 +1545,11 @@
           "weight_kg": 86,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 40000000
         },
         {
           "api_id": 9000227,
@@ -1427,9 +1567,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 115000,
+          "market_value": 48750000
         },
         {
           "api_id": 9000228,
@@ -1447,9 +1589,11 @@
           "weight_kg": 83,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 85,
+          "potential": 83,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 40000000
         },
         {
           "api_id": 9000229,
@@ -1467,9 +1611,11 @@
           "weight_kg": 83,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 83,
+          "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 26500000
         },
         {
           "api_id": 9000230,
@@ -1487,9 +1633,11 @@
           "weight_kg": 67,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 83,
+          "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 40750000
         },
         {
           "api_id": 9000231,
@@ -1507,9 +1655,11 @@
           "weight_kg": 70,
           "preferred_foot": "Right",
           "overall": 82,
-          "potential": 83,
+          "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 33000000
         },
         {
           "api_id": 9000232,
@@ -1529,7 +1679,9 @@
           "overall": 82,
           "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 34000000
         },
         {
           "api_id": 9000233,
@@ -1549,7 +1701,9 @@
           "overall": 82,
           "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 110000,
+          "market_value": 39000000
         },
         {
           "api_id": 9000234,
@@ -1567,9 +1721,11 @@
           "weight_kg": 94,
           "preferred_foot": "Left",
           "overall": 81,
-          "potential": 88,
+          "potential": 86,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 95000,
+          "market_value": 34500000
         },
         {
           "api_id": 9000235,
@@ -1587,9 +1743,11 @@
           "weight_kg": 80,
           "preferred_foot": "Right",
           "overall": 81,
-          "potential": 86,
+          "potential": 84,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 82500,
+          "market_value": 26500000
         },
         {
           "api_id": 9000236,
@@ -1607,9 +1765,11 @@
           "weight_kg": 88,
           "preferred_foot": "Left",
           "overall": 81,
-          "potential": 84,
+          "potential": 82,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 105000,
+          "market_value": 46250000
         },
         {
           "api_id": 9000237,
@@ -1627,9 +1787,11 @@
           "weight_kg": 76,
           "preferred_foot": "Right",
           "overall": 81,
-          "potential": 83,
+          "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 82500,
+          "market_value": 24250000
         },
         {
           "api_id": 9000238,
@@ -1647,9 +1809,11 @@
           "weight_kg": 60,
           "preferred_foot": "Right",
           "overall": 81,
-          "potential": 83,
+          "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 36500000
         },
         {
           "api_id": 9000239,
@@ -1667,9 +1831,11 @@
           "weight_kg": 62,
           "preferred_foot": "Left",
           "overall": 81,
-          "potential": 83,
+          "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 105000,
+          "market_value": 42000000
         },
         {
           "api_id": 9000240,
@@ -1687,9 +1853,11 @@
           "weight_kg": 75,
           "preferred_foot": "Left",
           "overall": 81,
-          "potential": 82,
+          "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 105000,
+          "market_value": 44500000
         },
         {
           "api_id": 9000241,
@@ -1707,9 +1875,11 @@
           "weight_kg": 77,
           "preferred_foot": "Right",
           "overall": 81,
-          "potential": 82,
+          "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 92500,
+          "market_value": 24500000
         },
         {
           "api_id": 9000242,
@@ -1729,7 +1899,9 @@
           "overall": 81,
           "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 105000,
+          "market_value": 42500000
         },
         {
           "api_id": 9000243,
@@ -1749,7 +1921,9 @@
           "overall": 81,
           "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 36500000
         },
         {
           "api_id": 9000244,
@@ -1769,7 +1943,9 @@
           "overall": 81,
           "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 95000,
+          "market_value": 29500000
         },
         {
           "api_id": 9000245,
@@ -1789,7 +1965,9 @@
           "overall": 81,
           "potential": 81,
           "status": "active",
-          "injured": false
+          "injured": false,
+          "wage": 100000,
+          "market_value": 30500000
         }
       ]
     }

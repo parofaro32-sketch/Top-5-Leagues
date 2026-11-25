@@ -318,12 +318,14 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         return _pick(rng, [
             f"{pfx} — CHANCE! {player} finds space in a dangerous area for {tref}, and {oref} scramble to recover.{s_hint}",
             f"{pfx} — CHANCE! A sharp sequence opens up {oref}, and {player} suddenly has a promising sight of goal.{s_hint}",
-            f"{pfx} — CHANCE! {tref.capitalize()} carve through with incisive movement — {player} attacks the gap and the crowd senses danger.",
+            f"{pfx} — CHANCE! {tref.capitalize()} carve through with incisive movement — {player} attacks the gap and the crowd senses danger.{t_hint}",
             f"{pfx} — Big opening! {player} receives between the lines and {oref} are backpedaling toward their own box.{s_hint}",
             f"{pfx} — CHANCE! Quick interplay releases {player} in a threatening pocket. The defensive line is stretched and vulnerable.",
             f"{pfx} — A golden opening for {team}! {player} bursts into space after clever movement, putting {oref} under immediate pressure.",
-            f"{pfx} — CHANCE! {player} times the run perfectly, collecting possession in a high-value area with defenders scrambling.",
+            f"{pfx} — CHANCE! {player} times the run perfectly, collecting possession in a high-value area with defenders scrambling.{s_hint}",
             f"{pfx} — {tref.capitalize()} unlock the defense — {player} has a real opportunity as the back line loses its shape.{s_hint}",
+            f"{pfx} — CHANCE! A clever third-man run releases {player}, and {oref} are suddenly exposed in transition at {ss}.",
+            f"{pfx} — Dangerous moment! {player} peels away from his marker and attacks the channel with intent, forcing {oref} into emergency defending.",
         ])
 
     if et == E.SHOT:
@@ -333,9 +335,10 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
                 f"{pfx} — {player} strikes cleanly for {tref}, forcing the goalkeeper into a sharp reaction.",
                 f"{pfx} — Well-hit effort by {player}! On target, with real intent behind it — {oref} are briefly opened up.",
                 f"{pfx} — {player} lets fly and tests the keeper. Good technique, firm contact, and a moment of concern for {oref}.",
-                f"{pfx} — Shot on target from {player}. The goalkeeper has to be alert to deal with it.",
+                f"{pfx} — Shot on target from {player}. The goalkeeper has to be alert to deal with it at {ss}.",
                 f"{pfx} — {player} drives one goalward with purpose, making the keeper work for {oref}.",
                 f"{pfx} — Crisp strike by {player} — on frame and asking questions of the goalkeeper at {ss}.",
+                f"{pfx} — {player} connects well from the edge of the area, sending a firm shot on target that the keeper handles with care.",
             ])
         if outcome == "blocked":
             return _pick(rng, [
@@ -344,6 +347,7 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
                 f"{pfx} — {player} shoots through bodies, but {oref} get a crucial block in to snuff out the danger.",
                 f"{pfx} — A deflection off a defender takes the sting out of {player}'s attempt. Important intervention.",
                 f"{pfx} — {player} pulls the trigger, only for a sliding block to deny the shot path.",
+                f"{pfx} — {oref.capitalize()} throw bodies in the way as {player}'s strike is blocked at close range.",
             ])
         return _pick(rng, [
             f"{pfx} — {player} finds a shooting angle {flav}, but the effort drifts off target.",
@@ -352,6 +356,7 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
             f"{pfx} — {player} goes for goal from a decent position but can't keep it down. A let-off for {oref}.",
             f"{pfx} — {player} tries his luck, sending the attempt wide of the post as the chance goes begging.",
             f"{pfx} — The shot from {player} rises over the bar — promising buildup, but the finish doesn't match.",
+            f"{pfx} — {player} snatches at the effort under pressure, dragging it wide as {oref} breathe again.",
         ])
 
     if et == E.SAVE:
@@ -363,6 +368,8 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
             f"{pfx} — {player} comes up huge for {tref}, reacting brilliantly to keep {shooter}'s on-target effort out.",
             f"{pfx} — Brilliant goalkeeping. {player} stretches to tip {shooter}'s attempt away, preserving the {ss} scoreline.",
             f"{pfx} — {player} reads it all the way, smothering {shooter}'s shot with confident handling.",
+            f"{pfx} — Superb reflexes from {player}! He gets a strong hand to {shooter}'s effort and keeps the deficit from growing.",
+            f"{pfx} — {player} stands tall and makes himself big, denying {shooter} with a vital save at a key moment.",
         ])
 
     if et == E.BLOCK:
@@ -386,10 +393,11 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         fouled = payload.get("fouled_name", "an opponent")
         reason = payload.get("reason", "a mistimed challenge")
         return _pick(rng, [
-            f"{pfx} — Foul by {player} on {fouled} ({reason}). {oref.capitalize()} get the free kick.",
-            f"{pfx} — {player} mistimes the challenge on {fouled} and the referee whistles for {reason}.",
-            f"{pfx} — Free kick to {oref} after {player} catches {fouled} — {reason}.",
-            f"{pfx} — The referee stops play: {player} is penalized for {reason} on {fouled}.",
+            f"{pfx} — Foul by {player} on {fouled} ({reason}). {oref.capitalize()} get the free kick and a chance to reset.",
+            f"{pfx} — {player} mistimes the challenge on {fouled} and the referee whistles for {reason}. {oref.capitalize()} can build from the set piece.",
+            f"{pfx} — Free kick to {oref} after {player} catches {fouled} — {reason}. The tempo breaks as players regroup.",
+            f"{pfx} — The referee stops play: {player} is penalized for {reason} on {fouled}. {oref.capitalize()} look to use the dead-ball opportunity.",
+            f"{pfx} — {player} steps across {fouled} and commits the foul ({reason}), giving {oref} a useful free kick {flav}.",
         ])
 
     if et == E.FREE_KICK:
@@ -412,11 +420,14 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         assist = payload.get("assist_name")
         a = f", assisted by {assist}" if assist else ""
         return _pick(rng, [
-            f"{pfx} — GOAL! {player} finishes with conviction for {team}{a}. {score}.",
-            f"{pfx} — GOAL for {tref}! {player} delivers the decisive touch{a}, and the match shifts to {ss}.",
-            f"{pfx} — It's in! {player} scores for {team}{a} — a clinical finish that changes the picture at {ss}.",
-            f"{pfx} — GOAL! {player} finds the net for {team}{a}. Composed finish, and the scoreline moves to {score}.",
-            f"{pfx} — What a moment! {player} converts for {tref}{a}, sparking celebrations as the board shows {ss}.",
+            f"{pfx} — GOAL! {player} finishes with conviction for {team}{a}. {score}.{s_hint}",
+            f"{pfx} — GOAL for {tref}! {player} delivers the decisive touch{a}, and the match shifts to {ss}. The stadium erupts as the momentum swings.",
+            f"{pfx} — It's in! {player} scores for {team}{a} — a clinical finish that changes the picture at {ss}.{s_hint}",
+            f"{pfx} — GOAL! {player} finds the net for {team}{a}. Composed finish under pressure, and the scoreline moves to {score}.",
+            f"{pfx} — What a moment! {player} converts for {tref}{a}, sparking celebrations as the board shows {ss}. A decisive contribution at a crucial stage.",
+            f"{pfx} — GOAL! {player} times it perfectly for {team}{a}, beating the last line with a sharp finish. {score}.{s_hint}",
+            f"{pfx} — The net ripples! {player} produces the breakthrough for {tref}{a}, and at {ss} the tactical picture changes immediately.",
+            f"{pfx} — GOAL! A ruthless moment from {player}{a} — {team} capitalize and the score is now {ss}. The bench is on its feet.",
         ])
 
     if et == E.PENALTY_SCORED:
@@ -459,10 +470,11 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
     if et == E.YELLOW_CARD:
         reason = payload.get("reason", "a foul")
         return _pick(rng, [
-            f"{pfx} — Yellow card for {player} ({team}) for {reason}. He'll need to be careful now.",
-            f"{pfx} — Booking. {player} goes into the book after {reason} — a warning {flav}.",
-            f"{pfx} — The referee shows yellow to {player} for {reason}. {tref.capitalize()} must manage that risk.",
-            f"{pfx} — Caution for {player} ({team}). A mistimed moment leads to a booking for {reason}.",
+            f"{pfx} — Yellow card for {player} ({team}) for {reason}. He'll need to be careful now, especially in duels {flav}.",
+            f"{pfx} — Booking. {player} goes into the book after {reason} — a warning {flav}. That caution could influence his next challenge.",
+            f"{pfx} — The referee shows yellow to {player} for {reason}. {tref.capitalize()} must manage that risk for the rest of the match.",
+            f"{pfx} — Caution for {player} ({team}). A mistimed moment leads to a booking for {reason}, and discipline now becomes a factor at {ss}.",
+            f"{pfx} — Yellow card shown to {player} for {reason}. {team} will have to balance aggression with caution from here.",
         ])
 
     if et == E.SECOND_YELLOW:
@@ -506,10 +518,11 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         reason = payload.get("reason")
         reason_txt = f" to provide {reason}" if reason else ""
         return _pick(rng, [
-            f"{pfx} — Substitution for {team}: {on_name} replaces {off_name}{reason_txt}. Fresh legs and new instructions.",
-            f"{pfx} — Change for {tref}: {on_name} comes on for {off_name}{reason_txt}, {flav}.",
-            f"{pfx} — {team} make a switch — {off_name} off, {on_name} on{reason_txt}. A tactical tweak in personnel.",
-            f"{pfx} — {tref.capitalize()} turn to the bench: {on_name} enters for {off_name}{reason_txt} at {ss}.",
+            f"{pfx} — Substitution for {team}: {on_name} replaces {off_name}{reason_txt}. Fresh legs and new instructions from the touchline.",
+            f"{pfx} — Change for {tref}: {on_name} comes on for {off_name}{reason_txt}, {flav}. A clear signal of intent at {ss}.",
+            f"{pfx} — {team} make a switch — {off_name} off, {on_name} on{reason_txt}. A tactical tweak in personnel and energy.",
+            f"{pfx} — {tref.capitalize()} turn to the bench: {on_name} enters for {off_name}{reason_txt} at {ss}. The manager looks for a different dynamic.",
+            f"{pfx} — Substitution ({team}): {on_name} on for {off_name}{reason_txt}. Fresh legs introduced to influence the next phase.",
         ])
 
     if et == E.TACTICAL_CHANGE:
@@ -540,14 +553,16 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
     return _pick(rng, [
         f"{pfx} — {tref.capitalize()} and {oref} contest every inch {flav}, with transitions shaping this phase at {ss}.{t_hint}",
         f"{pfx} — The battle for control remains balanced. {tref.capitalize()} probe while {oref} stay organized.{s_hint}",
-        f"{pfx} — Play flows on at {ss}. Spacing and decision-making define the rhythm between the two sides.",
+        f"{pfx} — Play flows on at {ss}. Spacing and decision-making define the rhythm between the two sides.{t_hint}",
         f"{pfx} — {tref.capitalize()} keep probing, but {oref} hold their shape well {flav}, waiting for a break.{s_hint}",
         f"{pfx} — A cagey spell at {ss}: possession against a compact block, both sides hunting the next mistake.{t_hint}",
-        f"{pfx} — {team} look to build momentum {flav}, but {opp} are disciplined in their defensive structure.",
+        f"{pfx} — {team} look to build momentum {flav}, but {opp} are disciplined in their defensive structure.{s_hint}",
         f"{pfx} — The tempo dips briefly as both sides reset. {tref.capitalize()} look for a cleaner route forward at {ss}.{s_hint}",
-        f"{pfx} — Midfield becomes the battleground {flav}, with neither side giving an inch in the duel for control.",
+        f"{pfx} — Midfield becomes the battleground {flav}, with neither side giving an inch in the duel for control.{t_hint}",
         f"{pfx} — {tref.capitalize()} try to raise the tempo, but {oref} match their intensity and keep the lanes closed.{s_hint}",
         f"{pfx} — A tactical chess match at {ss}: {tref} circulate, {oref} shuffle, and the next pass could unlock everything.{t_hint}",
         f"{pfx} — {flav.capitalize()}, {tref} push bodies forward while {oref} stay compact and look ready to spring.{s_hint}",
         f"{pfx} — The crowd senses a shift as {tref} increase the pressure, forcing {oref} into a deeper defensive posture.",
+        f"{pfx} — {tref.capitalize()} recycle possession and switch flanks, trying to drag {oref} out of their compact block at {ss}.{t_hint}",
+        f"{pfx} — A spell of patient buildup from {tref}: short passes, support runs, and a search for the decisive gap between {oref}'s lines.{s_hint}",
     ])

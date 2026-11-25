@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 import zlib
@@ -285,71 +286,129 @@ def auto_build_lineup(team_api_id: int, team_name: str, squad: list[dict[str, An
     if formation not in SUPPORTED_FORMATIONS:
         formation = "4-3-3"
     slots = get_formation_slots(formation)
-    pool = []
-    for p in squad:
+
+    pool: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for p in squad or []:
         d = _player_from_any(p)
-        if not d.get("api_id"):
+        pid = int(d.get("api_id") or 0)
+        if not pid or pid in seen_ids:
             continue
+        if bool(p.get("injured")) or str(p.get("status") or "active").lower() in {"injured", "unavailable", "suspended"}:
+            # Skip unavailable players for auto-build when alternatives exist.
+            pass
+        seen_ids.add(pid)
         pool.append(d)
+
+    # Prefer available players; fall back to all if needed.
+    available_pool = []
+    for d in pool:
+        orig = next((x for x in (squad or []) if int((x.get("api_id") or x.get("id") or 0)) == int(d["api_id"])), None)
+        if orig and (bool(orig.get("injured")) or str(orig.get("status") or "active").lower() in {"injured", "unavailable", "suspended"}):
+            continue
+        available_pool.append(d)
+    if len(available_pool) >= 11:
+        pool = available_pool
+
     if len(pool) < 11:
         raise LineupValidationError(f"Not enough players in squad to build lineup ({len(pool)})")
-    # score players by a rough overall if attributes present
-    def score(pl: dict[str, Any], want: str) -> float:
+
+    try:
+        from engine.models import PlayerAttributes
+    except Exception:
+        PlayerAttributes = None  # type: ignore
+
+    def _overall_for(pl: dict[str, Any], want_group: str) -> float:
+        orig = next((x for x in (squad or []) if int((x.get("api_id") or x.get("id") or 0)) == int(pl["api_id"])), None) or {}
+        attrs_raw = orig.get("attributes") or {}
         pos = norm_pos(pl.get("position"))
-        base = 50.0
-        if isinstance(p, dict):
-            pass
-        # try original for attributes
-        orig = next((x for x in squad if int((x.get("api_id") or x.get("id") or 0)) == pl["api_id"]), None)
-        attrs = (orig or {}).get("attributes") or {}
-        if attrs:
-            vals = list(attrs.values())
-            nums = [float(v) for v in vals if isinstance(v, (int, float))]
+        base = None
+        if PlayerAttributes is not None and attrs_raw:
+            try:
+                attrs = PlayerAttributes.from_dict(attrs_raw)
+                base = float(attrs.overall(want_group if want_group in {"GK", "DEF", "MID", "FWD"} else pos))
+            except Exception:
+                base = None
+        if base is None:
+            for k in ("overall", "rating", "ovr"):
+                v = orig.get(k, pl.get(k))
+                if isinstance(v, (int, float)):
+                    base = float(v)
+                    break
+        if base is None and attrs_raw:
+            nums = [float(v) for v in attrs_raw.values() if isinstance(v, (int, float))]
             if nums:
                 base = sum(nums) / len(nums)
-        bonus = 0.0
-        if pos == want: bonus += 6
-        elif want == "DEF" and pos == "MID": bonus += 2
-        elif want == "MID" and pos in {"DEF", "FWD"}: bonus += 2
-        elif want == "FWD" and pos == "MID": bonus += 2
-        elif want == "GK" and pos == "GK": bonus += 20
-        elif want == "GK": bonus -= 30
-        return base + bonus
+        if base is None:
+            base = 60.0
 
-    used = set()
+        fit = 0.0
+        if want_group == "GK":
+            fit += 25.0 if pos == "GK" else -40.0
+        elif pos == want_group:
+            fit += 8.0
+        elif want_group == "DEF" and pos == "MID":
+            fit += 2.5
+        elif want_group == "MID" and pos in {"DEF", "FWD"}:
+            fit += 2.0
+        elif want_group == "FWD" and pos == "MID":
+            fit += 2.5
+        elif want_group in {"DEF", "MID", "FWD"} and pos == "GK":
+            fit -= 50.0
+
+        # Small bonus for exact natural-position matches in common slots
+        nat = str(orig.get("detailed_position") or "").upper()
+        if want_group == "DEF" and nat in {"CB", "LB", "RB", "LWB", "RWB"}:
+            fit += 1.5
+        if want_group == "MID" and nat in {"CDM", "CM", "CAM", "LM", "RM", "DM", "AM"}:
+            fit += 1.5
+        if want_group == "FWD" and nat in {"ST", "CF", "LW", "RW"}:
+            fit += 1.5
+        return base + fit
+
+    used: set[int] = set()
     starters: list[dict[str, Any]] = []
-    for sl in slots:
-        cands = [p for p in pool if p["api_id"] not in used]
-        if sl.group == "GK":
-            cands_sorted = sorted(cands, key=lambda p: score(p, "GK"), reverse=True)
-            # prefer actual GK
-            gk = next((p for p in cands_sorted if norm_pos(p["position"]) == "GK"), cands_sorted[0])
-            starters.append(gk); used.add(gk["api_id"])
-        else:
-            cands_sorted = sorted(cands, key=lambda p: score(p, sl.group), reverse=True)
-            pick = cands_sorted[0]
-            starters.append(pick); used.add(pick["api_id"])
-    # bench: best remaining, ensure at least 1 GK if possible
-    remaining = [p for p in pool if p["api_id"] not in used]
-    remaining.sort(key=lambda p: score(p, norm_pos(p["position"])), reverse=True)
+
+    # Fill GK first.
+    gk_slot = next((sl for sl in slots if sl.group == "GK"), None)
+    non_gk_slots = [sl for sl in slots if sl.group != "GK"]
+    if gk_slot:
+        gk_cands = [p for p in pool if int(p["api_id"]) not in used]
+        gk_cands.sort(key=lambda p: (_overall_for(p, "GK"), 1.0 if norm_pos(p.get("position")) == "GK" else 0.0), reverse=True)
+        gk_pick = next((p for p in gk_cands if norm_pos(p.get("position")) == "GK"), gk_cands[0])
+        starters.append(gk_pick)
+        used.add(int(gk_pick["api_id"]))
+
+    # Fill remaining slots by best fit.
+    for sl in non_gk_slots:
+        cands = [p for p in pool if int(p["api_id"]) not in used]
+        cands.sort(key=lambda p: _overall_for(p, sl.group), reverse=True)
+        pick = cands[0]
+        starters.append(pick)
+        used.add(int(pick["api_id"]))
+
+    # Bench: best remaining, prefer at least one GK.
+    remaining = [p for p in pool if int(p["api_id"]) not in used]
+    remaining.sort(key=lambda p: _overall_for(p, norm_pos(p.get("position"))), reverse=True)
     bench: list[dict[str, Any]] = []
-    gk_on_bench = any(norm_pos(p["position"]) == "GK" for p in remaining)
     bench_gk_added = False
     for p in remaining:
         if len(bench) >= 9:
             break
-        if norm_pos(p["position"]) == "GK":
+        if norm_pos(p.get("position")) == "GK":
             if not bench_gk_added:
-                bench.append(p); bench_gk_added = True
+                bench.append(p)
+                bench_gk_added = True
             continue
         bench.append(p)
-    if not bench_gk_added and gk_on_bench and len(bench) == 9:
-        # swap last outfield for GK
-        gk = next(p for p in remaining if norm_pos(p["position"]) == "GK")
-        bench[-1] = gk
-    elif not bench_gk_added and gk_on_bench and len(bench) < 9:
-        gk = next(p for p in remaining if norm_pos(p["position"]) == "GK")
-        bench.append(gk)
+    if not bench_gk_added:
+        gk = next((p for p in remaining if norm_pos(p.get("position")) == "GK"), None)
+        if gk:
+            if len(bench) < 9:
+                bench.append(gk)
+            elif bench:
+                bench[-1] = gk
+
     return validate_lineup(team_api_id=team_api_id, team_name=team_name, formation=formation, starters=starters, bench=bench, squad=squad)
 
 
@@ -588,6 +647,38 @@ def resolve_player_ref(ref: str, squad: list[dict[str, Any]]) -> dict[str, Any] 
                 best = p
         if best and best_sc >= 0.4:
             return best
+
+    # Final fallback: difflib similarity on normalized names (for typos / partial names)
+    try:
+        names = [_norm_name(p.get("name")) for p in squad]
+        # compare against full name and also against last/first tokens
+        candidates = []
+        for i, pn in enumerate(names):
+            if not pn:
+                continue
+            ratios = [difflib.SequenceMatcher(None, rl, pn).ratio()]
+            for tok in pn.split():
+                if len(tok) >= 3:
+                    ratios.append(difflib.SequenceMatcher(None, rl, tok).ratio())
+            if rl_col:
+                pn_col = re.sub(r"[^a-z0-9]+", "", pn)
+                if pn_col:
+                    ratios.append(difflib.SequenceMatcher(None, rl_col, pn_col).ratio())
+            sc = max(ratios) if ratios else 0.0
+            if sc > 0:
+                candidates.append((sc, i))
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        if candidates:
+            top_sc, top_i = candidates[0]
+            second_sc = candidates[1][0] if len(candidates) > 1 else 0.0
+            # Accept if clearly best or very strong
+            if top_sc >= 0.72 or (top_sc >= 0.60 and top_sc - second_sc >= 0.08):
+                return squad[top_i]
+            # If only one candidate with reasonable score in small squad
+            if top_sc >= 0.56 and len(candidates) == 1:
+                return squad[top_i]
+    except Exception:
+        pass
 
     return None
 

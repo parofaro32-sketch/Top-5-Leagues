@@ -55,6 +55,15 @@ def fmt_money(n: int | float | None) -> str:
     return f"{sign}€{v}"
 
 
+def negotiation_pressure_bar(pressure: int, max_pressure: int = 10) -> str:
+    p = max(0, min(int(pressure), int(max_pressure)))
+    pct = int(round((p / max(1, max_pressure)) * 100))
+    filled = int(round((p / max(1, max_pressure)) * 10))
+    filled = max(0, min(10, filled))
+    bar = "█" * filled + "░" * (10 - filled)
+    return f"[Negotiation Pressure: {bar} {pct}%]"
+
+
 ROLE_TIERS = [
     "Crucial", "Important", "Rotation", "Sporadic", "Prospect"
 ]
@@ -173,41 +182,152 @@ class TransferMarketService:
             return best
         return None
 
-    def value_player(self, player: dict[str, Any]) -> PlayerValuation:
+    @staticmethod
+    def _is_free_agent_player(player: dict[str, Any]) -> bool:
+        tid = int(player.get("team_api_id") or 0)
+        if tid == 9000001:
+            return True
+        tname = str(player.get("team_name") or "").strip().lower()
+        return tname in {"free agents", "free agent"}
+
+    @staticmethod
+    def fair_wage_weekly(player: dict[str, Any]) -> int:
         ovr = float(player.get("overall") or player.get("rating") or 65)
         pot = float(player.get("potential") or ovr)
         age = int(player.get("age") or 25)
         pos = str(player.get("position") or "MID").upper()
-        # market value model (simple, fair)
-        base = max(1_000_000, (ovr - 55) ** 2 * 180_000)
-        pot_bonus = max(0.0, (pot - ovr)) * 900_000
-        age_mult = 1.0
-        if age <= 21:
-            age_mult = 1.25
-        elif age <= 24:
-            age_mult = 1.15
-        elif age <= 28:
+        is_fa = TransferMarketService._is_free_agent_player(player)
+        wage = 12000 + (max(0.0, ovr - 58) ** 2) * 420
+        wage += max(0.0, pot - ovr) * 800
+        if age <= 20:
+            age_mult = 0.82
+        elif age <= 23:
+            age_mult = 0.92
+        elif age <= 25:
+            age_mult = 0.97
+        elif age <= 29:
+            age_mult = 1.0
+        elif age <= 32:
+            age_mult = 0.95
+        elif age <= 34:
+            age_mult = 0.88
+        else:
+            age_mult = 0.78
+        wage *= age_mult
+        if pos == "GK":
+            wage *= 0.95
+        if is_fa:
+            wage *= 0.45
+        wage = max(5000, min(600000, wage))
+        if wage >= 100000:
+            step = 5000
+        elif wage >= 50000:
+            step = 2500
+        elif wage >= 20000:
+            step = 1000
+        else:
+            step = 500
+        return int(max(3000, round(wage / step) * step))
+
+    @staticmethod
+    def fair_market_value(player: dict[str, Any]) -> int:
+        ovr = float(player.get("overall") or player.get("rating") or 65)
+        pot = float(player.get("potential") or ovr)
+        age = int(player.get("age") or 25)
+        pos = str(player.get("position") or "MID").upper()
+        is_fa = TransferMarketService._is_free_agent_player(player)
+        # Honor explicit stored market_value if present (trusted DB/bundled value)
+        mv = player.get("market_value")
+        if mv is not None and str(mv).strip() != "":
+            try:
+                mv_i = int(mv)
+                if mv_i > 0:
+                    return mv_i
+            except Exception:
+                pass
+        value = 500000 + (max(0.0, ovr - 55) ** 2.15) * 85000
+        upside = max(0.0, pot - ovr)
+        value += (upside * upside * 180000) + (upside * 900000)
+        if age <= 20:
+            age_mult = 1.18 + max(0, 21 - age) * 0.03
+        elif age <= 23:
+            age_mult = 1.12
+        elif age <= 26:
+            age_mult = 1.05
+        elif age <= 29:
             age_mult = 1.0
         elif age <= 31:
-            age_mult = 0.85
+            age_mult = 0.86
+        elif age <= 33:
+            age_mult = 0.72
         else:
-            age_mult = 0.7
-        pos_mult = 1.05 if pos in {"FWD", "ST", "LW", "RW"} else (1.03 if pos == "GK" else 1.0)
-        market = int((base + pot_bonus) * age_mult * pos_mult)
-        market = max(500_000, min(market, 180_000_000))
-        asking = int(market * 1.18)
+            age_mult = 0.58
+        value *= age_mult
+        if pos in {"FWD", "ST", "LW", "RW", "CF"}:
+            value *= 1.03
+        elif pos == "GK":
+            value *= 0.97
+        elif pos in {"DEF", "CB", "LB", "RB"}:
+            value *= 0.99
+        if is_fa:
+            value *= 0.45
+        value = max(200000, min(200000000, value))
+        if value >= 50000000:
+            step = 500000
+        elif value >= 10000000:
+            step = 250000
+        elif value >= 1000000:
+            step = 100000
+        else:
+            step = 50000
+        return int(max(150000, round(value / step) * step))
+
+    def value_player(self, player: dict[str, Any]) -> PlayerValuation:
+        ovr = float(player.get("overall") or player.get("rating") or 65)
+        pot = float(player.get("potential") or ovr)
+        age = int(player.get("age") or 25)
+        is_fa = self._is_free_agent_player(player)
+        # Use stored market value if present; otherwise compute fair value
+        stored_mv = player.get("market_value")
+        if stored_mv is not None and str(stored_mv).strip() != "":
+            try:
+                market = int(stored_mv)
+                if market <= 0:
+                    market = self.fair_market_value(player)
+            except Exception:
+                market = self.fair_market_value(player)
+        else:
+            market = self.fair_market_value(player)
+        if is_fa:
+            # ensure free agents remain low even if stale stored value exists
+            market = min(market, self.fair_market_value({**player, "market_value": None, "team_api_id": 9000001}))
+
+        asking = int(market * 1.15)
         fair = int(market * 1.02)
-        min_accept = int(market * 0.9)
-        # wage demand weekly
-        wage = int(max(15_000, (ovr - 60) * 8_000 + max(0, pot - ovr) * 3_000))
-        if age < 23 and pot >= ovr + 3:
-            wage = int(wage * 0.9)
-        if ovr >= 85:
-            wage = int(wage * 1.3)
+        min_accept = int(market * 0.90)
+
+        # wage demand weekly - use stored fair wage as baseline
+        stored_wage = player.get("wage")
+        if stored_wage is not None and str(stored_wage).strip() != "":
+            try:
+                wage = int(stored_wage)
+                if wage <= 0:
+                    wage = self.fair_wage_weekly(player)
+            except Exception:
+                wage = self.fair_wage_weekly(player)
+        else:
+            wage = self.fair_wage_weekly(player)
+        if is_fa:
+            wage = min(wage, self.fair_wage_weekly({**player, "team_api_id": 9000001}))
+
         signing_bonus = int(max(25_000, wage * 8))
         contract_years = 4 if age < 29 else 3
         if age >= 32:
             contract_years = 2
+        if is_fa:
+            # Free agents often accept shorter/flexible deals
+            contract_years = 2 if age >= 30 else 3
+
         # desired role
         if ovr >= 86:
             desired_role = "Crucial"
@@ -219,6 +339,7 @@ class TransferMarketService:
             desired_role = "Prospect"
         else:
             desired_role = "Sporadic"
+
         return PlayerValuation(market, min_accept, fair, asking, wage, signing_bonus, contract_years, desired_role)
 
     async def get_season_team(self, season_id: str, team_api_id: int) -> dict[str, Any] | None:
@@ -304,7 +425,7 @@ class TransferMarketService:
             "contract_years": int(val.contract_years),
         }
 
-    def evaluate_contract_offer(self, demand: dict[str, Any], offered: dict[str, Any], player: dict[str, Any], round_no: int, pressure: int) -> dict[str, Any]:
+    def evaluate_contract_offer(self, demand: dict[str, Any], offered: dict[str, Any], player: dict[str, Any], round_no: int, pressure: int, *, is_free_agent: bool = False) -> dict[str, Any]:
         wage_d = int(demand.get("wage") or 0)
         role_d = str(demand.get("role") or "Rotation")
         bonus_d = int(demand.get("signing_bonus") or 0)
@@ -315,41 +436,77 @@ class TransferMarketService:
         bonus_o = int(offered.get("signing_bonus") or 0)
         years_o = int(offered.get("contract_years") or years_d)
 
-        role_rank = {r: i for i, r in enumerate(ROLE_TIERS)}  # Crucial best
+        role_rank = {r: i for i, r in enumerate(ROLE_TIERS)}  # Crucial best (0)
         role_gap = role_rank.get(role_o, 2) - role_rank.get(role_d, 2)  # positive = worse role for player
         wage_ratio = wage_o / max(1, wage_d)
         bonus_ratio = bonus_o / max(1, bonus_d)
         years_ok = abs(years_o - years_d) <= 1
 
-        score = 0.0
-        score += (wage_ratio - 1.0) * 1.4
-        score += (bonus_ratio - 1.0) * 0.4
-        score += (-role_gap) * 0.25
-        score += (0.05 if years_ok else -0.08)
-        score -= pressure * 0.03
-        score -= max(0, round_no - 2) * 0.03
-
         ovr = float(player.get("overall") or 65)
         pot = float(player.get("potential") or ovr)
+        name = str(player.get("name") or "The player")
+        max_pressure = 10
+        bar = negotiation_pressure_bar(pressure, max_pressure)
 
-        if score >= 0.0 and wage_ratio >= 0.95 and role_gap <= 0:
+        # Hard walk-away / negotiation ended at high pressure
+        if pressure >= max_pressure:
+            end_msg = (
+                f"{bar}\n"
+                f"**Negotiation ended.** {name}'s camp has walked away from the table. "
+                + ("As a free agent, he will explore other options and is no longer considering this offer." if is_free_agent else "The player's representatives have ended discussions due to the lack of progress and respect for the player's value.")
+                + f"\n\nPlayer profile considered: **{ovr:.0f} OVR / {pot:.0f} POT**."
+            )
+            return {"accepted": False, "walked_away": True, "message": end_msg, "counter": None, "pressure_bar": bar}
+
+        score = 0.0
+        score += (wage_ratio - 1.0) * 1.6
+        score += (bonus_ratio - 1.0) * 0.35
+        score += (-role_gap) * 0.30
+        score += (0.05 if years_ok else -0.10)
+        score -= pressure * 0.035
+        score -= max(0, round_no - 1) * 0.025
+        # High-profile players are stricter
+        if ovr >= 85:
+            score -= 0.05
+        if ovr >= 88:
+            score -= 0.04
+
+        acceptable = score >= 0.0 and wage_ratio >= 0.97 and role_gap <= 0 and bonus_ratio >= 0.80
+        # Very close deals can be accepted
+        if not acceptable and score >= -0.02 and wage_ratio >= 0.99 and role_gap <= 0 and bonus_ratio >= 0.90 and pressure <= 5:
+            acceptable = True
+
+        if acceptable:
             return {
                 "accepted": True,
+                "walked_away": False,
                 "message": (
-                    f"Agreement reached. {player.get('name')} ({ovr:.0f} OVR, {pot:.0f} POT) accepts the terms: "
-                    f"{fmt_money(wage_o)}/wk, {role_o} role, {fmt_money(bonus_o)} signing bonus, {years_o}-year contract."
+                    f"{bar}\n"
+                    f"**Agreement reached.** {name} ({ovr:.0f} OVR, {pot:.0f} POT) accepts the contract: "
+                    f"**{fmt_money(wage_o)}/wk**, {role_o} role, **{fmt_money(bonus_o)}** signing bonus, **{years_o} years**.\n"
+                    f"The terms reflect the player's quality and current standing. Finalizing paperwork."
                 ),
                 "counter": None,
+                "pressure_bar": bar,
             }
 
-        # counter
-        # make a concession toward player but not too much
-        counter_wage = int(max(wage_o, wage_d * (0.96 - min(0.08, round_no * 0.01))))
-        if wage_ratio >= 0.9:
-            counter_wage = int(max(wage_o, wage_d * 0.97))
-        counter_bonus = int(max(bonus_o, bonus_d * 0.95))
+        # Counter - firm, realistic, small concessions
+        # Don't chase bad offers; hold close to demand
+        counter_wage = int(max(wage_o, wage_d * (0.985 - min(0.03, round_no * 0.005))))
+        if wage_ratio >= 0.93:
+            counter_wage = int(max(wage_o, wage_d * 0.995))
+        if wage_ratio >= 0.97:
+            counter_wage = int(max(wage_o, wage_d))
+        counter_bonus = int(max(bonus_o, bonus_d * 0.97))
+        if bonus_ratio >= 0.95:
+            counter_bonus = int(max(bonus_o, bonus_d))
         counter_role = role_d if role_gap > 0 else role_o
+        # Keep preferred years; only flex one year at high rounds
         counter_years = years_d
+        if years_o == years_d:
+            counter_years = years_d
+        elif round_no >= 3 and abs(years_o - years_d) == 1:
+            counter_years = years_o
         counter = {
             "wage": counter_wage,
             "role": counter_role,
@@ -358,26 +515,41 @@ class TransferMarketService:
         }
 
         reasons = []
-        if wage_ratio < 0.95:
-            reasons.append(f"wage offer {fmt_money(wage_o)}/wk is below the expected {fmt_money(wage_d)}/wk range")
+        if wage_ratio < 0.97:
+            reasons.append(f"weekly wage of {fmt_money(wage_o)}/wk is below the market for a {ovr:.0f} OVR / {pot:.0f} POT player (demand {fmt_money(wage_d)}/wk)")
         if role_gap > 0:
-            reasons.append(f"requested role {role_o} is below the player's expectation of {role_d}")
+            reasons.append(f"the proposed role ({role_o}) does not match the player's standing; {name} expects {role_d}")
         if bonus_ratio < 0.85:
-            reasons.append(f"signing bonus {fmt_money(bonus_o)} is below expectation ({fmt_money(bonus_d)})")
+            reasons.append(f"signing bonus {fmt_money(bonus_o)} is well short of the expected {fmt_money(bonus_d)}")
         if not years_ok:
-            reasons.append(f"contract length {years_o} years is not ideal (preferred {years_d})")
+            reasons.append(f"contract length of {years_o} year(s) is not acceptable; preference is {years_d} years")
         if not reasons:
-            reasons.append("overall package is slightly below the player's expectations")
+            reasons.append("the overall package still falls short of the player's value")
 
-        pressure_note = " Negotiation pressure is rising; the player wants clarity soon." if pressure >= 2 else ""
+        # Pressure / walk-away warning
+        warning = ""
+        if pressure >= 8:
+            warning = " **This is close to breaking point - one more poor offer and talks will end.**"
+        elif pressure >= 6:
+            warning = " Pressure is high; the camp is losing patience."
+        elif pressure >= 4:
+            warning = " Negotiation pressure is building - be realistic."
+
+        stance = "firm" if ovr >= 82 else "clear"
+        agent_line = (
+            f"{bar}\n"
+            f"**{name}'s camp ({stance} response):** We have reviewed your offer carefully. "
+            f"{' '.join(reasons).strip().capitalize() if reasons else 'The package is not there yet.'}{warning}\n\n"
+            f"**Counter-demand:** **{fmt_money(counter_wage)}/wk**, {counter_role} role, **{fmt_money(counter_bonus)}** signing bonus, **{counter_years} years**.\n"
+            f"Player profile: **{ovr:.0f} OVR / {pot:.0f} POT**. This negotiation is being handled professionally and strictly - respect the player's value."
+        )
+
         return {
             "accepted": False,
-            "message": (
-                f"Counter-offer from {player.get('name')}'s camp: {fmt_money(counter_wage)}/wk, {counter_role} role, "
-                f"{fmt_money(counter_bonus)} signing bonus, {counter_years} years. "
-                f"Reason: {'; '.join(reasons)}.{pressure_note}"
-            ),
+            "walked_away": False,
+            "message": agent_line,
             "counter": counter,
+            "pressure_bar": bar,
         }
 
     def parse_contract_reply(self, text: str) -> dict[str, Any]:
