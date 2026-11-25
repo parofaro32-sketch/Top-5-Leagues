@@ -344,9 +344,9 @@ class SeasonCog(commands.Cog):
                 return
 
             # resolve destination team
-            teams = fd.search_teams(to_team, league_key=league_key, limit=10)
+            teams = await fd.list_teams(query=to_team, league=league_key, limit=10)
             if not teams and league_key:
-                teams = fd.search_teams(to_team, league_key=None, limit=10)
+                teams = await fd.list_teams(query=to_team, league=None, limit=10)
             if not teams:
                 await interaction.followup.send(embed=error_embed("Team Not Found", f"No team found for `{to_team}`."), ephemeral=True)
                 return
