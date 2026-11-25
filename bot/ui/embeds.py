@@ -34,6 +34,10 @@ def info_embed(title: str, description: str) -> discord.Embed:
     return discord.Embed(title=title, description=description, color=color_primary())
 
 
+def success_embed(title: str, description: str) -> discord.Embed:
+    return discord.Embed(title=title, description=description, color=color_success())
+
+
 def error_embed(title: str, description: str) -> discord.Embed:
     return discord.Embed(title=title, description=description, color=color_error())
 

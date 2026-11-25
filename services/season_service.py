@@ -10,7 +10,7 @@ from typing import Any
 from db.database import Database, utc_now_iso
 from engine.match_engine import MatchEngine
 from engine.models import Team, default_tactics, new_match_id
-from engine.tactics_engine import generate_ai_tactics
+from engine.ai_manager import generate_ai_tactics
 from services.lineup_service import auto_build_lineup
 
 logger = logging.getLogger(__name__)
