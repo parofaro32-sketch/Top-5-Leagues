@@ -703,6 +703,18 @@ class SeasonService:
         )
         return [dict(r) for r in rows]
 
+    async def get_top_assisters(self, season_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        rows = await self.db.fetchall(
+            """SELECT sps.*, st.team_name as team_name
+               FROM season_player_stats sps
+               LEFT JOIN season_teams st ON st.season_id=sps.season_id AND st.team_api_id=sps.team_api_id
+               WHERE sps.season_id=? AND sps.assists>0
+               ORDER BY sps.assists DESC, sps.goals DESC, sps.avg_rating DESC, sps.minutes_played ASC
+               LIMIT ?""",
+            (season_id, int(limit)),
+        )
+        return [dict(r) for r in rows]
+
     async def rebuild_standings(self, season_id: str) -> list[dict[str, Any]]:
         season = await self.get_season(season_id)
         if not season:

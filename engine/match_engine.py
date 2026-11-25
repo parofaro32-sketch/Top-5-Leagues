@@ -29,7 +29,7 @@ class MatchEngine:
     def __init__(self, state: MatchState):
         self.state = state
         self.rng = random.Random(state.rng_seed or 1)
-        self._recent_lines: deque[str] = deque(maxlen=40)
+        self._recent_lines: deque[str] = deque(maxlen=120)
         self._recent_categories: deque[str] = deque(maxlen=16)
         self._momentum: dict[str, float] = {"home": 50.0, "away": 50.0}
         self._pressure_chain: int = 0
@@ -171,14 +171,26 @@ class MatchEngine:
         norm = self._norm_line(text)
         if not norm:
             return False
-        recent = [self._norm_line(x) for x in list(self._recent_lines)[-30:] if x]
+        recent = [self._norm_line(x) for x in list(self._recent_lines)[-80:] if x]
         if norm in recent:
             return True
-        # also catch near-duplicates (same opening + same event type text)
-        head = " ".join(norm.split()[:10])
-        for r in recent[-18:]:
-            if head and head == " ".join(r.split()[:10]) and len(head) > 20:
+        toks = norm.split()
+        head8 = " ".join(toks[:8])
+        head5 = " ".join(toks[:5])
+        for r in recent[-50:]:
+            rt = r.split()
+            if head8 and len(head8) > 18 and head8 == " ".join(rt[:8]):
                 return True
+            if head5 and len(head5) > 12 and head5 == " ".join(rt[:5]):
+                return True
+            # token overlap similarity - catch near-duplicates
+            if len(toks) >= 6 and len(rt) >= 6:
+                a = set(toks)
+                b = set(rt)
+                inter = len(a & b)
+                union = len(a | b) or 1
+                if inter / union >= 0.82:
+                    return True
         return False
 
     def _emit(self, et: str, side: Side | None = None, pid: int | None = None, payload: dict[str, Any] | None = None, commentary: str | None = None, public_payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -190,21 +202,47 @@ class MatchEngine:
         if commentary is None:
             try:
                 commentary = gen_commentary(self.state, ev, self.rng)
-                # retry a few times if too similar to recent commentary
-                for _ in range(5):
+                for _ in range(10):
                     if not self._is_recent_commentary(str(commentary or "")):
                         break
                     commentary = gen_commentary(self.state, ev, self.rng)
             except Exception:
-                logger.exception("ENGINE commentary generation failed et=%s match_id=%s", et, getattr(self.state, 'id', None))
+                logger.exception("ENGINE commentary generation failed et=%s match_id=%s", et, getattr(self.state, "id", None))
                 commentary = payload.get("detail") or payload.get("summary") or ""
         text = str(commentary or "").strip()
         if self._is_recent_commentary(text):
+            # try regeneration once more for explicit commentary too
+            try:
+                for _ in range(6):
+                    cand = gen_commentary(self.state, ev, self.rng)
+                    cand = str(cand or "").strip()
+                    if cand and not self._is_recent_commentary(cand):
+                        text = cand
+                        break
+            except Exception:
+                pass
+        if self._is_recent_commentary(text):
             suffix = self._context_suffix(et, side)
-            if suffix and not text.endswith(suffix.strip()):
-                text = text.rstrip() + suffix
-            if self._is_recent_commentary(text):
-                text = text.rstrip() + f" ({self.state.minute}'; {self.state.scoreline()})"
+            if suffix and suffix.strip().lower() not in text.lower():
+                cand = text.rstrip() + suffix
+                if not self._is_recent_commentary(cand):
+                    text = cand
+        if self._is_recent_commentary(text):
+            minute = f"{self.state.minute}+{self.state.extra_minute}" if self.state.extra_minute else str(self.state.minute)
+            score = self.state.scoreline()
+            for extra in [
+                f" At {minute}', the score is {score}.",
+                f" The {minute}' mark sees it {score}.",
+                f" With {score} on the board, this moment matters.",
+                f" Another key detail at {minute}' ({score}).",
+            ]:
+                cand = text.rstrip() + extra
+                if not self._is_recent_commentary(cand):
+                    text = cand
+                    break
+        if self._is_recent_commentary(text):
+            minute = f"{self.state.minute}+{self.state.extra_minute}" if self.state.extra_minute else str(self.state.minute)
+            text = text.rstrip() + f" [{minute}' | {self.state.scoreline()} | #{self.state.next_event_seq}]"
         if text:
             self._recent_lines.append(text)
         ev["commentary"] = text

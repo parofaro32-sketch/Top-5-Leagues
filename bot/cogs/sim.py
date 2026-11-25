@@ -42,12 +42,11 @@ def _format_lineup(state, side: str) -> str:
     starters = list(lu.starters)
     bench = list(lu.bench)
     pos_order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
-    group_labels = {"GK": "Goalkeeper", "DEF": "Defence", "MID": "Midfield", "FWD": "Attack"}
+    group_labels = {"GK": "🧤 Goalkeeper", "DEF": "🛡️ Defenders", "MID": "⚙️ Midfielders", "FWD": "⚡ Forwards"}
 
     def sort_key(e):
         grp = _slot_group(e.slot, e.position)
         slot = (e.slot or "").upper()
-        # stable-ish order within groups by common slot names
         slot_rank = {
             "GK": 0,
             "LB": 0, "LWB": 0, "LCB": 1, "CB": 2, "RCB": 3, "RB": 4, "RWB": 4,
@@ -56,7 +55,6 @@ def _format_lineup(state, side: str) -> str:
         }.get(slot, 9)
         return (pos_order.get(grp, 2), slot_rank, slot, e.name)
 
-    # Defensive dedupe by player id/name to avoid displaying repeated players
     seen_ids = set()
     seen_names = set()
     unique_starters = []
@@ -73,7 +71,12 @@ def _format_lineup(state, side: str) -> str:
             seen_names.add(nkey)
         unique_starters.append(e)
     starters_sorted = sorted(unique_starters, key=sort_key)
-    lines = [f"**{team.team.name} — Starting Lineup**", f"Formation: **{lu.formation}**", "", "**Starting XI (Position):**"]
+
+    lines = [
+        f"## {team.team.name}",
+        f"**Formation:** `{lu.formation}`  •  **Starting XI**",
+        "",
+    ]
 
     current_group = None
     for e in starters_sorted:
@@ -81,24 +84,34 @@ def _format_lineup(state, side: str) -> str:
         if grp != current_group:
             if current_group is not None:
                 lines.append("")
-            lines.append(f"__{group_labels.get(grp, grp)}__")
+            lines.append(f"**{group_labels.get(grp, grp)}**")
             current_group = grp
-        pos_label = e.slot or (e.position or "POS")
+        pos_label = (e.slot or e.position or "POS").upper()
+        ps = state.player_states.get(state.player_key(side, int(getattr(e, "player_api_id", 0) or 0)))
+        pidx = state.players_index.get(state.player_key(side, int(getattr(e, "player_api_id", 0) or 0)))
+        num = getattr(pidx, "number", None) if pidx else None
+        num_txt = f"#{int(num)} " if num is not None else ""
         tags = []
-        if e.player_api_id == lu.captain_player_id:
+        if int(getattr(e, "player_api_id", 0) or 0) == int(lu.captain_player_id or 0):
             tags.append("C")
-        if e.player_api_id == lu.goalkeeper_player_id or pos_label.upper() == "GK" or (e.position or "").upper() == "GK":
-            if "GK" not in tags:
-                tags.append("GK")
-        tag_txt = f" ({', '.join(tags)})" if tags else ""
-        lines.append(f"- **{pos_label}**: {e.name}{tag_txt}")
+        if ps and getattr(ps, "is_goalkeeper", False):
+            # GK tag redundant in GK group, but keep captain
+            pass
+        tag_txt = f" **({', '.join(tags)})**" if tags else ""
+        lines.append(f"`{pos_label:<4}` {num_txt}{e.name}{tag_txt}")
 
     lines.append("")
     if bench:
-        bench_txt = ", ".join([f"{b.name} ({b.slot or b.position or 'SUB'})" for b in bench])
-        lines.append(f"**Bench:** {bench_txt}")
+        bench_parts = []
+        for b in bench:
+            pidx = state.players_index.get(state.player_key(side, int(getattr(b, "player_api_id", 0) or 0)))
+            num = getattr(pidx, "number", None) if pidx else None
+            num_txt = f"#{int(num)} " if num is not None else ""
+            bpos = (b.slot or b.position or "SUB").upper()
+            bench_parts.append(f"{num_txt}{b.name} (`{bpos}`)")
+        lines.append("**🪑 Bench:** " + ", ".join(bench_parts))
     else:
-        lines.append("**Bench:** none")
+        lines.append("**🪑 Bench:** —")
 
     # Tactics are private - never expose in public lineup messages.
     return _clamp("\n".join(lines))
@@ -1711,15 +1724,27 @@ class SimCog(commands.Cog):
                     await channel.send(_clamp(msg, 1900))
                     sent += 1
                 elif et == "tactical_change" and state is not None:
-                    minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
-                    extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
-                    mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                    # Do not reveal AI/bot tactical changes publicly.
                     side = ev.get("team_side")
-                    team_name = state.team(side).team.name if side else "Team"
-                    detail = (payload.get("detail") or payload.get("summary") or "tactical adjustments made").strip()
-                    msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** {detail}"
-                    await channel.send(_clamp(msg, 1900))
-                    sent += 1
+                    is_bot_side = True
+                    try:
+                        sess = self.bot.match_service.sessions.get(str(getattr(state, "id", "") or ""))
+                        if sess and side in ("home", "away"):
+                            mgr = sess.home_manager_id if side == "home" else sess.away_manager_id
+                            is_bot_side = mgr is None
+                    except Exception:
+                        is_bot_side = True
+                    if not is_bot_side:
+                        minute = int(ev.get("minute", getattr(state, "minute", 0)) or 0)
+                        extra = int(ev.get("extra_minute", getattr(state, "extra_minute", 0)) or 0)
+                        mtxt = f"{minute}+{extra}'" if extra else f"{minute}'"
+                        team_name = state.team(side).team.name if side else "Team"
+                        # Keep details private; confirm only that a change was applied.
+                        msg = f"- **{mtxt}** — 🧠 **Tactical Change ({team_name}):** adjustments applied."
+                        await channel.send(_clamp(msg, 1900))
+                        sent += 1
+                    # bot/AI tactical changes are intentionally not revealed
+
                 else:
                     await channel.send(_clamp(str(text), 1900))
                     sent += 1
@@ -1845,7 +1870,7 @@ class SimCog(commands.Cog):
             if action_evs:
                 await self._send_events_live(channel, action_evs, delay=1.0, state=session.state)
             try:
-                await channel.send("🤖 **Both AI Managers have locked in tactical adjustments!** Resuming match...")
+                await channel.send("▶️ **Both teams are ready.** Resuming match...")
             except Exception:
                 pass
             return action_evs
@@ -2177,6 +2202,7 @@ class SimCog(commands.Cog):
     )
     @app_commands.choices(mode=[
         app_commands.Choice(name="Bot vs Bot", value="bot_vs_bot"),
+        app_commands.Choice(name="Manager vs Bot", value="manager_vs_bot"),
         app_commands.Choice(name="Manager vs Manager", value="manager_vs_manager"),
     ])
     async def sim(self, interaction: discord.Interaction,

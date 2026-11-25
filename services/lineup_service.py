@@ -354,20 +354,25 @@ def auto_build_lineup(team_api_id: int, team_name: str, squad: list[dict[str, An
 
 
 def parse_lineup_text_block(text: str) -> list[str]:
-    raw = str(text or "").replace("\r", "\n").replace(";", "\n").replace("|", "\n")
-    # if it looks like a single comma-separated line, split commas
-    if "\n" not in raw and "," in raw:
-        raw = raw.replace(",", "\n")
-    else:
-        # also split commas within lines when it looks like a list
-        raw = raw.replace(",", "\n")
+    raw = str(text or "").replace("\r", "\n").replace("\t", "\n")
+    # Normalize common separators to newlines
+    raw = raw.replace(";", "\n").replace("|", "\n").replace("/", "\n")
+    # Split commas (usually list separators in lineups)
+    raw = raw.replace(",", "\n")
+    # Split mid-line numbered items: "1. Player 2. Player"
+    raw = re.sub(r"(?<=\s)(\d+[\).\-\:])\s+(?=[A-Za-z#\[])", r"\n\1 ", raw)
+    # Split on bullet markers mid-line
+    raw = re.sub(r"(?<=\s)[•*]\s+", "\n", raw)
+    # Split on double+ spaces as a soft separator (common in pasted tables)
+    raw = re.sub(r" {2,}", "\n", raw)
+
     out: list[str] = []
     for line in raw.splitlines():
         s = line.strip()
         if not s:
             continue
-        # skip headers/labels
-        if re.match(r"^(formation|starters?|starting\s*xi|lineup|bench|subs?|substitutes?|reserves?)\s*[:\-]?\s*$", s, re.IGNORECASE):
+        # skip pure headers/labels
+        if re.match(r"^(formation|starters?|starting\s*xi|starting\s*11|line\s*up|lineup|bench|subs?|substitutes?|reserves?|xi)\s*[:\-]?\s*$", s, re.IGNORECASE):
             continue
         # remove "Formation: 4-3-3" inline
         m_form = re.match(r"^formation\s*[:\-]\s*([0-9]{1}-[0-9\-]{1,7})\s*$", s, re.IGNORECASE)
@@ -375,8 +380,10 @@ def parse_lineup_text_block(text: str) -> list[str]:
             continue
         # strip leading numbering like "1. " or "- "
         s = re.sub(r"^\s*(?:\d+[\).\-\:]\s*|[-*•]\s*)", "", s).strip()
-        # strip role prefix like "GK:" "RB:"
+        # strip role/slot prefix like "GK:" "RB:" "ST -"
         s = re.sub(r"^(GK|CB|LB|RB|LWB|RWB|CDM|CM|CAM|LM|RM|LW|RW|ST|CF|DEF|MID|FWD)\s*[:\-]\s*", "", s, flags=re.IGNORECASE).strip()
+        # strip trailing standalone role token
+        s = re.sub(r"\s*[:\-]\s*(GK|CB|LB|RB|LWB|RWB|CDM|CM|CAM|LM|RM|LW|RW|ST|CF|DEF|MID|FWD)\s*$", "", s, flags=re.IGNORECASE).strip()
         if s:
             out.append(s)
     return out
@@ -529,13 +536,58 @@ def resolve_player_ref(ref: str, squad: list[dict[str, Any]]) -> dict[str, Any] 
                 col_cands.append(p)
         if len(col_cands) == 1:
             return col_cands[0]
+        if col_cands:
+            # prefer shortest name diff
+            col_cands.sort(key=lambda p: abs(len(re.sub(r"[^a-z0-9]+", "", _norm_name(p.get("name")))) - len(rl_col)))
+            return col_cands[0]
 
     # single-token unique match anywhere in name tokens
-    if len(rl.split()) == 1:
-        tok = rl.split()[0]
+    rl_toks = rl.split()
+    if len(rl_toks) == 1:
+        tok = rl_toks[0]
         tok_cands = [p for p in squad if tok in _norm_name(p.get("name")).split()]
         if len(tok_cands) == 1:
             return tok_cands[0]
+        # substring token match (e.g. "Garna" for Garnacho)
+        if len(tok) >= 4:
+            sub_cands = [p for p in squad if any(tok in t for t in _norm_name(p.get("name")).split())]
+            if len(sub_cands) == 1:
+                return sub_cands[0]
+            if sub_cands:
+                sub_cands.sort(key=lambda p: min((len(t) - len(tok) for t in _norm_name(p.get("name")).split() if tok in t), default=99))
+                return sub_cands[0]
+
+    # first name unique match
+    if len(rl_toks) >= 1:
+        first = rl_toks[0]
+        if len(first) >= 3:
+            first_cands = [p for p in squad if _norm_name(p.get("name")).split()[:1] == [first]]
+            if len(first_cands) == 1:
+                return first_cands[0]
+
+    # Final fuzzy: best overall overlap if good enough
+    if rl_toks:
+        best = None
+        best_sc = 0.0
+        for p in squad:
+            pn = _norm_name(p.get("name"))
+            pt = set(pn.split())
+            rt = set(rl_toks)
+            if not pt or not rt:
+                continue
+            inter = len(rt & pt)
+            union = len(rt | pt) or 1
+            sc = inter / union
+            if rl in pn or pn in rl:
+                sc = max(sc, 0.72)
+            pn_col = re.sub(r"[^a-z0-9]+", "", pn)
+            if rl_col and pn_col and (rl_col in pn_col or pn_col in rl_col):
+                sc = max(sc, 0.7)
+            if sc > best_sc:
+                best_sc = sc
+                best = p
+        if best and best_sc >= 0.4:
+            return best
 
     return None
 
@@ -625,13 +677,136 @@ def parse_lineup_submission(formation: str, starters_raw: str, bench_raw: str, s
     if not formation:
         formation = _extract_formation(" ".join([str(x) for x in starter_refs])) or "4-3-3"
 
-    # If formation token got included as a ref, remove it
     formation_norm = formation.strip()
     starter_refs = [r for r in starter_refs if str(r).strip().lower() != formation_norm.lower()]
     bench_refs = [r for r in bench_refs if str(r).strip().lower() != formation_norm.lower()]
 
+    def _scan_refs_from_text(txt: str, squad_list: list[dict[str, Any]], exclude_ids: set[int] | None = None) -> list[str]:
+        exclude_ids = exclude_ids or set()
+        low = " " + re.sub(r"\s+", " ", str(txt or "").lower()) + " "
+        found: list[tuple[int, str]] = []
+        for p in squad_list:
+            pid = int(p.get("api_id") or 0)
+            if not pid or pid in exclude_ids:
+                continue
+            name = str(p.get("name") or "").strip()
+            if not name:
+                continue
+            nl = _norm_name(name)
+            if not nl:
+                continue
+            # Match by full name or last name token boundary in text
+            patterns = [re.escape(nl)]
+            parts = nl.split()
+            if len(parts) > 1:
+                patterns.append(re.escape(parts[-1]))
+            # also collapsed form
+            col = re.sub(r"[^a-z0-9]+", "", nl)
+            low_col = re.sub(r"[^a-z0-9 ]+", "", low)
+            matched = False
+            for pat in patterns:
+                if re.search(r"(?<![a-z0-9])" + pat + r"(?![a-z0-9])", low):
+                    matched = True
+                    break
+            if not matched and len(col) >= 5 and col in re.sub(r"[^a-z0-9]+", "", low):
+                matched = True
+            if not matched:
+                # shirt number as token
+                num = p.get("number")
+                try:
+                    if num is not None and re.search(r"(?<!\d)" + re.escape(str(int(num))) + r"(?!\d)", low):
+                        # number alone is ambiguous; only accept if name fragment also present
+                        for tok in parts:
+                            if len(tok) >= 4 and tok in low:
+                                matched = True
+                                break
+                except Exception:
+                    pass
+            if matched:
+                # position in text for ordering
+                pos = low.find(parts[-1]) if parts else low.find(nl)
+                if pos < 0:
+                    pos = 10**9
+                found.append((pos, name))
+        found.sort(key=lambda x: x[0])
+        # dedupe by name
+        seen = set()
+        refs = []
+        for _, nm in found:
+            k = _norm_name(nm)
+            if k in seen:
+                continue
+            seen.add(k)
+            refs.append(nm)
+        return refs
+
+    # If parsing gave too few starters, try harder: scan raw text against squad
+    if len(starter_refs) < 11:
+        scanned = _scan_refs_from_text(starters_raw + "\n" + bench_raw, squad)
+        if scanned:
+            # If bench wasn't explicitly provided, split scanned list into starters/bench
+            if not bench_refs:
+                starter_refs = scanned[:11]
+                bench_refs = scanned[11:20] if len(scanned) > 11 else []
+            else:
+                starter_refs = scanned[:11]
+    # If we got more than 11 and no bench, split
+    if len(starter_refs) > 11 and not bench_refs:
+        bench_refs = starter_refs[11:20]
+        starter_refs = starter_refs[:11]
+    # Still short? pad from bench refs if we have extra there
+    if len(starter_refs) < 11 and bench_refs:
+        need = 11 - len(starter_refs)
+        starter_refs = starter_refs + bench_refs[:need]
+        bench_refs = bench_refs[need:]
+
     if len(starter_refs) != 11:
-        raise LineupValidationError(f"Starting XI must contain exactly 11 players (found {len(starter_refs)}). Provide 11 names/numbers, one per line.")
+        # Final attempt: auto-fill from squad by best available not already named
+        resolved_now = []
+        used_ids_tmp = set()
+        for r in starter_refs:
+            p = resolve_player_ref(str(r), squad)
+            if p:
+                pid = int(p.get("api_id") or 0)
+                if pid and pid not in used_ids_tmp:
+                    used_ids_tmp.add(pid)
+                    resolved_now.append(p)
+        if resolved_now:
+            # fill remaining slots with best available from squad
+            from engine.formations import get_formation_slots
+            slots = get_formation_slots(formation_norm)
+            slot_groups = [s.group for s in slots]
+            pos_order_fill = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
+            remaining_pool = [p for p in squad if int(p.get("api_id") or 0) not in used_ids_tmp]
+            # simple fill: prefer matching missing position groups
+            have_groups = [norm_pos(p.get("position")) for p in resolved_now]
+            need_groups = []
+            for g in slot_groups:
+                if g in have_groups:
+                    have_groups.remove(g)
+                else:
+                    need_groups.append(g)
+            def _fill_score(p, want_g):
+                pg = norm_pos(p.get("position"))
+                ovr = p.get("overall") or p.get("rating") or 0
+                try: ovr = float(ovr)
+                except Exception: ovr = 0.0
+                return (1 if pg == want_g else 0, ovr)
+            for g in need_groups:
+                if len(resolved_now) >= 11:
+                    break
+                cands = [p for p in remaining_pool if int(p.get("api_id") or 0) not in used_ids_tmp]
+                cands.sort(key=lambda p: _fill_score(p, g), reverse=True)
+                if cands:
+                    pick = cands[0]
+                    used_ids_tmp.add(int(pick.get("api_id") or 0))
+                    resolved_now.append(pick)
+            if len(resolved_now) == 11:
+                starter_refs = [str(p.get("name") or p.get("api_id")) for p in resolved_now]
+
+    if len(starter_refs) != 11:
+        raise LineupValidationError(f"Could not identify exactly 11 starters (found {len(starter_refs)}). Send player names or shirt numbers in any format, and I'll match them to your squad.")
+
     starters: list[dict[str, Any]] = []
     missing: list[str] = []
     used: set[int] = set()
@@ -642,6 +817,7 @@ def parse_lineup_submission(formation: str, starters_raw: str, bench_raw: str, s
             continue
         pid = int(p.get("api_id") or 0)
         if pid in used:
+            # skip duplicates silently? better to error clearly
             raise LineupValidationError(f"Duplicate player in starters: {p.get('name')}")
         used.add(pid)
         starters.append(p)
@@ -649,17 +825,54 @@ def parse_lineup_submission(formation: str, starters_raw: str, bench_raw: str, s
     for ref in bench_refs:
         p = resolve_player_ref(str(ref), squad)
         if not p:
-            missing.append(str(ref))
+            # be lenient on bench: skip unresolvable bench refs instead of failing whole lineup
             continue
         pid = int(p.get("api_id") or 0)
         if pid in used:
-            # ignore duplicate in bench if already in starters? no, be strict
-            raise LineupValidationError(f"Duplicate player in lineup/bench: {p.get('name')}")
+            continue
         used.add(pid)
         bench.append(p)
     if missing:
+        # Try one more fuzzy pass: scan missing ref as substring across squad
+        still_missing = []
+        for ref in missing:
+            p = resolve_player_ref(str(ref), squad)
+            if p and int(p.get("api_id") or 0) not in used:
+                pid = int(p.get("api_id") or 0)
+                used.add(pid)
+                starters.append(p)
+                continue
+            # last resort: pick best name-overlap candidate not used
+            rl = _norm_name(_clean_player_ref(ref))
+            best = None
+            best_score = 0.0
+            for cand in squad:
+                cid = int(cand.get("api_id") or 0)
+                if cid in used:
+                    continue
+                cn = _norm_name(cand.get("name"))
+                if not rl or not cn:
+                    continue
+                rt = set(rl.split())
+                ct = set(cn.split())
+                inter = len(rt & ct)
+                union = len(rt | ct) or 1
+                sc = inter / union
+                if rl in cn or cn in rl:
+                    sc = max(sc, 0.75)
+                if sc > best_score:
+                    best_score = sc
+                    best = cand
+            if best and best_score >= 0.34:
+                pid = int(best.get("api_id") or 0)
+                used.add(pid)
+                starters.append(best)
+            else:
+                still_missing.append(ref)
+        missing = still_missing
+    if missing:
         sample = ", ".join(missing[:8]) + ("..." if len(missing) > 8 else "")
-        raise LineupValidationError(f"Could not match players: {sample}. Use exact names or shirt numbers from your squad.")
+        raise LineupValidationError(f"Could not match players: {sample}. Try using the exact player name or shirt number from your squad.")
     lu = validate_lineup(team_api_id=team_api_id, team_name=team_name, formation=formation.strip(), starters=starters, bench=bench, squad=squad)
     return lu
 
@@ -880,8 +1093,8 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
             return None
         candidates.sort(key=lambda x: x[0], reverse=True)
         best = candidates[0]
-        # only accept if it looks like a real sub pair
-        if best[0] < 20:
+        # accept best candidate - pick_off_on will validate/fallback
+        if best[0] < 0:
             return None
         return best[1], best[2]
 
@@ -905,8 +1118,12 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
     if not chunks:
         raise LineupValidationError("No substitutions provided.")
 
-    # Pre-pass: if lines are single names (no separators/keywords), pair consecutive ones.
-    def _looks_like_pair(text: str) -> bool:
+    # Pre-pass: pair halves and single-name lines
+    def _has_in_kw(t: str) -> bool:
+        return bool(re.search(r"\b(?:in|on)\b", t, flags=re.IGNORECASE))
+    def _has_out_kw(t: str) -> bool:
+        return bool(re.search(r"\b(?:out|off)\b", t, flags=re.IGNORECASE))
+    def _looks_like_full_pair(text: str) -> bool:
         t = str(text or "").strip()
         if try_parse_separator(t):
             return True
@@ -914,9 +1131,21 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
             return True
         if try_smart_split(t):
             return True
-        if re.search(r"(->|=>|→|\bfor\b|\bto\b|\bwith\b|\breplaces?\b|\bin\b|\bout\b|\bon\b|\boff\b|/|\|)", t, flags=re.IGNORECASE):
+        # has both in and out keywords - likely a pair
+        if _has_in_kw(t) and _has_out_kw(t):
             return True
         return False
+    def _is_half(text: str) -> str | None:
+        t = str(text or "").strip()
+        if _looks_like_full_pair(t):
+            return None
+        has_in = _has_in_kw(t)
+        has_out = _has_out_kw(t)
+        if has_out and not has_in:
+            return "out"
+        if has_in and not has_out:
+            return "in"
+        return None
 
     expanded: list[str] = []
     i = 0
@@ -925,14 +1154,25 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
         if not cur:
             i += 1
             continue
-        if _looks_like_pair(cur):
+        if _looks_like_full_pair(cur):
             expanded.append(cur)
             i += 1
             continue
+        half = _is_half(cur)
+        if half and i + 1 < len(chunks):
+            nxt = chunks[i + 1].strip()
+            nh = _is_half(nxt)
+            if nh and nh != half:
+                if half == "out":
+                    expanded.append(cur + " | " + nxt)
+                else:
+                    expanded.append(nxt + " | " + cur)
+                i += 2
+                continue
         # single token/name line - try to pair with next single
         if i + 1 < len(chunks):
             nxt = chunks[i + 1].strip()
-            if nxt and not _looks_like_pair(nxt):
+            if nxt and not _looks_like_full_pair(nxt) and _is_half(nxt) is None:
                 expanded.append(cur + " -> " + nxt)
                 i += 2
                 continue

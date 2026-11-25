@@ -29,15 +29,22 @@ def _league_choices() -> list[app_commands.Choice[str]]:
 
 
 def _fmt_standings(rows: list[dict[str, Any]], limit: int = 20) -> str:
-    lines = ["`#  Team                     MP  W  D  L  GF GA GD Pts Form`"]
+    lines = [
+        "`Pos  Team                     P   W  D  L  GF  GA  GD  Pts  Form `",
+        "`---  ----------------------- --- -- -- -- --- --- --- ---- -----`",
+    ]
     for r in rows[:limit]:
         rank = int(r.get("rank", 0))
         name = str(r.get("team_name", "Team"))[:23]
         mp = int(r.get("played", 0)); w = int(r.get("won", 0)); d = int(r.get("drawn", 0)); l = int(r.get("lost", 0))
         gf = int(r.get("goals_for", 0)); ga = int(r.get("goals_against", 0)); gd = int(r.get("goal_difference", 0))
         pts = int(r.get("points", 0)); form = str(r.get("form", ""))[-5:]
-        lines.append(f"`{rank:>2} {name:<23} {mp:>2} {w:>2} {d:>2} {l:>2} {gf:>2} {ga:>2} {gd:>+3} {pts:>3} {form:<5}`")
-    return "\n".join(lines)
+        lines.append(f"`{rank:>2}.  {name:<23} {mp:>3} {w:>2} {d:>2} {l:>2} {gf:>3} {ga:>3} {gd:>+3} {pts:>4}  {form:<5}`")
+    legend = (
+        "\n**Legend:** Pos = Position • P = Played • W = Won • D = Draw • L = Lost • "
+        "GF = Goals For • GA = Goals Against • GD = Goal Difference (GF−GA) • Pts = Points (W=3, D=1, L=0) • Form = Last 5"
+    )
+    return "\n".join(lines) + legend
 
 
 def _fmt_fixtures(rows: list[dict[str, Any]], limit: int = 20) -> str:
@@ -383,6 +390,26 @@ class SeasonGroup(app_commands.Group):
             lines.append(f"`{i:>2}.` **{r.get('player_name','?')}** ({r.get('team_name','?')}) — {int(r.get('goals',0))}G {int(r.get('assists',0))}A, {float(r.get('avg_rating',0.0)):.2f} avg")
         await interaction.followup.send(embed=info_embed(f"Top Scorers — {season.get('name')}", "\n".join(lines)[:3900]), ephemeral=True)
 
+    @app_commands.command(name="assisters", description="Show season top assisters")
+    @app_commands.describe(league="League (optional)")
+    @app_commands.choices(league=_league_choices())
+    async def assisters(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None):
+        await interaction.response.defer(ephemeral=True)
+        league_key = league.value if league else None
+        ss = self.cog.bot.season_service
+        season = await ss.get_active_season(interaction.guild_id, league_key=league_key)
+        if not season:
+            await interaction.followup.send(embed=error_embed("No Season", "No active season found."), ephemeral=True)
+            return
+        rows = await ss.get_top_assisters(season["id"], limit=15)
+        if not rows:
+            await interaction.followup.send(embed=info_embed(f"Top Assisters — {season.get('name')}", "No assists recorded yet."), ephemeral=True)
+            return
+        lines = []
+        for i, r in enumerate(rows, start=1):
+            lines.append(f"`{i:>2}.` **{r.get('player_name','?')}** ({r.get('team_name','?')}) — {int(r.get('assists',0))}A {int(r.get('goals',0))}G, {float(r.get('avg_rating',0.0)):.2f} avg")
+        await interaction.followup.send(embed=info_embed(f"Top Assisters — {season.get('name')}", "\n".join(lines)[:3900]), ephemeral=True)
+
 
 class SeasonCog(commands.Cog):
     def __init__(self, bot):
@@ -403,6 +430,26 @@ class SeasonCog(commands.Cog):
             self.bot.tree.remove_command(self.season_group.name, type=self.season_group.type)
         except Exception:
             pass
+
+    @app_commands.command(name="topassisters", description="Show top assisters in the active season")
+    @app_commands.describe(league="League (optional)")
+    @app_commands.choices(league=_league_choices())
+    async def topassisters(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None):
+        await interaction.response.defer(ephemeral=True)
+        league_key = league.value if league else None
+        ss = self.bot.season_service
+        season = await ss.get_active_season(interaction.guild_id, league_key=league_key)
+        if not season:
+            await interaction.followup.send(embed=error_embed("No Season", "No active season found."), ephemeral=True)
+            return
+        rows = await ss.get_top_assisters(season["id"], limit=15)
+        if not rows:
+            await interaction.followup.send(embed=info_embed(f"Top Assisters — {season.get('name')}", "No assists recorded yet."), ephemeral=True)
+            return
+        lines = []
+        for i, r in enumerate(rows, start=1):
+            lines.append(f"`{i:>2}.` **{r.get('player_name','?')}** ({r.get('team_name','?')}) — {int(r.get('assists',0))}A {int(r.get('goals',0))}G, {float(r.get('avg_rating',0.0)):.2f} avg")
+        await interaction.followup.send(embed=info_embed(f"Top Assisters — {season.get('name')}", "\n".join(lines)[:3900]), ephemeral=True)
 
     @app_commands.command(name="transfer", description="Create a pending transfer request (confirm with /finalizetransfer)")
     @app_commands.describe(player="Player name or ID", to_team="Destination team name", league="League for team search (optional)", note="Optional note")

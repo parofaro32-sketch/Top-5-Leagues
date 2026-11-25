@@ -84,18 +84,18 @@ class LineupSubmitModal(discord.ui.Modal, title="Submit Lineup"):
         placeholder="e.g. 4-3-3",
     )
     starters = discord.ui.TextInput(
-        label="Starting XI (one per line)",
+        label="Starting XI (any format)",
         style=discord.TextStyle.paragraph,
         required=True,
         max_length=2000,
-        placeholder="11 players: name or shirt number per line",
+        placeholder="Paste 11 players in any format: names, numbers, commas, lines, etc.",
     )
     bench = discord.ui.TextInput(
-        label="Bench (optional, one per line)",
+        label="Bench (optional, any format)",
         style=discord.TextStyle.paragraph,
         required=False,
         max_length=1500,
-        placeholder="Up to 9 players: name or shirt number per line",
+        placeholder="Bench players in any format (optional)",
     )
 
     def __init__(self, on_submit_data):
@@ -119,11 +119,11 @@ class LineupSubmitModal(discord.ui.Modal, title="Submit Lineup"):
 
 class SubsTextModal(discord.ui.Modal, title="Submit Substitutions"):
     subs_text = discord.ui.TextInput(
-        label="Subs (one per line: OFF -> ON)",
+        label="Substitutions (any format)",
         style=discord.TextStyle.paragraph,
         required=True,
         max_length=1000,
-        placeholder="Saka -> Martinelli\n7 -> 11",
+        placeholder="Any format: Saka -> Martinelli, 7 for 11, OUT: X IN: Y, etc.",
     )
 
     def __init__(self, on_submit_data):
