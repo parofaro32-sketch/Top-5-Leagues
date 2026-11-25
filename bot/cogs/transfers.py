@@ -185,6 +185,18 @@ class TransfersCog(commands.Cog):
         team = await self.bot.season_service.get_user_team_in_active_season(interaction.guild_id, interaction.user.id, league_key=league_key)
         return team
 
+    async def _resolve_buying_team_and_season(self, interaction: discord.Interaction, league_key: str | None):
+        """Resolve the manager's claimed team and the season context. Falls back across leagues/seasons."""
+        season = await self._resolve_active_season(interaction, league_key)
+        buying_team = await self._resolve_buying_team_for_user(interaction, league_key=(season.get("league_key") if season else league_key))
+        if not buying_team and league_key:
+            buying_team = await self._resolve_buying_team_for_user(interaction, None)
+        if buying_team:
+            team_season = buying_team.get("_season") or await self.bot.season_service.get_season(str(buying_team.get("season_id")))
+            if team_season:
+                season = team_season
+        return buying_team, season
+
     async def _find_season_team_by_name(self, season_id: str, team_name: str) -> dict[str, Any] | None:
         q = (team_name or "").strip().lower()
         if not q:
@@ -208,6 +220,33 @@ class TransfersCog(commands.Cog):
         cands.sort(key=lambda x: (-x["_score"], x.get("team_name") or ""))
         return cands[0] if cands else None
 
+    async def _find_season_team_by_name_any(self, guild_id: int | None, team_name: str, *, prefer_season_id: str | None = None, league_key: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Find a season_team by name, searching preferred season first then all active/any seasons. Returns (team, season)."""
+        if prefer_season_id:
+            t = await self._find_season_team_by_name(str(prefer_season_id), team_name)
+            if t:
+                s = await self.bot.season_service.get_season(str(prefer_season_id))
+                return t, s
+        seasons = await self.bot.season_service.list_seasons(guild_id=guild_id, status="active")
+        if league_key:
+            seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        if not seasons and guild_id is not None:
+            seasons = await self.bot.season_service.list_seasons(guild_id=None, status="active")
+            if league_key:
+                seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        if not seasons:
+            seasons = await self.bot.season_service.list_seasons(guild_id=guild_id, status=None)
+            if league_key:
+                seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+        for s in seasons:
+            sid = str(s.get("id"))
+            if prefer_season_id and sid == str(prefer_season_id):
+                continue
+            t = await self._find_season_team_by_name(sid, team_name)
+            if t:
+                return t, s
+        return None, None
+
     def _parse_int_money(self, v: Any) -> int | None:
         if v is None:
             return None
@@ -221,24 +260,39 @@ class TransfersCog(commands.Cog):
     async def botoffer(self, interaction: discord.Interaction, team_name: str, player_name: str, fee: str, league: app_commands.Choice[str] | None = None):
         await interaction.response.defer(ephemeral=True)
         league_key = league.value if league else None
-        season = await self._resolve_active_season(interaction, league_key)
+        buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
+        if not buying_team:
+            await interaction.followup.send(embed=error_embed("No Claimed Team", "You must claim a team first with `/claim` to make bot offers."), ephemeral=True)
+            return
+        if not season:
+            season = buying_team.get("_season") or await self.bot.season_service.get_season(str(buying_team.get("season_id")))
         if not season:
             await interaction.followup.send(embed=error_embed("No Active Season", "No active season found. Create one with `/season create`."), ephemeral=True)
             return
         season_id = str(season.get("id"))
         season_year = int(season.get("season_year") or 2026)
-
-        buying_team = await self._resolve_buying_team_for_user(interaction, league_key=season.get("league_key"))
-        if not buying_team:
-            await interaction.followup.send(embed=error_embed("No Claimed Team", "You must claim a team first with `/claim` to make bot offers."), ephemeral=True)
-            return
         buying_team_id = int(buying_team.get("team_api_id"))
         buying_team_name = str(buying_team.get("team_name"))
 
         selling_team = await self._find_season_team_by_name(season_id, team_name)
+        selling_season = season
         if not selling_team:
-            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}` in the active season."), ephemeral=True)
+            selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, team_name, prefer_season_id=season_id, league_key=league_key)
+        if not selling_team:
+            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}`. Check the team name and try again."), ephemeral=True)
             return
+        if selling_season:
+            selling_sid = str(selling_season.get("id"))
+            buying_sid = str((buying_team or {}).get("season_id") or season_id)
+            # Prefer keeping buying team's season context when they differ (budget checks rely on it)
+            if not buying_team or selling_sid == buying_sid:
+                season = selling_season
+                season_id = selling_sid
+                season_year = int(season.get("season_year") or 2026)
+            else:
+                # keep buying team season; selling team came from another season - still usable but rare
+                season_id = buying_sid
+                season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
         selling_team_id = int(selling_team.get("team_api_id"))
         selling_team_name = str(selling_team.get("team_name"))
         if selling_team.get("manager_user_id") is not None:
@@ -422,11 +476,24 @@ class TransfersCog(commands.Cog):
 
         # budget check
         if season_id:
+            try:
+                await self.bot.season_service.ensure_season_budgets(str(season_id))
+            except Exception:
+                pass
             bt = await self.bot.db.fetchone("SELECT transfer_budget, wage_budget, team_name FROM season_teams WHERE season_id=? AND team_api_id=?", (str(season_id), buying_team_id))
             if bt:
                 btd = dict(bt)
                 tb = int(btd.get("transfer_budget") or 0)
                 wb = int(btd.get("wage_budget") or 0)
+                if tb == 0 and wb == 0:
+                    try:
+                        from services.season_service import default_season_budgets
+                        _s = await self.bot.season_service.get_season(str(season_id))
+                        _d = default_season_budgets((_s or {}).get("league_key"))
+                        tb = int(_d.get("transfer_budget") or 0)
+                        wb = int(_d.get("wage_budget") or 0)
+                    except Exception:
+                        pass
                 if fee > tb:
                     return {"ok": False, "reason": f"Insufficient transfer budget ({fmt_money(tb)} available, {fmt_money(fee)} needed)."}
                 if wage > wb:
@@ -484,21 +551,47 @@ class TransfersCog(commands.Cog):
     async def askaboutplayer(self, interaction: discord.Interaction, team_name: str, player_name: str, league: app_commands.Choice[str] | None = None):
         await interaction.response.defer(ephemeral=True)
         league_key = league.value if league else None
-        season = await self._resolve_active_season(interaction, league_key)
+        buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
         if not season:
-            await interaction.followup.send(embed=error_embed("No Active Season", "No active season found."), ephemeral=True)
+            # try any active season as fallback for selling team lookup
+            season = await self.bot.season_service.get_active_season(interaction.guild_id, league_key=league_key)
+        if not season:
+            await interaction.followup.send(embed=error_embed("No Active Season", "No active season found. Create one with `/season create`."), ephemeral=True)
             return
         season_id = str(season.get("id"))
         season_year = int(season.get("season_year") or 2026)
-
-        buying_team = await self._resolve_buying_team_for_user(interaction, league_key=season.get("league_key"))
         buying_team_name = str(buying_team.get("team_name")) if buying_team else "Your club"
         buying_team_id = int(buying_team.get("team_api_id")) if buying_team else None
 
         selling_team = await self._find_season_team_by_name(season_id, team_name)
+        selling_season = season
         if not selling_team:
-            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}` in the active season."), ephemeral=True)
+            selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, team_name, prefer_season_id=season_id, league_key=league_key)
+        if not selling_team:
+            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}`. Check the team name and try again."), ephemeral=True)
             return
+        # If found an unclaimed copy, look for a claimed copy in other seasons
+        if selling_team.get("manager_user_id") is None:
+            seasons_all = await self.bot.season_service.list_seasons(guild_id=interaction.guild_id, status=None)
+            if not seasons_all and interaction.guild_id is not None:
+                seasons_all = await self.bot.season_service.list_seasons(guild_id=None, status=None)
+            for s2 in seasons_all:
+                st2 = await self._find_season_team_by_name(str(s2.get("id")), team_name)
+                if st2 and st2.get("manager_user_id") is not None:
+                    selling_team, selling_season = st2, s2
+                    break
+        if selling_season:
+            selling_sid = str(selling_season.get("id"))
+            buying_sid = str((buying_team or {}).get("season_id") or season_id)
+            # Prefer keeping buying team's season context when they differ (budget checks rely on it)
+            if not buying_team or selling_sid == buying_sid:
+                season = selling_season
+                season_id = selling_sid
+                season_year = int(season.get("season_year") or 2026)
+            else:
+                # keep buying team season; selling team came from another season - still usable but rare
+                season_id = buying_sid
+                season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
         selling_team_name = str(selling_team.get("team_name"))
         selling_team_id = int(selling_team.get("team_api_id"))
         seller_manager_id = selling_team.get("manager_user_id")
@@ -580,24 +673,39 @@ class TransfersCog(commands.Cog):
     async def contractnego(self, interaction: discord.Interaction, player_name: str, fee: str, selling_club: str, league: app_commands.Choice[str] | None = None):
         await interaction.response.defer(ephemeral=True)
         league_key = league.value if league else None
-        season = await self._resolve_active_season(interaction, league_key)
+        buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
+        if not buying_team:
+            await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
+            return
+        if not season:
+            season = buying_team.get("_season") or await self.bot.season_service.get_season(str(buying_team.get("season_id")))
         if not season:
             await interaction.followup.send(embed=error_embed("No Active Season", "No active season found."), ephemeral=True)
             return
         season_id = str(season.get("id"))
         season_year = int(season.get("season_year") or 2026)
-
-        buying_team = await self._resolve_buying_team_for_user(interaction, league_key=season.get("league_key"))
-        if not buying_team:
-            await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
-            return
         buying_team_id = int(buying_team.get("team_api_id"))
         buying_team_name = str(buying_team.get("team_name"))
 
         selling_team = await self._find_season_team_by_name(season_id, selling_club)
+        selling_season = season
         if not selling_team:
-            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find selling club `{selling_club}`."), ephemeral=True)
+            selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, selling_club, prefer_season_id=season_id, league_key=league_key)
+        if not selling_team:
+            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find selling club `{selling_club}`. Check the name and try again."), ephemeral=True)
             return
+        if selling_season:
+            selling_sid = str(selling_season.get("id"))
+            buying_sid = str((buying_team or {}).get("season_id") or season_id)
+            # Prefer keeping buying team's season context when they differ (budget checks rely on it)
+            if not buying_team or selling_sid == buying_sid:
+                season = selling_season
+                season_id = selling_sid
+                season_year = int(season.get("season_year") or 2026)
+            else:
+                # keep buying team season; selling team came from another season - still usable but rare
+                season_id = buying_sid
+                season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
         selling_team_id = int(selling_team.get("team_api_id"))
         selling_team_name = str(selling_team.get("team_name"))
         if selling_team_id == buying_team_id:

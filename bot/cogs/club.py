@@ -203,8 +203,26 @@ class ClubCog(commands.Cog):
             training_txt = f"{tr.get('status','?').title()} • {str(tr.get('starts_at') or '')[:16].replace('T',' ')}"
 
         # budgets
-        tb = team.get("transfer_budget", 0)
-        wb = team.get("wage_budget", 0)
+        tb = int(team.get("transfer_budget") or 0)
+        wb = int(team.get("wage_budget") or 0)
+        if tb == 0 and wb == 0:
+            try:
+                await ss.ensure_season_budgets(season_id)
+                refreshed = await ss.get_season_team(season_id, team_id)
+                if refreshed:
+                    team = refreshed
+                    tb = int(team.get("transfer_budget") or 0)
+                    wb = int(team.get("wage_budget") or 0)
+            except Exception:
+                pass
+        if tb == 0 and wb == 0:
+            try:
+                from services.season_service import default_season_budgets
+                defaults = default_season_budgets(season.get("league_key"))
+                tb = int(defaults.get("transfer_budget") or 0)
+                wb = int(defaults.get("wage_budget") or 0)
+            except Exception:
+                pass
 
         lines = []
         lines.append(f"**Team:** {team.get('team_name')} ({season.get('name')})")

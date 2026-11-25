@@ -575,7 +575,7 @@ class SeasonCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Transfer Failed", str(e)), ephemeral=True)
 
 
-    @app_commands.command(name="claim", description="Claim a team in the active season")
+    @app_commands.command(name="claim", description="Claim a team (works even if no season is open)")
     @app_commands.describe(team="Team name (e.g. Liverpool)", league="League (optional)")
     @app_commands.choices(league=_league_choices())
     async def claim(self, interaction: discord.Interaction, team: str, league: app_commands.Choice[str] | None = None):
@@ -592,7 +592,7 @@ class SeasonCog(commands.Cog):
         if not res.get("ok"):
             reason = str(res.get("reason") or "unknown")
             if reason == "team_not_found":
-                await interaction.followup.send(embed=error_embed("Team Not Found", f"No active-season team found for `{team}`. Create a season first with `/season create`."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team}`. Check the spelling, or provide a league."), ephemeral=True)
                 return
             if reason == "already_claimed":
                 owner = res.get("owner_user_id")

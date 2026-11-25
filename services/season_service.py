@@ -984,34 +984,42 @@ class SeasonService:
         return [dict(r) for r in rows]
 
     async def find_team_in_active_seasons(self, guild_id: int | None, team_query: str, league_key: str | None = None) -> list[dict[str, Any]]:
-        """Find season_teams matching name in active seasons for a guild. Returns candidates with season info."""
+        """Find season_teams matching name in seasons for a guild. Prefers active seasons, falls back to any status."""
         q = (team_query or "").strip().lower()
         if not q:
             return []
-        seasons = await self.list_seasons(guild_id=guild_id, status="active")
-        if league_key:
-            seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
-        # fallback: include global active seasons if none for guild
-        if not seasons and guild_id is not None:
-            seasons = await self.list_seasons(guild_id=None, status="active")
+
+        async def _collect(status: str | None) -> list[dict[str, Any]]:
+            seasons = await self.list_seasons(guild_id=guild_id, status=status)
             if league_key:
                 seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
-        out: list[dict[str, Any]] = []
-        for s in seasons:
-            sid = str(s.get("id"))
-            teams = await self.list_season_teams(sid)
-            for t in teams:
-                name = str(t.get("team_name") or "").lower()
-                short = str(t.get("short_name") or "").lower()
-                if q == name or q == short or q in name or name.startswith(q):
-                    rec = dict(t)
-                    rec["season_name"] = s.get("name")
-                    rec["season_league_key"] = s.get("league_key")
-                    rec["season_guild_id"] = s.get("guild_id")
-                    rec["_match_score"] = 3 if (q == name or q == short) else (2 if name.startswith(q) else 1)
-                    out.append(rec)
-        out.sort(key=lambda r: (-int(r.get("_match_score", 0)), str(r.get("team_name") or "")))
-        # dedupe by (season_id, team_api_id)
+            if not seasons and guild_id is not None:
+                seasons = await self.list_seasons(guild_id=None, status=status)
+                if league_key:
+                    seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+            # prefer active first when status is None
+            seasons.sort(key=lambda s: 0 if str(s.get("status")) == "active" else 1)
+            found: list[dict[str, Any]] = []
+            for s in seasons:
+                sid = str(s.get("id"))
+                teams = await self.list_season_teams(sid)
+                for t in teams:
+                    name = str(t.get("team_name") or "").lower()
+                    short = str(t.get("short_name") or "").lower()
+                    if q == name or q == short or q in name or name.startswith(q):
+                        rec = dict(t)
+                        rec["season_name"] = s.get("name")
+                        rec["season_league_key"] = s.get("league_key")
+                        rec["season_guild_id"] = s.get("guild_id")
+                        rec["season_status"] = s.get("status")
+                        rec["_match_score"] = 3 if (q == name or q == short) else (2 if name.startswith(q) else 1)
+                        found.append(rec)
+            return found
+
+        out = await _collect("active")
+        if not out:
+            out = await _collect(None)
+        out.sort(key=lambda r: (-int(r.get("_match_score", 0)), 0 if str(r.get("season_status")) == "active" else 1, str(r.get("team_name") or "")))
         seen = set()
         deduped = []
         for r in out:
@@ -1022,8 +1030,135 @@ class SeasonService:
             deduped.append(r)
         return deduped
 
+    async def _ensure_season_for_team_claim(self, *, guild_id: int | None, team_query: str, league_key: str | None = None) -> dict[str, Any] | None:
+        """When no season exists, find team in static DB and auto-create an active season for its league."""
+        q = (team_query or "").strip().lower()
+        if not q:
+            return None
+        season_year = 2026
+        # Try to resolve team from DB (seeded teams table)
+        rows = await self.db.fetchall(
+            "SELECT * FROM teams WHERE season=?",
+            (season_year,),
+        )
+        if not rows:
+            # try latest season in teams table
+            rows = await self.db.fetchall("SELECT * FROM teams ORDER BY season DESC LIMIT 500")
+        inv_league = {str(v).lower(): k for k, v in LEAGUE_DISPLAY.items()}
+        # Also support common aliases
+        inv_league.update({
+            "english premier league": "premier_league",
+            "premier league": "premier_league",
+            "la liga": "la_liga",
+            "bundesliga": "bundesliga",
+            "serie a": "serie_a",
+            "ligue 1": "ligue_1",
+        })
+
+        def _score_team(t: dict):
+            name = str(t.get("name") or "").lower()
+            short = str(t.get("short_name") or t.get("code") or "").lower()
+            score = 0
+            if q == name or q == short:
+                score = 3
+            elif name.startswith(q) or q in name:
+                score = 2
+            elif short and q in short:
+                score = 1
+            return score
+
+        candidates = []
+        for r in rows:
+            t = dict(r)
+            score = _score_team(t)
+            if score:
+                candidates.append((score, t))
+        if not candidates:
+            # Fallback to bundled data if DB teams table is empty/incomplete
+            try:
+                from data.bundled import list_league_keys as _lk2, list_all_teams as _lat2
+                for lk in list(_lk2()):
+                    for tt in (_lat2(lk) or []):
+                        t = dict(tt)
+                        t.setdefault("league_name", LEAGUE_DISPLAY.get(lk, lk))
+                        score = _score_team(t)
+                        if score:
+                            t["_league_key"] = lk
+                            candidates.append((score, t))
+            except Exception:
+                pass
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: (-x[0], str(x[1].get("name") or "")))
+        # if ambiguous exacts, don't auto-create blindly
+        top_score = candidates[0][0]
+        top = [t for s, t in candidates if s == top_score]
+        if len(top) != 1:
+            return None
+        team = top[0]
+        team_league_key = league_key
+        if not team_league_key:
+            team_league_key = team.get("_league_key")
+        if not team_league_key:
+            lname = str(team.get("league_name") or "").lower().strip()
+            team_league_key = inv_league.get(lname)
+        if not team_league_key:
+            # fallback: infer from team api_id membership in known leagues by scanning all seeded teams
+            try:
+                from data.bundled import list_league_keys as _lk, list_all_teams as _lat
+                for lk in (league_key and [league_key]) or list(_lk()):
+                    for tt in (_lat(lk) or []):
+                        if int(tt.get("api_id") or 0) == int(team.get("api_id") or -1):
+                            team_league_key = lk
+                            break
+                    if team_league_key:
+                        break
+            except Exception:
+                pass
+        if not team_league_key:
+            return None
+
+        # Find existing season for this guild+league (any status, prefer active)
+        existing = await self.get_active_season(guild_id, league_key=team_league_key)
+        if not existing:
+            # try any status
+            rows_s = await self.db.fetchall(
+                "SELECT * FROM seasons WHERE guild_id IS ? AND league_key=? ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
+                (guild_id, team_league_key),
+            )
+            if not rows_s and guild_id is not None:
+                rows_s = await self.db.fetchall(
+                    "SELECT * FROM seasons WHERE league_key=? ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
+                    (team_league_key,),
+                )
+            existing = dict(rows_s[0]) if rows_s else None
+
+        if existing:
+            # make sure team exists in season_teams; if not, can't claim there
+            st = await self.get_season_team(str(existing.get("id")), int(team.get("api_id") or 0))
+            if st:
+                return existing
+            # season exists but team not in it (odd) - fall through to create if no active
+            if str(existing.get("status")) == "active":
+                return existing
+
+        # No usable season: auto-create
+        try:
+            created = await self.create_season(guild_id=guild_id, league_key=team_league_key, season_year=season_year)
+            return created
+        except ValueError:
+            # race/exists - fetch it
+            return await self.get_active_season(guild_id, league_key=team_league_key)
+        except Exception:
+            logger.exception("Failed to auto-create season for claim team=%s league=%s", team_query, team_league_key)
+            return None
+
     async def claim_team(self, *, guild_id: int | None, user_id: int, team_query: str, league_key: str | None = None) -> dict[str, Any]:
         candidates = await self.find_team_in_active_seasons(guild_id, team_query, league_key=league_key)
+        if not candidates:
+            # No season set / no active season / not found - try auto-create season
+            await self._ensure_season_for_team_claim(guild_id=guild_id, team_query=team_query, league_key=league_key)
+            candidates = await self.find_team_in_active_seasons(guild_id, team_query, league_key=league_key)
         if not candidates:
             return {"ok": False, "reason": "team_not_found"}
         # prefer exact match
@@ -1092,14 +1227,19 @@ class SeasonService:
         return {"ok": True, "team": updated, "season_id": season_id}
 
     async def list_claimed_teams(self, guild_id: int | None, league_key: str | None = None) -> list[dict[str, Any]]:
-        seasons = await self.list_seasons(guild_id=guild_id, status="active")
-        if league_key:
-            seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
-        if not seasons and guild_id is not None:
-            seasons = await self.list_seasons(guild_id=None, status="active")
+        async def _collect(status: str | None):
+            seasons = await self.list_seasons(guild_id=guild_id, status=status)
             if league_key:
                 seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+            if not seasons and guild_id is not None:
+                seasons = await self.list_seasons(guild_id=None, status=status)
+                if league_key:
+                    seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
+            return seasons
+
+        seasons = await _collect("active")
         out = []
+        seen_team = set()
         for s in seasons:
             sid = str(s.get("id"))
             rows = await self.db.fetchall(
@@ -1110,7 +1250,27 @@ class SeasonService:
                 d = dict(r)
                 d["season_name"] = s.get("name")
                 d["season_league_key"] = s.get("league_key")
+                k = (str(d.get("season_id")), int(d.get("team_api_id") or 0))
+                if k in seen_team:
+                    continue
+                seen_team.add(k)
                 out.append(d)
+        if not out:
+            for s in await _collect(None):
+                sid = str(s.get("id"))
+                rows = await self.db.fetchall(
+                    "SELECT * FROM season_teams WHERE season_id=? AND manager_user_id IS NOT NULL ORDER BY team_name ASC",
+                    (sid,),
+                )
+                for r in rows:
+                    d = dict(r)
+                    d["season_name"] = s.get("name")
+                    d["season_league_key"] = s.get("league_key")
+                    k = (str(d.get("season_id")), int(d.get("team_api_id") or 0))
+                    if k in seen_team:
+                        continue
+                    seen_team.add(k)
+                    out.append(d)
         return out
 
     async def get_fixture_managers(self, season_id: str, fixture: dict[str, Any]) -> dict[str, int | None]:
@@ -1129,23 +1289,43 @@ class SeasonService:
         }
 
     async def get_user_team_in_active_season(self, guild_id: int | None, user_id: int, league_key: str | None = None) -> dict[str, Any] | None:
-        seasons = await self.list_seasons(guild_id=guild_id, status="active")
-        if league_key:
-            seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
-        if not seasons and guild_id is not None:
-            seasons = await self.list_seasons(guild_id=None, status="active")
-            if league_key:
-                seasons = [s for s in seasons if str(s.get("league_key")) == str(league_key)]
-        for s in seasons:
-            row = await self.db.fetchone(
-                "SELECT * FROM season_teams WHERE season_id=? AND manager_user_id=? LIMIT 1",
-                (str(s.get("id")), int(user_id)),
-            )
-            if row:
-                d = dict(row)
-                d["season_name"] = s.get("name")
-                d["season_league_key"] = s.get("league_key")
-                d["season_year"] = s.get("season_year")
-                d["_season"] = dict(s)
-                return d
+        async def _lookup(lk: str | None, status: str | None = "active"):
+            seasons = await self.list_seasons(guild_id=guild_id, status=status)
+            if lk:
+                seasons = [s for s in seasons if str(s.get("league_key")) == str(lk)]
+            if not seasons and guild_id is not None:
+                seasons = await self.list_seasons(guild_id=None, status=status)
+                if lk:
+                    seasons = [s for s in seasons if str(s.get("league_key")) == str(lk)]
+            # prefer active, then most recent
+            seasons.sort(key=lambda s: (0 if str(s.get("status")) == "active" else 1, str(s.get("created_at") or "")), reverse=False)
+            for s in seasons:
+                sid = str(s.get("id"))
+                row = await self.db.fetchone(
+                    "SELECT * FROM season_teams WHERE season_id=? AND manager_user_id=? LIMIT 1",
+                    (sid, int(user_id)),
+                )
+                if row:
+                    d = dict(row)
+                    # Ensure budgets are backfilled for migrated/zero rows
+                    try:
+                        if int(d.get("transfer_budget") or 0) == 0 and int(d.get("wage_budget") or 0) == 0:
+                            await self.ensure_season_budgets(sid)
+                            refreshed = await self.get_season_team(sid, int(d.get("team_api_id") or 0))
+                            if refreshed:
+                                d = refreshed
+                    except Exception:
+                        pass
+                    d["season_name"] = s.get("name")
+                    d["season_league_key"] = s.get("league_key")
+                    d["season_year"] = s.get("season_year")
+                    d["_season"] = dict(s)
+                    return d
+            return None
+
+        # league-specific active -> league-specific any -> any active -> any
+        for lk, st in ((league_key, "active"), (league_key, None), (None, "active"), (None, None)):
+            found = await _lookup(lk, st)
+            if found:
+                return found
         return None
