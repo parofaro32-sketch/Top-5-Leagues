@@ -370,10 +370,8 @@ class SeasonCog(commands.Cog):
             tr = res.get("transfer") or {}
             await interaction.followup.send(embed=success_embed(
                 "Transfer Pending",
-                f"**{tr.get('player_name')}**: **{tr.get('from_team_name')}** → **{tr.get('to_team_name')}**
-"
-                f"Transfer ID: `{tr.get('id')}`
-"
+                f"**{tr.get('player_name')}**: **{tr.get('from_team_name')}** → **{tr.get('to_team_name')}**\n"
+                f"Transfer ID: `{tr.get('id')}`\n"
                 f"Confirm with: `/finalizetransfer transfer_id:{tr.get('id')} confirm:CONFIRM`"
             ), ephemeral=True)
         except Exception as e:
