@@ -8,7 +8,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.ui.embeds import error_embed, info_embed, success_embed
+from bot.ui.embeds import error_embed, info_embed
+try:
+    from bot.ui.embeds import success_embed
+except Exception:  # pragma: no cover - fallback for partial deploys
+    success_embed = info_embed
 from data.football_data import list_league_keys, LEAGUE_DISPLAY_NAMES
 from services.season_service import LEAGUE_DISPLAY, LEAGUE_KEYS
 
@@ -297,7 +301,15 @@ class SeasonCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.season_group = SeasonGroup(self)
-        self.bot.tree.add_command(self.season_group)
+        try:
+            self.bot.tree.add_command(self.season_group)
+        except discord.app_commands.CommandAlreadyRegistered:
+            # Reload/partial state: replace existing group so new code takes effect.
+            try:
+                self.bot.tree.remove_command(self.season_group.name, type=self.season_group.type)
+            except Exception:
+                pass
+            self.bot.tree.add_command(self.season_group)
 
     async def cog_unload(self) -> None:
         try:
