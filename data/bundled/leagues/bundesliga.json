@@ -8,7 +8,7 @@
       "api_id": 133652,
       "name": "FC Augsburg",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/2/23/BC_Augsburg_logo.svg/330px-BC_Augsburg_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13365202,
@@ -576,7 +576,7 @@
       "api_id": 133661,
       "name": "Union Berlin",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/44/1._FC_Union_Berlin_Logo.svg/330px-1._FC_Union_Berlin_Logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13366101,
@@ -1204,7 +1204,7 @@
       "api_id": 133655,
       "name": "Werder Bremen",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/be/SV-Werder-Bremen-Logo.svg/330px-SV-Werder-Bremen-Logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 703947750,
@@ -1872,7 +1872,7 @@
       "api_id": 133650,
       "name": "Borussia Dortmund",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/67/Borussia_Dortmund_logo.svg/330px-Borussia_Dortmund_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13365001,
@@ -2480,7 +2480,7 @@
       "api_id": 900501,
       "name": "SV Elversberg",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d4/SV_Elversberg_Logo_2021.svg/330px-SV_Elversberg_Logo_2021.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 885712736,
@@ -3028,7 +3028,7 @@
       "api_id": 133814,
       "name": "Eintracht Frankfurt",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/4/4a/Commons-logo.svg/330px-Commons-logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
       "players": [
         {
           "api_id": 707252512,
@@ -3576,7 +3576,7 @@
       "api_id": 133653,
       "name": "SC Freiburg",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/4/4a/Commons-logo.svg/330px-Commons-logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13365304,
@@ -4124,7 +4124,7 @@
       "api_id": 900502,
       "name": "Hamburger SV",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f7/Hamburger_SV_logo.svg/330px-Hamburger_SV_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 811146368,
@@ -4752,7 +4752,7 @@
       "api_id": 133657,
       "name": "TSG Hoffenheim",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e7/Logo_TSG_Hoffenheim.svg/330px-Logo_TSG_Hoffenheim.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13365701,
@@ -5380,7 +5380,7 @@
       "api_id": 900503,
       "name": "1. FC Köln",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/01/1._FC_Koeln_Logo_2014%E2%80%93.svg/330px-1._FC_Koeln_Logo_2014%E2%80%93.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 769287944,
@@ -6028,7 +6028,7 @@
       "api_id": 133654,
       "name": "RB Leipzig",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/RB_Leipzig_2014_logo.svg?width=256",
       "players": [
         {
           "api_id": 707300773,
@@ -6616,7 +6616,7 @@
       "api_id": 133666,
       "name": "Bayer Leverkusen",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Bayer_04_Leverkusen_logo.svg?width=256",
       "players": [
         {
           "api_id": 821564598,
@@ -7224,7 +7224,7 @@
       "api_id": 133656,
       "name": "Mainz 05",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1b/1._FSV_Mainz_05_logo.svg/330px-1._FSV_Mainz_05_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 809510410,
@@ -7772,7 +7772,7 @@
       "api_id": 133659,
       "name": "Borussia Mönchengladbach",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/81/Borussia_M%C3%B6nchengladbach_logo.svg/330px-Borussia_M%C3%B6nchengladbach_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 744094448,
@@ -8420,7 +8420,7 @@
       "api_id": 133664,
       "name": "Bayern Munich",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/8d/FC_Bayern_M%C3%BCnchen_logo_%282024%29.svg/330px-FC_Bayern_M%C3%BCnchen_logo_%282024%29.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13366401,
@@ -8988,7 +8988,7 @@
       "api_id": 900504,
       "name": "SC Paderborn",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/67/SC_Paderborn_07_Logo_new.svg/330px-SC_Paderborn_07_Logo_new.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 848025676,
@@ -9656,7 +9656,7 @@
       "api_id": 900505,
       "name": "Schalke 04",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6d/FC_Schalke_04_Logo.svg/330px-FC_Schalke_04_Logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 821775359,
@@ -10304,7 +10304,7 @@
       "api_id": 133660,
       "name": "VfB Stuttgart",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/eb/VfB_Stuttgart_1893_Logo.svg/330px-VfB_Stuttgart_1893_Logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13366002,

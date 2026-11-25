@@ -308,6 +308,10 @@ class MatchState:
     message_id: int | None = None
     public_stats: dict[str, Any] = field(default_factory=dict)
     submission: dict[str, Any] = field(default_factory=dict)
+    season_id: str | None = None
+    fixture_id: int | None = None
+    league_key: str | None = None
+    competition_type: str = "friendly"
 
     @staticmethod
     def player_key(side: Side, player_api_id: int) -> str:
@@ -331,7 +335,8 @@ class MatchState:
                 "events": [e.to_dict() for e in self.events], "next_event_seq": self.next_event_seq,
                 "player_states": {k: v.to_dict() for k, v in self.player_states.items()},
                 "players_index": {k: v.to_dict() for k, v in self.players_index.items()}, "rng_seed": self.rng_seed,
-                "message_id": self.message_id, "public_stats": self.public_stats, "submission": self.submission}
+                "message_id": self.message_id, "public_stats": self.public_stats, "submission": self.submission,
+                "season_id": self.season_id, "fixture_id": self.fixture_id, "league_key": self.league_key, "competition_type": self.competition_type}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "MatchState":
@@ -345,7 +350,9 @@ class MatchState:
                    player_states={k: PlayerMatchState.from_dict(v) for k, v in (d.get("player_states") or {}).items()},
                    players_index={k: Player.from_dict(v) for k, v in (d.get("players_index") or {}).items()}, rng_seed=int(d.get("rng_seed", 0)),
                    message_id=d.get("message_id"), public_stats=dict(d.get("public_stats") or {}),
-                   submission=dict(d.get("submission") or {}))
+                   submission=dict(d.get("submission") or {}),
+                   season_id=d.get("season_id"), fixture_id=d.get("fixture_id"), league_key=d.get("league_key"),
+                   competition_type=d.get("competition_type", "friendly"))
 
 
 def new_match_id() -> str:

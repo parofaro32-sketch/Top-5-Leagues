@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import discord
 
-from services.tactics_service import normalize_tactics, parse_tactics_text, tactics_summary
+from services.tactics_service import normalize_tactics, parse_tactics_text_async, sanitize_tactics_summary, tactics_summary
 
 
 class TacticsJsonModal(discord.ui.Modal, title="Submit Tactics JSON"):
@@ -24,6 +24,7 @@ class TacticsJsonModal(discord.ui.Modal, title="Submit Tactics JSON"):
             data = json.loads(str(self.tactics_json.value))
             if not isinstance(data, dict):
                 raise ValueError("JSON must be an object")
+            data = normalize_tactics(data)
         except Exception as e:
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"Invalid tactics JSON: {e}", ephemeral=True)
@@ -55,9 +56,10 @@ class TacticsTextModal(discord.ui.Modal, title="Confirm Tactics"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         raw = str(self.tactics_text.value or "").strip()
         try:
-            updates = parse_tactics_text(raw)
+            settings = getattr(getattr(interaction, "client", None), "settings", None)
+            updates = await parse_tactics_text_async(raw, settings=settings)
             updates = normalize_tactics(updates)
-            summary = tactics_summary(updates)
+            summary = sanitize_tactics_summary(tactics_summary(updates))
         except Exception as e:
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"Could not parse tactics: {e}", ephemeral=True)

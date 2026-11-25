@@ -212,6 +212,142 @@ CREATE TABLE IF NOT EXISTS api_cache_meta (
     expires_at TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS seasons (
+    id TEXT PRIMARY KEY,
+    guild_id INTEGER,
+    league_key TEXT NOT NULL,
+    season_year INTEGER NOT NULL,
+    name TEXT,
+    status TEXT NOT NULL DEFAULT 'active', -- setup|active|completed|archived
+    current_matchday INTEGER NOT NULL DEFAULT 1,
+    total_matchdays INTEGER NOT NULL DEFAULT 0,
+    auto_advance INTEGER NOT NULL DEFAULT 0,
+    rules_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_seasons_guild_league ON seasons(guild_id, league_key, status);
+
+CREATE TABLE IF NOT EXISTS season_teams (
+    season_id TEXT NOT NULL,
+    team_api_id INTEGER NOT NULL,
+    team_name TEXT NOT NULL,
+    league_key TEXT NOT NULL,
+    manager_user_id INTEGER,
+    is_user_controlled INTEGER NOT NULL DEFAULT 0,
+    short_name TEXT,
+    logo TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (season_id, team_api_id),
+    FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_season_teams_season ON season_teams(season_id);
+
+CREATE TABLE IF NOT EXISTS fixtures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id TEXT NOT NULL,
+    league_key TEXT NOT NULL,
+    matchday INTEGER NOT NULL,
+    home_team_api_id INTEGER NOT NULL,
+    away_team_api_id INTEGER NOT NULL,
+    home_team_name TEXT NOT NULL,
+    away_team_name TEXT NOT NULL,
+    home_score INTEGER,
+    away_score INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending', -- pending|live|played|postponed|cancelled
+    match_id TEXT,
+    kickoff_at TEXT,
+    finalized_at TEXT,
+    finalized INTEGER NOT NULL DEFAULT 0,
+    meta_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fixtures_season_matchday ON fixtures(season_id, matchday);
+CREATE INDEX IF NOT EXISTS idx_fixtures_season_status ON fixtures(season_id, status);
+CREATE INDEX IF NOT EXISTS idx_fixtures_match_id ON fixtures(match_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fixtures_unique_pair ON fixtures(season_id, matchday, home_team_api_id, away_team_api_id);
+
+CREATE TABLE IF NOT EXISTS standings (
+    season_id TEXT NOT NULL,
+    league_key TEXT NOT NULL,
+    team_api_id INTEGER NOT NULL,
+    team_name TEXT NOT NULL,
+    played INTEGER NOT NULL DEFAULT 0,
+    won INTEGER NOT NULL DEFAULT 0,
+    drawn INTEGER NOT NULL DEFAULT 0,
+    lost INTEGER NOT NULL DEFAULT 0,
+    goals_for INTEGER NOT NULL DEFAULT 0,
+    goals_against INTEGER NOT NULL DEFAULT 0,
+    goal_difference INTEGER NOT NULL DEFAULT 0,
+    points INTEGER NOT NULL DEFAULT 0,
+    home_played INTEGER NOT NULL DEFAULT 0,
+    home_won INTEGER NOT NULL DEFAULT 0,
+    home_drawn INTEGER NOT NULL DEFAULT 0,
+    home_lost INTEGER NOT NULL DEFAULT 0,
+    home_gf INTEGER NOT NULL DEFAULT 0,
+    home_ga INTEGER NOT NULL DEFAULT 0,
+    away_played INTEGER NOT NULL DEFAULT 0,
+    away_won INTEGER NOT NULL DEFAULT 0,
+    away_drawn INTEGER NOT NULL DEFAULT 0,
+    away_lost INTEGER NOT NULL DEFAULT 0,
+    away_gf INTEGER NOT NULL DEFAULT 0,
+    away_ga INTEGER NOT NULL DEFAULT 0,
+    form TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (season_id, team_api_id),
+    FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_standings_season_rank ON standings(season_id, points DESC, goal_difference DESC, goals_for DESC);
+
+CREATE TABLE IF NOT EXISTS season_player_stats (
+    season_id TEXT NOT NULL,
+    team_api_id INTEGER NOT NULL,
+    player_api_id INTEGER NOT NULL,
+    player_name TEXT,
+    appearances INTEGER NOT NULL DEFAULT 0,
+    starts INTEGER NOT NULL DEFAULT 0,
+    minutes_played INTEGER NOT NULL DEFAULT 0,
+    goals INTEGER NOT NULL DEFAULT 0,
+    assists INTEGER NOT NULL DEFAULT 0,
+    yellow_cards INTEGER NOT NULL DEFAULT 0,
+    red_cards INTEGER NOT NULL DEFAULT 0,
+    clean_sheets INTEGER NOT NULL DEFAULT 0,
+    saves INTEGER NOT NULL DEFAULT 0,
+    rating_sum REAL NOT NULL DEFAULT 0,
+    rating_count INTEGER NOT NULL DEFAULT 0,
+    avg_rating REAL NOT NULL DEFAULT 0,
+    motm INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (season_id, team_api_id, player_api_id),
+    FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_sps_season_goals ON season_player_stats(season_id, goals DESC);
+
+CREATE TABLE IF NOT EXISTS season_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id TEXT,
+    guild_id INTEGER,
+    player_api_id INTEGER NOT NULL,
+    player_name TEXT,
+    from_team_api_id INTEGER,
+    from_team_name TEXT,
+    to_team_api_id INTEGER NOT NULL,
+    to_team_name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending', -- pending|confirmed|cancelled|failed
+    requested_by INTEGER,
+    confirmed_by INTEGER,
+    transfer_type TEXT DEFAULT 'manual',
+    note TEXT,
+    meta_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    confirmed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_season_transfers_status ON season_transfers(status, season_id);
 """
 
 
@@ -252,6 +388,8 @@ class Database:
                 pass
         for col, defn in [
             ("submission_deadline_at", "TEXT"), ("submission_state_json", "TEXT"),
+            ("season_id", "TEXT"), ("fixture_id", "INTEGER"),
+            ("league_key", "TEXT"), ("competition_type", "TEXT DEFAULT 'friendly'"),
         ]:
             try:
                 await self._ensure_column("matches", col, defn)
@@ -397,14 +535,16 @@ class Database:
 
     async def save_match(self, match: dict[str, Any]) -> None:
         await self.execute(
-            """INSERT INTO matches(id,guild_id,channel_id,message_id,home_team_api_id,away_team_api_id,home_team_name,away_team_name,mode,status,current_minute,phase,state_json,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO matches(id,guild_id,channel_id,message_id,home_team_api_id,away_team_api_id,home_team_name,away_team_name,mode,status,current_minute,phase,state_json,updated_at,season_id,fixture_id,league_key,competition_type)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET guild_id=excluded.guild_id,channel_id=excluded.channel_id,message_id=excluded.message_id,
                home_team_api_id=excluded.home_team_api_id,away_team_api_id=excluded.away_team_api_id,home_team_name=excluded.home_team_name,away_team_name=excluded.away_team_name,
-               mode=excluded.mode,status=excluded.status,current_minute=excluded.current_minute,phase=excluded.phase,state_json=excluded.state_json,updated_at=excluded.updated_at""",
+               mode=excluded.mode,status=excluded.status,current_minute=excluded.current_minute,phase=excluded.phase,state_json=excluded.state_json,updated_at=excluded.updated_at,
+               season_id=excluded.season_id,fixture_id=excluded.fixture_id,league_key=excluded.league_key,competition_type=excluded.competition_type""",
             (match["id"], match.get("guild_id"), match.get("channel_id"), match.get("message_id"), match["home_team_api_id"], match["away_team_api_id"],
              match["home_team_name"], match["away_team_name"], match["mode"], match["status"], match.get("current_minute", 0), match.get("phase", "pre_kickoff"),
-             self.dumps(match.get("state") or match), utc_now_iso()))
+             self.dumps(match.get("state") or match), utc_now_iso(),
+             match.get("season_id"), match.get("fixture_id"), match.get("league_key"), match.get("competition_type", "friendly")))
 
     async def get_match(self, match_id: str) -> aiosqlite.Row | None:
         return await self.fetchone("SELECT * FROM matches WHERE id=?", (match_id,))

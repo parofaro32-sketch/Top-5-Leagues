@@ -2808,7 +2808,7 @@
       "api_id": 900301,
       "name": "Deportivo La Coruña",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/RC_Deportivo_La_Coru%C3%B1a_logo.svg?width=256",
       "players": [
         {
           "api_id": 822447571,
@@ -3416,7 +3416,7 @@
       "api_id": 900302,
       "name": "Elche CF",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Elche_CF_logo.svg?width=256",
       "players": [
         {
           "api_id": 889302476,
@@ -5220,7 +5220,7 @@
       "api_id": 900303,
       "name": "Levante UD",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Levante_Uni%C3%B3n_Deportiva%2C_S.A.D._logo.svg?width=256",
       "players": [
         {
           "api_id": 774319527,
@@ -5748,7 +5748,7 @@
       "api_id": 900304,
       "name": "Málaga CF",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/M%C3%A1laga_CF_logo.svg?width=256",
       "players": [
         {
           "api_id": 893373311,
@@ -6904,7 +6904,7 @@
       "api_id": 900305,
       "name": "Racing Santander",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Real_Racing_Club_de_Santander_logo.svg?width=256",
       "players": [
         {
           "api_id": 795763174,

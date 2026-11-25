@@ -2131,6 +2131,27 @@ class SimCog(commands.Cog):
                     await channel.send(_clamp("📊 Player match and career statistics updated.", 1900))
             except Exception:
                 logger.exception("Failed to persist player stats match_id=%s", session.state.id)
+            # Season automation: finalize fixture, update standings/season stats, advance matchday if complete
+            try:
+                season_service = getattr(self.bot, "season_service", None)
+                if season_service is not None:
+                    fin = await season_service.finalize_match_if_season_fixture(session.state)
+                    if fin.get("season_fixture") and fin.get("ok"):
+                        fx = fin.get("fixture") or {}
+                        if fin.get("already_finalized"):
+                            pass
+                        else:
+                            await channel.send(_clamp(f"🏆 Season updated: standings and season stats recorded for matchday fixture ({session.state.home.team.name} {fin.get('home_score', session.state.home.score)}-{fin.get('away_score', session.state.away.score)} {session.state.away.team.name}).", 1900))
+                        # Auto-advance matchday if complete
+                        sid = getattr(session.state, "season_id", None)
+                        if sid:
+                            adv = await season_service.advance_matchday_if_complete(str(sid))
+                            if adv.get("advanced"):
+                                await channel.send(_clamp(f"📅 Matchday {adv.get('from_matchday')} complete. **Matchday {adv.get('to_matchday')}** fixtures are now loaded.", 1900))
+                            elif adv.get("reason") == "season_completed":
+                                await channel.send(_clamp("🏁 Season completed! All matchdays have been played.", 1900))
+            except Exception:
+                logger.exception("Failed to finalize season fixture match_id=%s", session.state.id)
         except Exception:
             logger.exception("MATCH_FLOW fatal unhandled error match_id=%s", getattr(getattr(session, 'state', None), 'id', None))
             try:

@@ -8,7 +8,7 @@
       "api_id": 134782,
       "name": "Atalanta",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/AtalantaBC.svg?width=256",
       "players": [
         {
           "api_id": 13478204,
@@ -536,7 +536,7 @@
       "api_id": 134781,
       "name": "Bologna",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Bologna_F.C._1909_logo.svg?width=256",
       "players": [
         {
           "api_id": 13478101,
@@ -1104,7 +1104,7 @@
       "api_id": 134783,
       "name": "Cagliari",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Cagliari_Calcio_Logo_2015.svg?width=256",
       "players": [
         {
           "api_id": 13478301,
@@ -1732,7 +1732,7 @@
       "api_id": 134243,
       "name": "Como",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Calcio_Como_-_logo_(Italy%2C_2019-).svg?width=256",
       "players": [
         {
           "api_id": 881810641,
@@ -2280,7 +2280,7 @@
       "api_id": 134675,
       "name": "Fiorentina",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/2022_ACF_Fiorentina_logo.svg?width=256",
       "players": [
         {
           "api_id": 843750029,
@@ -2768,7 +2768,7 @@
       "api_id": 900401,
       "name": "Frosinone",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Frosinone_Calcio_logo.svg?width=256",
       "players": [
         {
           "api_id": 778529750,
@@ -3356,7 +3356,7 @@
       "api_id": 133671,
       "name": "Genoa",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Genoa_CFC_crest.svg?width=256",
       "players": [
         {
           "api_id": 727536459,
@@ -3944,7 +3944,7 @@
       "api_id": 133681,
       "name": "Inter Milan",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/FC_Internazionale_Milano_2021.svg?width=256",
       "players": [
         {
           "api_id": 13368102,
@@ -4452,7 +4452,7 @@
       "api_id": 133676,
       "name": "Juventus",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Juventus_FC_2017_logo.svg?width=256",
       "players": [
         {
           "api_id": 13365801,
@@ -5060,7 +5060,7 @@
       "api_id": 133674,
       "name": "Lazio",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/S.S._Lazio_badge.svg?width=256",
       "players": [
         {
           "api_id": 751255564,
@@ -5708,7 +5708,7 @@
       "api_id": 133677,
       "name": "Lecce",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/US_Lecce_logo.svg?width=256",
       "players": [
         {
           "api_id": 898461639,
@@ -6296,7 +6296,7 @@
       "api_id": 133667,
       "name": "AC Milan",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Logo_of_AC_Milan.svg?width=256",
       "players": [
         {
           "api_id": 769935824,
@@ -6864,7 +6864,7 @@
       "api_id": 133685,
       "name": "Monza",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/AC_Monza_logo_(2021).svg?width=256",
       "players": [
         {
           "api_id": 771613705,
@@ -7492,7 +7492,7 @@
       "api_id": 133670,
       "name": "Napoli",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/SSC_Napoli_2024_(deep_blue_navy).svg?width=256",
       "players": [
         {
           "api_id": 13367001,
@@ -8020,7 +8020,7 @@
       "api_id": 133680,
       "name": "Parma",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Logo_Parma_Calcio_1913_(adozione_2016).svg?width=256",
       "players": [
         {
           "api_id": 776153122,
@@ -8568,7 +8568,7 @@
       "api_id": 133668,
       "name": "Roma",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/AS_Roma_Logo_2017.svg?width=256",
       "players": [
         {
           "api_id": 747357604,
@@ -9096,7 +9096,7 @@
       "api_id": 900402,
       "name": "Sassuolo",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/4/4a/Commons-logo.svg/330px-Commons-logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
       "players": [
         {
           "api_id": 803822102,
@@ -9784,7 +9784,7 @@
       "api_id": 133673,
       "name": "Torino",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/4/4a/Commons-logo.svg/330px-Commons-logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
       "players": [
         {
           "api_id": 788104067,
@@ -10352,7 +10352,7 @@
       "api_id": 133679,
       "name": "Udinese",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/4/4a/Commons-logo.svg/330px-Commons-logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13367910,
@@ -10920,7 +10920,7 @@
       "api_id": 133684,
       "name": "Venezia",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/4/4a/Commons-logo.svg/330px-Commons-logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
       "players": [
         {
           "api_id": 787249439,

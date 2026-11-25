@@ -31,7 +31,11 @@ def shot(state: MatchState, side: Side, pid: int, on_target: bool, xg: float = 0
 
 
 def goal(state: MatchState, side: Side, scorer: int, assist: int | None = None):
-    _t(state, side).score += 1
+    t = _t(state, side)
+    # Defense-in-depth: prevent impossible score manipulation/bugs
+    if int(t.score) >= 20:
+        return
+    t.score += 1
     sp = _p(state, side, scorer)
     if sp:
         sp.goals += 1
@@ -61,11 +65,14 @@ def card(state: MatchState, side: Side, pid: int, yellow=False, red=False):
     t = _t(state, side)
     p = _p(state, side, pid)
     if yellow:
-        t.yellow_cards += 1
-        if p:
+        if int(t.yellow_cards) < 20:
+            t.yellow_cards += 1
+        if p and int(p.yellow_cards) < 2:
             p.yellow_cards += 1
     if red:
-        t.red_cards += 1
+        # Defense-in-depth: cap red cards to a sane limit
+        if int(t.red_cards) < 5:
+            t.red_cards += 1
         if p:
             p.red_card = True
 

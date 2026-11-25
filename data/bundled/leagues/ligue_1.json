@@ -8,7 +8,7 @@
       "api_id": 133705,
       "name": "Angers SCO",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f6/Angers_Sporting_Club_de_l%27Ouest_logo.svg/330px-Angers_Sporting_Club_de_l%27Ouest_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 785049811,
@@ -496,7 +496,7 @@
       "api_id": 133717,
       "name": "AJ Auxerre",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/AJ_Auxerre.svg?width=256",
       "players": [
         {
           "api_id": 793648142,
@@ -1204,7 +1204,7 @@
       "api_id": 133704,
       "name": "Stade Brestois 29",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Stade_Brestois_29_logo.svg?width=256",
       "players": [
         {
           "api_id": 876983879,
@@ -1732,7 +1732,7 @@
       "api_id": 900601,
       "name": "Le Havre AC",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/9/9a/Stade_oceane_15-8-2012.jpg/330px-Stade_oceane_15-8-2012.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 750880086,
@@ -2280,7 +2280,7 @@
       "api_id": 900602,
       "name": "Le Mans FC",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Le_Mans_FC_logo.svg?width=256",
       "players": [
         {
           "api_id": 796543565,
@@ -2888,7 +2888,7 @@
       "api_id": 133716,
       "name": "RC Lens",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6d/Stade_Bollaert_Delelis.JPG/330px-Stade_Bollaert_Delelis.JPG?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 754625970,
@@ -3496,7 +3496,7 @@
       "api_id": 133712,
       "name": "Lille OSC",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Lille_OSC_2018_logo.svg?width=256",
       "players": [
         {
           "api_id": 745094041,
@@ -4044,7 +4044,7 @@
       "api_id": 900603,
       "name": "FC Lorient",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/FC_Lorient_logo.svg?width=256",
       "players": [
         {
           "api_id": 825742707,
@@ -4592,7 +4592,7 @@
       "api_id": 133713,
       "name": "Olympique Lyonnais",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Olympique_Lyonnais.svg?width=256",
       "players": [
         {
           "api_id": 13373501,
@@ -5200,7 +5200,7 @@
       "api_id": 133707,
       "name": "Olympique Marseille",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/4f/Olympique_de_Marseille_2026_logo.svg/330px-Olympique_de_Marseille_2026_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13370702,
@@ -5708,7 +5708,7 @@
       "api_id": 133711,
       "name": "AS Monaco",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Logo_AS_Monaco_FC_2021.svg?width=256",
       "players": [
         {
           "api_id": 815848510,
@@ -6276,7 +6276,7 @@
       "api_id": 133715,
       "name": "OGC Nice",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/OGC_Nice_logo.svg?width=256",
       "players": [
         {
           "api_id": 780314590,
@@ -6904,7 +6904,7 @@
       "api_id": 900604,
       "name": "Paris FC",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/7/7c/Paris_Football_Club_logo_%282024%29.svg/330px-Paris_Football_Club_logo_%282024%29.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 831269385,
@@ -7412,7 +7412,7 @@
       "api_id": 133714,
       "name": "Paris Saint-Germain",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/en/thumb/a/a7/Paris_Saint-Germain_F.C..svg/330px-Paris_Saint-Germain_F.C..svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 13371403,
@@ -7940,7 +7940,7 @@
       "api_id": 133719,
       "name": "Stade Rennais FC",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b5/Roazhon_Park_20190814.jpg/330px-Roazhon_Park_20190814.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 828405685,
@@ -8448,7 +8448,7 @@
       "api_id": 133720,
       "name": "RC Strasbourg Alsace",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Racing_Club_de_Strasbourg_Alsace_logo.svg?width=256",
       "players": [
         {
           "api_id": 783390136,
@@ -9076,7 +9076,7 @@
       "api_id": 133718,
       "name": "Toulouse FC",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Toulouse_FC_2018_logo.svg?width=256",
       "players": [
         {
           "api_id": 13371803,
@@ -9724,7 +9724,7 @@
       "api_id": 900605,
       "name": "ES Troyes AC",
       "short_name": null,
-      "logo": null,
+      "logo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a9/ESTAC_Troyes_Logo.svg/330px-ESTAC_Troyes_Logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
       "players": [
         {
           "api_id": 888616351,

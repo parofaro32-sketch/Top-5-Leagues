@@ -25,6 +25,10 @@ class Settings:
     cache_ttl_hours: int
     api_request_timeout: int
     api_max_retries: int
+    llm_api_key: str
+    llm_base_url: str
+    llm_model: str
+    llm_timeout: int
 
     @property
     def has_discord_token(self) -> bool:
@@ -33,6 +37,10 @@ class Settings:
     @property
     def has_football_api_key(self) -> bool:
         return bool(self.football_api_key and self.football_api_key not in {"", "your_api_football_key_here"})
+
+    @property
+    def has_llm(self) -> bool:
+        return bool(self.llm_api_key and self.llm_api_key not in {"", "your_llm_api_key_here"})
 
 
 def load_settings() -> Settings:
@@ -58,4 +66,8 @@ def load_settings() -> Settings:
         cache_ttl_hours=int(os.getenv("CACHE_TTL_HOURS", "24")),
         api_request_timeout=int(os.getenv("API_REQUEST_TIMEOUT", "20")),
         api_max_retries=int(os.getenv("API_MAX_RETRIES", "3")),
+        llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
+        llm_base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").strip().rstrip("/"),
+        llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
+        llm_timeout=int(os.getenv("LLM_TIMEOUT", "20")),
     )

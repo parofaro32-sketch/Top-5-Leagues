@@ -9,6 +9,7 @@ from config import Settings
 from data.football_data import FootballDataService
 from db.database import Database
 from services.match_service import MatchService
+from services.season_service import SeasonService
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ class FootballBot(commands.Bot):
         self.db = db
         self.football_data = FootballDataService(settings, db)
         self.match_service = MatchService(db)
+        self.season_service = SeasonService(db)
 
     async def setup_hook(self) -> None:
         # Ensure data seeded
@@ -37,6 +39,7 @@ class FootballBot(commands.Bot):
             "bot.cogs.tactics",
             "bot.cogs.ratings",
             "bot.cogs.squad",
+            "bot.cogs.season",
         ):
             try:
                 await self.load_extension(ext)

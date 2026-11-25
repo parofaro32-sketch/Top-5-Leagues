@@ -3396,7 +3396,7 @@
       "api_id": 900201,
       "name": "Coventry City",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Coventry_City_FC_crest.svg?width=256",
       "players": [
         {
           "api_id": 750481379,
@@ -5548,7 +5548,7 @@
       "api_id": 900202,
       "name": "Hull City",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Hull_City_A.F.C._logo.svg?width=256",
       "players": [
         {
           "api_id": 723889966,
@@ -6216,7 +6216,7 @@
       "api_id": 900203,
       "name": "Ipswich Town",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Ipswich_Town.svg?width=256",
       "players": [
         {
           "api_id": 764053433,
@@ -6784,7 +6784,7 @@
       "api_id": 198340,
       "name": "Leeds United",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Leeds_United_F.C._logo.svg?width=256",
       "players": [
         {
           "api_id": 198340227182,
@@ -10092,7 +10092,7 @@
       "api_id": 198244,
       "name": "Sunderland",
       "short_name": null,
-      "logo": null,
+      "logo": "https://commons.wikimedia.org/wiki/Special:FilePath/Logo_Sunderland.svg?width=256",
       "players": [
         {
           "api_id": 809426333,

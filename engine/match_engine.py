@@ -340,6 +340,19 @@ class MatchEngine:
 
     def apply_tactical_change(self, side: Side, updates: dict[str, Any], summary: str | None = None) -> dict[str, Any]:
         team = self.state.team(side)
+        # Defense-in-depth: accept only safe tactical updates
+        try:
+            from services.tactics_service import normalize_tactics, sanitize_tactics_summary
+            updates = normalize_tactics(updates or {})
+            summary = sanitize_tactics_summary(summary)
+        except Exception:
+            # Fallback: keep only formation hint if valid, drop rest
+            safe = {}
+            fm = (updates or {}).get("formation")
+            if isinstance(fm, str) and fm in {"3-4-3","3-5-2","3-4-1-2","4-1-4-1","4-2-3-1","4-2-2-2","4-3-1-2","4-3-3","4-4-1-1","4-4-2","4-5-1","5-3-2","5-4-1"}:
+                safe["formation"] = fm
+            updates = safe
+            summary = "tactical adjustment"
         def merge(b,d):
             o = copy.deepcopy(b)
             for k,v in (d or {}).items():
@@ -347,7 +360,7 @@ class MatchEngine:
                 else: o[k]=v
             return o
         team.tactics = merge(team.tactics or default_tactics(), updates or {})
-        new_form = updates.get("formation") or (updates.get("lineup") or {}).get("formation")
+        new_form = updates.get("formation")
         if new_form and isinstance(new_form,str):
             self._apply_formation(side, new_form)
         team.tactical_changes.append({"minute": self.state.minute, "summary": summary or "tactical adjustment", "updates": updates})

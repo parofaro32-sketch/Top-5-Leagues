@@ -46,6 +46,10 @@ class ActiveMatchSession:
                 "current_minute": self.state.minute,
                 "phase": self.state.phase,
                 "state": self.state.to_dict(),
+                "season_id": self.state.season_id,
+                "fixture_id": self.state.fixture_id,
+                "league_key": self.state.league_key,
+                "competition_type": self.state.competition_type,
             })
             await self.db.upsert_match_participant(match_id=self.state.id, side="home", team_api_id=self.state.home.team.api_id, manager_user_id=self.home_manager_id, is_bot=self.home_manager_id is None)
             await self.db.upsert_match_participant(match_id=self.state.id, side="away", team_api_id=self.state.away.team.api_id, manager_user_id=self.away_manager_id, is_bot=self.away_manager_id is None)
@@ -141,6 +145,14 @@ class ActiveMatchSession:
             for sub in (substitutions or []):
                 evs.append(self.engine.apply_substitution(side, int(sub["off_player_id"]), int(sub["on_player_id"]), reason=sub.get("reason")))
             if tactics_updates or summary:
+                # Security: strictly normalize tactics and sanitize summary; drop outcome-manipulation keys
+                try:
+                    from services.tactics_service import normalize_tactics, sanitize_tactics_summary
+                    tactics_updates = normalize_tactics(tactics_updates or {})
+                    summary = sanitize_tactics_summary(summary)
+                except Exception:
+                    tactics_updates = {}
+                    summary = None
                 evs.append(self.engine.apply_tactical_change(side, tactics_updates or {}, summary=summary))
             if mark_done:
                 self.engine.mark_break_decision(side, True)
@@ -328,7 +340,8 @@ class MatchService:
                              home_lineup: Lineup | None = None, away_lineup: Lineup | None = None,
                              home_tactics: dict[str, Any] | None = None, away_tactics: dict[str, Any] | None = None,
                              home_manager_id: int | None = None, away_manager_id: int | None = None,
-                             home_custom_players: list[dict[str, Any]] | None = None, away_custom_players: list[dict[str, Any]] | None = None) -> ActiveMatchSession:
+                             home_custom_players: list[dict[str, Any]] | None = None, away_custom_players: list[dict[str, Any]] | None = None,
+                             season_id: str | None = None, fixture_id: int | None = None, league_key: str | None = None, competition_type: str = "friendly") -> ActiveMatchSession:
         import logging
         _log = logging.getLogger(__name__)
         rng = random.Random()
@@ -377,10 +390,15 @@ class MatchService:
             home_players=home_players, away_players=away_players,
         )
         session = ActiveMatchSession(state=engine.state, engine=engine, db=self.db, home_manager_id=home_manager_id, away_manager_id=away_manager_id)
+        # Season/competition linkage
+        session.state.season_id = season_id
+        session.state.fixture_id = fixture_id
+        session.state.league_key = league_key
+        session.state.competition_type = competition_type or "friendly"
         # Submission / setup tracking
         sub = session.state.submission
-        sub.setdefault("competition", "Friendly")
-        sub.setdefault("match_type", "Friendly")
+        sub.setdefault("competition", "League" if competition_type == "league" else "Friendly")
+        sub.setdefault("match_type", "League" if competition_type == "league" else "Friendly")
         sub.setdefault("stadium", home_team.get("venue_name") or home_team.get("venue") or f"{ht.name} Stadium")
         sub.setdefault("timeout_policy", "cancel")  # configurable: cancel | forfeit | admin
         sub.setdefault("home_lineup_submitted", not home_needs_human)
