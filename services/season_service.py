@@ -109,6 +109,19 @@ class SeasonService:
         rows = await self.db.fetchall(q, tuple(params))
         return [dict(r) for r in rows]
 
+    async def archive_season(self, season_id: str) -> dict[str, Any] | None:
+        season = await self.get_season(str(season_id))
+        if not season:
+            return None
+        if str(season.get("status") or "") == "archived":
+            return season
+        now = utc_now_iso()
+        await self.db.execute(
+            "UPDATE seasons SET status='archived', updated_at=? WHERE id=?",
+            (now, str(season_id)),
+        )
+        return await self.get_season(str(season_id))
+
     async def create_season(self, *, guild_id: int | None, league_key: str, season_year: int, name: str | None = None, auto_advance: bool = False) -> dict[str, Any]:
         if league_key not in LEAGUE_KEYS:
             raise ValueError(f"Unsupported league_key: {league_key}")

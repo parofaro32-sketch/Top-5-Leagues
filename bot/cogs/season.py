@@ -451,6 +451,47 @@ class SeasonCog(commands.Cog):
             lines.append(f"`{i:>2}.` **{r.get('player_name','?')}** ({r.get('team_name','?')}) — {int(r.get('assists',0))}A {int(r.get('goals',0))}G, {float(r.get('avg_rating',0.0)):.2f} avg")
         await interaction.followup.send(embed=info_embed(f"Top Assisters — {season.get('name')}", "\n".join(lines)[:3900]), ephemeral=True)
 
+    @app_commands.command(name="archive", description="Archive the current active season for a league (admin only)")
+    @app_commands.describe(league="League season to archive (optional; uses current active season if omitted)")
+    @app_commands.choices(league=_league_choices())
+    async def archive(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None):
+        await interaction.response.defer(ephemeral=True)
+        perms = interaction.user.guild_permissions if interaction.guild else None
+        is_admin = bool(perms and (perms.administrator or perms.manage_guild))
+        if not is_admin:
+            await interaction.followup.send(embed=error_embed("Permission Denied", "Only server administrators can archive a season."), ephemeral=True)
+            return
+
+        league_key = league.value if league else None
+        ss = self.bot.season_service
+        season = await ss.get_active_season(interaction.guild_id, league_key=league_key)
+        if not season:
+            msg = "No active season found for that league." if league_key else "No active season found."
+            await interaction.followup.send(embed=error_embed("No Active Season", msg), ephemeral=True)
+            return
+
+        try:
+            archived = await ss.archive_season(str(season["id"]))
+        except Exception as e:
+            logger.exception("archive season failed")
+            await interaction.followup.send(embed=error_embed("Archive Failed", str(e)), ephemeral=True)
+            return
+
+        if not archived:
+            await interaction.followup.send(embed=error_embed("Archive Failed", "Season could not be archived."), ephemeral=True)
+            return
+
+        name = archived.get("name") or LEAGUE_DISPLAY.get(archived.get("league_key"), archived.get("league_key"))
+        await interaction.followup.send(
+            embed=success_embed(
+                "Season Archived",
+                f"Archived **{name}** (`{archived.get('id')}`).\n"
+                f"League: {LEAGUE_DISPLAY.get(archived.get('league_key'), archived.get('league_key'))}\n"
+                f"This season is no longer active and will not appear as the current selected league season."
+            ),
+            ephemeral=True,
+        )
+
     @app_commands.command(name="transfer", description="Create a pending transfer request (confirm with /finalizetransfer)")
     @app_commands.describe(player="Player name or ID", to_team="Destination team name", league="League for team search (optional)", note="Optional note")
     @app_commands.choices(league=_league_choices())
