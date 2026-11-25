@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS players (
     overall REAL,
     potential REAL,
     status TEXT DEFAULT 'active',
+    market_value INTEGER,
     attributes_json TEXT,
     statistics_json TEXT,
     raw_json TEXT,
@@ -500,6 +501,7 @@ class Database:
             ("dob", "TEXT"), ("height_cm", "INTEGER"), ("weight_kg", "INTEGER"),
             ("preferred_foot", "TEXT"), ("overall", "REAL"), ("potential", "REAL"),
             ("status", "TEXT DEFAULT 'active'"),
+            ("market_value", "INTEGER"),
         ]:
             try:
                 await self._ensure_column("players", col, defn)
@@ -601,21 +603,26 @@ class Database:
             return
         rows = []
         for p in players:
+            mv = p.get("market_value")
+            try:
+                mv = int(mv) if mv is not None and str(mv).strip() != "" else None
+            except Exception:
+                mv = None
             rows.append((
                 int(p["api_id"]), season, team_api_id, p.get("name") or "", p.get("firstname"), p.get("lastname"),
                 p.get("age"), p.get("dob"), p.get("nationality"), p.get("photo"), p.get("position"), p.get("detailed_position"),
                 p.get("number"), 1 if p.get("injured") else 0, p.get("height_cm"), p.get("weight_kg"), p.get("preferred_foot"),
-                p.get("overall"), p.get("potential"), p.get("status") or "active",
+                p.get("overall"), p.get("potential"), p.get("status") or "active", mv,
                 self.dumps(p.get("attributes") or {}), self.dumps(p.get("statistics") or {}), self.dumps(p.get("raw") or p), utc_now_iso(),
             ))
         await self.executemany(
-            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,dob,nationality,photo,position,detailed_position,number,injured,height_cm,weight_kg,preferred_foot,overall,potential,status,attributes_json,statistics_json,raw_json,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """INSERT INTO players(api_id,season,team_api_id,name,firstname,lastname,age,dob,nationality,photo,position,detailed_position,number,injured,height_cm,weight_kg,preferred_foot,overall,potential,status,market_value,attributes_json,statistics_json,raw_json,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(api_id,team_api_id,season) DO UPDATE SET
                name=excluded.name,firstname=excluded.firstname,lastname=excluded.lastname,age=excluded.age,dob=excluded.dob,nationality=excluded.nationality,
                photo=excluded.photo,position=excluded.position,detailed_position=excluded.detailed_position,number=excluded.number,
                injured=excluded.injured,height_cm=excluded.height_cm,weight_kg=excluded.weight_kg,preferred_foot=excluded.preferred_foot,
-               overall=excluded.overall,potential=excluded.potential,status=excluded.status,
+               overall=excluded.overall,potential=excluded.potential,status=excluded.status,market_value=excluded.market_value,
                attributes_json=excluded.attributes_json,statistics_json=excluded.statistics_json,raw_json=excluded.raw_json,updated_at=excluded.updated_at""", rows)
 
     async def delete_stale_players_for_team(self, team_api_id: int, season: int, keep_api_ids: list[int]) -> None:

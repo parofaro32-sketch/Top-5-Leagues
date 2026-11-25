@@ -134,6 +134,11 @@ def normalize_player(player: dict[str, Any], team_api_id: int) -> dict[str, Any]
         p["potential"] = pot
     p.setdefault("status", "active")
     p.setdefault("injured", False)
+    mv = p.get("market_value")
+    try:
+        p["market_value"] = int(mv) if mv is not None and str(mv).strip() != "" else None
+    except Exception:
+        p["market_value"] = None
     return p
 
 
