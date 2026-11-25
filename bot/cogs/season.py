@@ -492,7 +492,7 @@ class SeasonCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="transfer", description="Create a pending transfer request (confirm with /finalizetransfer)")
+    @app_commands.command(name="transfer", description="Transfer a player to a team (auto-finalized)")
     @app_commands.describe(player="Player name or ID", to_team="Destination team name", league="League for team search (optional)", note="Optional note")
     @app_commands.choices(league=_league_choices())
     async def transfer(self, interaction: discord.Interaction, player: str, to_team: str, league: app_commands.Choice[str] | None = None, note: str | None = None):
@@ -540,40 +540,22 @@ class SeasonCog(commands.Cog):
                 note=note,
             )
             if not res.get("ok"):
-                await interaction.followup.send(embed=error_embed("Transfer Create Failed", str(res.get("reason") or "unknown")), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Transfer Failed", str(res.get("reason") or "unknown")), ephemeral=True)
                 return
             tr = res.get("transfer") or {}
+            # auto-finalize
+            conf = await self.bot.season_service.confirm_transfer(int(tr.get("id")), confirmed_by=interaction.user.id if interaction.user else None)
+            if not conf.get("ok"):
+                await interaction.followup.send(embed=error_embed("Transfer Failed", str(conf.get("reason") or "auto-finalize failed")), ephemeral=True)
+                return
             await interaction.followup.send(embed=success_embed(
-                "Transfer Pending",
-                f"**{tr.get('player_name')}**: **{tr.get('from_team_name')}** → **{tr.get('to_team_name')}**\n"
-                f"Transfer ID: `{tr.get('id')}`\n"
-                f"Confirm with: `/finalizetransfer transfer_id:{tr.get('id')} confirm:CONFIRM`"
+                "Transfer Completed",
+                f"**{conf.get('player_name')}** moved from **{conf.get('from_team_name')}** to **{conf.get('to_team_name')}**.\n"
+                f"Transfer ID: `{tr.get('id')}` | Status: confirmed (auto-finalized)"
             ), ephemeral=True)
         except Exception as e:
             logger.exception("transfer create failed")
-            await interaction.followup.send(embed=error_embed("Transfer Create Failed", str(e)), ephemeral=True)
-
-    @app_commands.command(name="finalizetransfer", description="Confirm and apply a pending transfer (admin/manager flow)")
-    @app_commands.describe(transfer_id="Pending transfer ID", confirm="Type CONFIRM to apply the transfer")
-    async def finalizetransfer(self, interaction: discord.Interaction, transfer_id: int, confirm: str):
-        await interaction.response.defer(ephemeral=True)
-        if str(confirm).strip().upper() != "CONFIRM":
-            await interaction.followup.send(embed=error_embed("Confirmation Required", "Type `CONFIRM` in the confirm field to apply this transfer."), ephemeral=True)
-            return
-        try:
-            res = await self.bot.season_service.confirm_transfer(int(transfer_id), confirmed_by=interaction.user.id if interaction.user else None)
-            if not res.get("ok"):
-                await interaction.followup.send(embed=error_embed("Transfer Failed", str(res.get("reason") or "unknown error")), ephemeral=True)
-                return
-            await interaction.followup.send(embed=success_embed(
-                "Transfer Finalized",
-                f"**{res.get('player_name')}** moved from **{res.get('from_team_name')}** to **{res.get('to_team_name')}**.\n"
-                f"Transfer ID: `{transfer_id}` | Status: confirmed"
-            ), ephemeral=True)
-        except Exception as e:
-            logger.exception("finalizetransfer failed")
             await interaction.followup.send(embed=error_embed("Transfer Failed", str(e)), ephemeral=True)
-
 
     @app_commands.command(name="claim", description="Claim a team (works even if no season is open)")
     @app_commands.describe(team="Team name (e.g. Liverpool)", league="League (optional)")

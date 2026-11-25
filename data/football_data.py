@@ -148,7 +148,7 @@ class FootballDataService:
 
     async def ensure_seeded(self) -> None:
         # Seed bundled teams/players into DB for fast lookup and persistence
-        seed_key = "bundled_seed_v10_logos_season_automation"
+        seed_key = "bundled_seed_v11_free_agents"
         meta = await self.db.get_cache_meta(seed_key)
         if meta:
             return
@@ -164,6 +164,34 @@ class FootballDataService:
                     await self.db.delete_stale_players_for_team(int(t["api_id"]), self.season, keep_ids)
                 except Exception:
                     logger.exception("Failed to delete stale players for team_api_id=%s", t.get("api_id"))
+        # Seed free agents (outside top 5 leagues / unattached) as a pseudo-team
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            fa_path = _Path(__file__).resolve().parent / "bundled" / "free_agents.json"
+            if fa_path.exists():
+                with fa_path.open("r", encoding="utf-8") as f:
+                    fa_data = _json.load(f)
+                for t in fa_data.get("teams", []):
+                    team = {
+                        "api_id": int(t["api_id"]),
+                        "name": t.get("name"),
+                        "short_name": t.get("short_name"),
+                        "code": t.get("code") or t.get("short_name"),
+                        "logo": t.get("logo"),
+                        "league_id": fa_data.get("league_id"),
+                        "league_name": fa_data.get("league_name") or "Free Agents",
+                        "country": fa_data.get("country") or "World",
+                        "venue_name": t.get("venue_name"),
+                    }
+                    await self.db.upsert_teams([team], self.season)
+                    raw_players = t.get("players", [])
+                    players = [normalize_player(p, int(t["api_id"])) for p in raw_players]
+                    await self.db.upsert_players(players, int(t["api_id"]), self.season)
+                    keep_ids = [int(p["api_id"]) for p in players if p.get("api_id") is not None]
+                    await self.db.delete_stale_players_for_team(int(t["api_id"]), self.season, keep_ids)
+        except Exception:
+            logger.exception("Failed to seed free agents")
         await self.db.set_cache_meta(seed_key, {"ok": True, "season": self.season}, None)
 
     async def list_teams(self, query: str | None = None, league: str | None = None, limit: int = 25) -> list[dict[str, Any]]:

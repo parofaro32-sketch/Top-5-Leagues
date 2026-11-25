@@ -24,20 +24,128 @@ LEAGUE_DISPLAY = {
     "ligue_1": "Ligue 1",
 }
 
-# Realistic but fair defaults (same for every team in a league: no advantages).
-DEFAULT_SEASON_BUDGETS: dict[str, dict[str, int]] = {
-    "premier_league": {"transfer_budget": 120_000_000, "wage_budget": 3_000_000},
-    "la_liga": {"transfer_budget": 110_000_000, "wage_budget": 2_800_000},
-    "bundesliga": {"transfer_budget": 105_000_000, "wage_budget": 2_700_000},
-    "serie_a": {"transfer_budget": 105_000_000, "wage_budget": 2_700_000},
-    "ligue_1": {"transfer_budget": 100_000_000, "wage_budget": 2_500_000},
+# Fair, varied per-team budgets (no two teams identical, no overpowered budgets).
+TEAM_BUDGETS: dict[str, dict[str, int]] = {
+    "Manchester City": {"transfer_budget": 155000000, "wage_budget": 4200000},
+    "Arsenal": {"transfer_budget": 145000000, "wage_budget": 3900000},
+    "Liverpool": {"transfer_budget": 140000000, "wage_budget": 3800000},
+    "Manchester United": {"transfer_budget": 135000000, "wage_budget": 4000000},
+    "Chelsea": {"transfer_budget": 130000000, "wage_budget": 3700000},
+    "Tottenham Hotspur": {"transfer_budget": 115000000, "wage_budget": 3200000},
+    "Newcastle United": {"transfer_budget": 110000000, "wage_budget": 3100000},
+    "Aston Villa": {"transfer_budget": 95000000, "wage_budget": 2800000},
+    "Brighton & Hove Albion": {"transfer_budget": 85000000, "wage_budget": 2400000},
+    "West Ham United": {"transfer_budget": 90000000, "wage_budget": 2600000},
+    "Crystal Palace": {"transfer_budget": 70000000, "wage_budget": 2100000},
+    "Fulham": {"transfer_budget": 75000000, "wage_budget": 2200000},
+    "Brentford": {"transfer_budget": 65000000, "wage_budget": 1900000},
+    "Everton": {"transfer_budget": 60000000, "wage_budget": 2000000},
+    "Nottingham Forest": {"transfer_budget": 72000000, "wage_budget": 2300000},
+    "AFC Bournemouth": {"transfer_budget": 58000000, "wage_budget": 1800000},
+    "Leeds United": {"transfer_budget": 68000000, "wage_budget": 2050000},
+    "Sunderland": {"transfer_budget": 55000000, "wage_budget": 1700000},
+    "Ipswich Town": {"transfer_budget": 48000000, "wage_budget": 1500000},
+    "Coventry City": {"transfer_budget": 45000000, "wage_budget": 1400000},
+    "Hull City": {"transfer_budget": 42000000, "wage_budget": 1350000},
+    "Real Madrid": {"transfer_budget": 150000000, "wage_budget": 4100000},
+    "FC Barcelona": {"transfer_budget": 85100000, "wage_budget": 2610000},
+    "Atlético Madrid": {"transfer_budget": 120000000, "wage_budget": 3400000},
+    "Athletic Bilbao": {"transfer_budget": 78000000, "wage_budget": 2310000},
+    "Real Sociedad": {"transfer_budget": 72100000, "wage_budget": 2150000},
+    "Villarreal CF": {"transfer_budget": 70100000, "wage_budget": 2110000},
+    "Real Betis": {"transfer_budget": 65100000, "wage_budget": 1950000},
+    "Sevilla FC": {"transfer_budget": 68100000, "wage_budget": 2010000},
+    "Valencia CF": {"transfer_budget": 60100000, "wage_budget": 1850000},
+    "Celta Vigo": {"transfer_budget": 52000000, "wage_budget": 1600000},
+    "CA Osasuna": {"transfer_budget": 48100000, "wage_budget": 1510000},
+    "Rayo Vallecano": {"transfer_budget": 50000000, "wage_budget": 1550000},
+    "Getafe CF": {"transfer_budget": 46000000, "wage_budget": 1450000},
+    "RCD Espanyol": {"transfer_budget": 44000000, "wage_budget": 1410000},
+    "Deportivo Alavés": {"transfer_budget": 40000000, "wage_budget": 1300000},
+    "Elche CF": {"transfer_budget": 38000000, "wage_budget": 1250000},
+    "Levante UD": {"transfer_budget": 36000000, "wage_budget": 1200000},
+    "Deportivo La Coruña": {"transfer_budget": 39000000, "wage_budget": 1280000},
+    "Málaga CF": {"transfer_budget": 35000000, "wage_budget": 1180000},
+    "Racing Santander": {"transfer_budget": 34000000, "wage_budget": 1150000},
+    "Bayern Munich": {"transfer_budget": 145100000, "wage_budget": 4010000},
+    "Borussia Dortmund": {"transfer_budget": 115100000, "wage_budget": 3300000},
+    "Bayer Leverkusen": {"transfer_budget": 105000000, "wage_budget": 3000000},
+    "RB Leipzig": {"transfer_budget": 100000000, "wage_budget": 2900000},
+    "Eintracht Frankfurt": {"transfer_budget": 82000000, "wage_budget": 2500000},
+    "VfB Stuttgart": {"transfer_budget": 80000000, "wage_budget": 2450000},
+    "SC Freiburg": {"transfer_budget": 62000000, "wage_budget": 1910000},
+    "TSG Hoffenheim": {"transfer_budget": 64000000, "wage_budget": 1960000},
+    "Werder Bremen": {"transfer_budget": 56000000, "wage_budget": 1750000},
+    "Borussia Mönchengladbach": {"transfer_budget": 58100000, "wage_budget": 1810000},
+    "1. FC Köln": {"transfer_budget": 54000000, "wage_budget": 1710000},
+    "Union Berlin": {"transfer_budget": 52100000, "wage_budget": 1650000},
+    "Mainz 05": {"transfer_budget": 50100000, "wage_budget": 1610000},
+    "FC Augsburg": {"transfer_budget": 46100000, "wage_budget": 1460000},
+    "Hamburger SV": {"transfer_budget": 60200000, "wage_budget": 1860000},
+    "Schalke 04": {"transfer_budget": 57000000, "wage_budget": 1780000},
+    "SC Paderborn": {"transfer_budget": 42100000, "wage_budget": 1310000},
+    "SV Elversberg": {"transfer_budget": 38100000, "wage_budget": 1210000},
+    "Inter Milan": {"transfer_budget": 125000000, "wage_budget": 3500000},
+    "Juventus": {"transfer_budget": 120100000, "wage_budget": 3410000},
+    "AC Milan": {"transfer_budget": 115200000, "wage_budget": 3310000},
+    "Napoli": {"transfer_budget": 110100000, "wage_budget": 3210000},
+    "Roma": {"transfer_budget": 95100000, "wage_budget": 2810000},
+    "Atalanta": {"transfer_budget": 88000000, "wage_budget": 2620000},
+    "Lazio": {"transfer_budget": 78100000, "wage_budget": 2350000},
+    "Fiorentina": {"transfer_budget": 72200000, "wage_budget": 2210000},
+    "Bologna": {"transfer_budget": 70200000, "wage_budget": 2160000},
+    "Torino": {"transfer_budget": 58200000, "wage_budget": 1820000},
+    "Udinese": {"transfer_budget": 52200000, "wage_budget": 1660000},
+    "Genoa": {"transfer_budget": 54100000, "wage_budget": 1720000},
+    "Como": {"transfer_budget": 62100000, "wage_budget": 1920000},
+    "Cagliari": {"transfer_budget": 48200000, "wage_budget": 1520000},
+    "Parma": {"transfer_budget": 50200000, "wage_budget": 1560000},
+    "Lecce": {"transfer_budget": 44100000, "wage_budget": 1420000},
+    "Sassuolo": {"transfer_budget": 56100000, "wage_budget": 1760000},
+    "Monza": {"transfer_budget": 46200000, "wage_budget": 1470000},
+    "Venezia": {"transfer_budget": 40100000, "wage_budget": 1290000},
+    "Frosinone": {"transfer_budget": 42200000, "wage_budget": 1320000},
+    "Paris Saint-Germain": {"transfer_budget": 160000000, "wage_budget": 4500000},
+    "Olympique Marseille": {"transfer_budget": 95200000, "wage_budget": 2700000},
+    "AS Monaco": {"transfer_budget": 90100000, "wage_budget": 2630000},
+    "Olympique Lyonnais": {"transfer_budget": 85200000, "wage_budget": 2510000},
+    "Lille OSC": {"transfer_budget": 78200000, "wage_budget": 2320000},
+    "RC Lens": {"transfer_budget": 72300000, "wage_budget": 2170000},
+    "Stade Rennais FC": {"transfer_budget": 68200000, "wage_budget": 2060000},
+    "OGC Nice": {"transfer_budget": 70300000, "wage_budget": 2120000},
+    "RC Strasbourg Alsace": {"transfer_budget": 55100000, "wage_budget": 1730000},
+    "Toulouse FC": {"transfer_budget": 52300000, "wage_budget": 1620000},
+    "Stade Brestois 29": {"transfer_budget": 50300000, "wage_budget": 1570000},
+    "FC Lorient": {"transfer_budget": 48300000, "wage_budget": 1530000},
+    "Le Havre AC": {"transfer_budget": 45100000, "wage_budget": 1430000},
+    "Angers SCO": {"transfer_budget": 43000000, "wage_budget": 1360000},
+    "AJ Auxerre": {"transfer_budget": 44200000, "wage_budget": 1380000},
+    "Paris FC": {"transfer_budget": 46300000, "wage_budget": 1480000},
+    "Le Mans FC": {"transfer_budget": 40200000, "wage_budget": 1260000},
+    "ES Troyes AC": {"transfer_budget": 41000000, "wage_budget": 1330000},
 }
 
+LEAGUE_BUDGET_BASELINES: dict[str, dict[str, int]] = {
+    "premier_league": {"transfer_budget": 70000000, "wage_budget": 2100000},
+    "la_liga": {"transfer_budget": 60000000, "wage_budget": 1900000},
+    "bundesliga": {"transfer_budget": 65000000, "wage_budget": 2000000},
+    "serie_a": {"transfer_budget": 62000000, "wage_budget": 1950000},
+    "ligue_1": {"transfer_budget": 58000000, "wage_budget": 1850000},
+}
 
-def default_season_budgets(league_key: str | None) -> dict[str, int]:
-    d = DEFAULT_SEASON_BUDGETS.get(str(league_key or ""), {"transfer_budget": 100_000_000, "wage_budget": 2_500_000})
-    return {"transfer_budget": int(d["transfer_budget"]), "wage_budget": int(d["wage_budget"])}
+def _budget_unique_nudge(team_name: str, league_key: str | None) -> tuple[int, int]:
+    # Deterministic small nudge so teams without explicit entry still differ.
+    base = f"{league_key}:{team_name}"
+    h = sum((i + 1) * ord(c) for i, c in enumerate(base))
+    return (h % 37) * 100000, (h % 29) * 10000
 
+def default_season_budgets(league_key: str | None, team_name: str | None = None) -> dict[str, int]:
+    if team_name and team_name in TEAM_BUDGETS:
+        b = TEAM_BUDGETS[team_name]
+        return {"transfer_budget": int(b["transfer_budget"]), "wage_budget": int(b["wage_budget"])}
+    base = LEAGUE_BUDGET_BASELINES.get(str(league_key or ""), {"transfer_budget": 55000000, "wage_budget": 1700000})
+    t_nudge, w_nudge = _budget_unique_nudge(team_name or "Unknown", league_key)
+    return {"transfer_budget": int(base["transfer_budget"]) + t_nudge, "wage_budget": int(base["wage_budget"]) + w_nudge}
 
 def _season_id() -> str:
     return f"sea_{uuid.uuid4().hex[:12]}"
@@ -90,15 +198,64 @@ class SeasonService:
         season = await self.get_season(str(season_id))
         if not season:
             return
-        budgets = default_season_budgets(season.get("league_key"))
+        league_key = str(season.get("league_key") or "")
         now = utc_now_iso()
-        # Only backfill teams that look uninitialized (both zero).
-        await self.db.execute(
-            """UPDATE season_teams
-               SET transfer_budget=?, wage_budget=?, updated_at=?
-               WHERE season_id=? AND COALESCE(transfer_budget,0)=0 AND COALESCE(wage_budget,0)=0""",
-            (int(budgets["transfer_budget"]), int(budgets["wage_budget"]), now, str(season_id)),
+        old_uniform = {
+            "premier_league": (120_000_000, 3_000_000),
+            "la_liga": (110_000_000, 2_800_000),
+            "bundesliga": (105_000_000, 2_700_000),
+            "serie_a": (105_000_000, 2_700_000),
+            "ligue_1": (100_000_000, 2_500_000),
+        }
+        old_t, old_w = old_uniform.get(league_key, (0, 0))
+        rows = await self.db.fetchall(
+            "SELECT team_api_id, team_name, transfer_budget, wage_budget FROM season_teams WHERE season_id=?",
+            (str(season_id),),
         )
+        for r in rows:
+            d = dict(r)
+            tb = int(d.get("transfer_budget") or 0)
+            wb = int(d.get("wage_budget") or 0)
+            name = str(d.get("team_name") or "")
+            per_team = default_season_budgets(league_key, name)
+            should_set = (tb == 0 and wb == 0) or (old_t and old_w and tb == old_t and wb == old_w)
+            # Reset FC Barcelona from the known bad uniform/default state to its intended budget.
+            if name == "FC Barcelona" and old_t and old_w and tb == old_t and wb == old_w:
+                should_set = True
+            if should_set:
+                await self.db.execute(
+                    "UPDATE season_teams SET transfer_budget=?, wage_budget=?, updated_at=? WHERE season_id=? AND team_api_id=?",
+                    (int(per_team["transfer_budget"]), int(per_team["wage_budget"]), now, str(season_id), int(d.get("team_api_id") or 0)),
+                )
+
+        # Reconcile confirmed transfers to ensure players are on the correct teams.
+        try:
+            confirmed = await self.db.fetchall(
+                "SELECT id, player_api_id, to_team_api_id, meta_json FROM season_transfers WHERE season_id=? AND status='confirmed'",
+                (str(season_id),),
+            )
+            for tr in confirmed:
+                td = dict(tr)
+                try:
+                    meta = json.loads(td.get("meta_json") or "{}")
+                except Exception:
+                    meta = {}
+                syear = int(meta.get("season_year") or season.get("season_year") or 2026)
+                pid = int(td.get("player_api_id") or 0)
+                to_tid = int(td.get("to_team_api_id") or 0)
+                if not pid or not to_tid:
+                    continue
+                dest = await self.db.fetchone(
+                    "SELECT 1 FROM players WHERE api_id=? AND team_api_id=? AND season=? LIMIT 1",
+                    (pid, to_tid, syear),
+                )
+                if not dest:
+                    try:
+                        await self.confirm_transfer(int(td.get("id") or 0))
+                    except Exception:
+                        logger.exception("Failed to reconcile confirmed transfer %s", td.get("id"))
+        except Exception:
+            logger.exception("Failed to reconcile confirmed transfers for season %s", season_id)
 
     async def get_active_season(self, guild_id: int | None, league_key: str | None = None) -> dict[str, Any] | None:
         if league_key:
@@ -185,12 +342,12 @@ class SeasonService:
         )
 
         # season teams + standings
-        budgets = default_season_budgets(league_key)
         for t in teams:
             tid = int(t["api_id"])
             tname = str(t.get("name") or tid)
             short = t.get("short_name") or t.get("code")
             logo = t.get("logo")
+            budgets = default_season_budgets(league_key, tname)
             await self.db.execute(
                 """INSERT OR REPLACE INTO season_teams(season_id,team_api_id,team_name,league_key,manager_user_id,is_user_controlled,short_name,logo,transfer_budget,wage_budget,created_at,updated_at)
                    VALUES(?,?,?,?,NULL,0,?,?,?,?,?,?)""",
@@ -825,11 +982,6 @@ class SeasonService:
         if not row:
             return {"ok": False, "reason": "transfer_not_found"}
         tr = dict(row)
-        if tr.get("status") == "confirmed":
-            return {"ok": True, "already_confirmed": True, **tr}
-        if tr.get("status") not in ("pending", "failed"):
-            return {"ok": False, "reason": f"transfer_status_{tr.get('status')}"}
-
         meta = {}
         try:
             meta = json.loads(tr.get("meta_json") or "{}")
@@ -841,6 +993,19 @@ class SeasonService:
         to_team_api_id = int(tr["to_team_api_id"])
         if from_team_api_id is not None:
             from_team_api_id = int(from_team_api_id)
+
+        already_confirmed = str(tr.get("status") or "") == "confirmed"
+        if already_confirmed:
+            # Reconcile: if player is already at destination, it's done; otherwise fall through to repair.
+            dest = await self.db.fetchone(
+                "SELECT 1 FROM players WHERE api_id=? AND team_api_id=? AND season=? LIMIT 1",
+                (player_api_id, to_team_api_id, season_year),
+            )
+            if dest:
+                return {"ok": True, "already_confirmed": True, **tr}
+            # fall through to re-apply move only (budgets/records guarded below)
+        elif tr.get("status") not in ("pending", "failed"):
+            return {"ok": False, "reason": f"transfer_status_{tr.get('status')}"}
 
         # Conservative safety: block if active match involves from/to team
         active = await self.db.fetchall(
@@ -921,21 +1086,22 @@ class SeasonService:
                      int(sd.get("motm") or 0), utc_now_iso()),
                 )
 
-        # record in player_transfers
-        try:
-            await self.db.execute(
-                """INSERT INTO player_transfers(player_api_id,from_team_api_id,to_team_api_id,season,transfer_date,transfer_type,note,created_at)
-                   VALUES(?,?,?,?,?,?,?,?)""",
-                (player_api_id, from_team_api_id, to_team_api_id, season_year, utc_now_iso()[:10], tr.get("transfer_type") or "manual", tr.get("note"), utc_now_iso()),
-            )
-        except Exception:
-            pass
+        # record in player_transfers (skip on reconciliation to avoid duplicates)
+        if not already_confirmed:
+            try:
+                await self.db.execute(
+                    """INSERT INTO player_transfers(player_api_id,from_team_api_id,to_team_api_id,season,transfer_date,transfer_type,note,created_at)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    (player_api_id, from_team_api_id, to_team_api_id, season_year, utc_now_iso()[:10], tr.get("transfer_type") or "manual", tr.get("note"), utc_now_iso()),
+                )
+            except Exception:
+                pass
 
         # Auto-deduct budgets (buying club) when fee/wage are present.
         fee = int(tr.get("fee") or 0)
         wage = int(tr.get("wage") or 0)
         budget_applied = False
-        if season_id and (fee > 0 or wage > 0):
+        if season_id and (fee > 0 or wage > 0) and not already_confirmed:
             try:
                 now_b = utc_now_iso()
                 # deduct from buying team

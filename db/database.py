@@ -423,6 +423,7 @@ CREATE TABLE IF NOT EXISTS training_sessions (
     team_api_id INTEGER NOT NULL,
     team_name TEXT,
     user_id INTEGER,
+    matchday INTEGER,
     status TEXT NOT NULL DEFAULT 'scheduled', -- scheduled|running|completed|cancelled
     starts_at TEXT,
     completes_at TEXT,
@@ -531,6 +532,13 @@ class Database:
         ]:
             try:
                 await self._ensure_column("season_transfers", col, defn)
+            except Exception:
+                pass
+        for col, defn in [
+            ("matchday", "INTEGER"),
+        ]:
+            try:
+                await self._ensure_column("training_sessions", col, defn)
             except Exception:
                 pass
         await self.require_conn().commit()

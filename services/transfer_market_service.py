@@ -73,11 +73,12 @@ def normalize_role(text: str | None) -> str | None:
     s = str(text).strip().lower()
     if s in ROLE_ALIASES:
         return ROLE_ALIASES[s]
-    for k, v in ROLE_ALIASES.items():
-        if k in s:
+    # Check longer aliases first to avoid "star" matching inside "starter"
+    for k, v in sorted(ROLE_ALIASES.items(), key=lambda kv: -len(kv[0])):
+        if re.search(rf"\b{re.escape(k)}\b", s):
             return v
     for r in ROLE_TIERS:
-        if r.lower() == s:
+        if re.search(rf"\b{re.escape(r.lower())}\b", s):
             return r
     return None
 
@@ -382,11 +383,37 @@ class TransferMarketService:
     def parse_contract_reply(self, text: str) -> dict[str, Any]:
         t = (text or "").strip()
         out: dict[str, Any] = {}
+
+        # years (look before money to avoid confusion)
+        ym = re.search(r"(\d+)\s*(?:year|yr|years|yrs)\b", t, re.I)
+        if ym:
+            out["contract_years"] = int(ym.group(1))
+
+        # role
+        role = normalize_role(t)
+        if role:
+            out["role"] = role
+
+        # signing bonus (before or after keyword)
+        bonus_patterns = [
+            r"(?:signing\s*bonus|sign-on\s*bonus|sign\s*on\s*bonus|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
+            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:signing\s*bonus|sign-on\s*bonus|sign\s*on\s*bonus|bonus)\b",
+        ]
+        for pat in bonus_patterns:
+            m = re.search(pat, t, re.I)
+            if m:
+                val = money_to_int(m.group(1))
+                if val is not None:
+                    out["signing_bonus"] = val
+                    break
+
         # wage
         wage_patterns = [
             r"wage\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
             r"salary\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
-            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*/?\s*(?:wk|week|weekly|pw|per week)",
+            r"(?:pay|offer|give)\s+(?:him\s+)?([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*/?\s*(?:wk|week|weekly|pw|per week)\b",
+            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*/?\s*(?:wk|week|weekly|pw|per week)\b",
+            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:a|per)\s*week\b",
         ]
         for pat in wage_patterns:
             m = re.search(pat, t, re.I)
@@ -395,25 +422,25 @@ class TransferMarketService:
                 if val is not None:
                     out["wage"] = val
                     break
-        # signing bonus
-        m = re.search(r"(?:signing bonus|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)", t, re.I)
-        if m:
-            val = money_to_int(m.group(1))
-            if val is not None:
-                out["signing_bonus"] = val
-        # years
-        m = re.search(r"(\d+)\s*(?:year|yr|years|yrs)", t, re.I)
-        if m:
-            out["contract_years"] = int(m.group(1))
-        # role
-        role = normalize_role(t)
-        if role:
-            out["role"] = role
-        # if just a number and wage missing, treat as wage
+
+        # If no wage found, but there is a money token that is not the bonus and looks like wage (k/m small)
         if "wage" not in out:
-            m = re.fullmatch(r"[€£$]?\s*(\d[\d,.]*\s*[kmb]?)", t.strip(), re.I)
-            if m:
+            # try to pick a plausible wage number (typically in thousands per week)
+            for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", t, re.I):
                 val = money_to_int(m.group(1))
-                if val is not None:
+                if val is None:
+                    continue
+                if val == out.get("signing_bonus"):
+                    continue
+                # heuristic: wages in this system are usually 5k-2M weekly
+                if 5_000 <= val <= 2_000_000:
                     out["wage"] = val
+                    break
+            # if just a number and wage missing, treat as wage
+            if "wage" not in out:
+                m = re.fullmatch(r"[€£$]?\s*(\d[\d,.]*\s*[kmb]?)", t.strip(), re.I)
+                if m:
+                    val = money_to_int(m.group(1))
+                    if val is not None:
+                        out["wage"] = val
         return out
