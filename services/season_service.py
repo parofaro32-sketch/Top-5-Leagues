@@ -216,6 +216,11 @@ class SeasonService:
                     (season_id, league_key, md_idx, int(home_id), int(away_id), str(ht.get("name")), str(at.get("name")), now, now),
                 )
 
+        try:
+            await self._sync_team_claims_to_season(season_id)
+        except Exception:
+            logger.exception("Failed to sync team claims to season %s", season_id)
+
         return await self.get_season(season_id)  # type: ignore
 
     async def get_standings(self, season_id: str) -> list[dict[str, Any]]:
@@ -1030,22 +1035,19 @@ class SeasonService:
             deduped.append(r)
         return deduped
 
-    async def _ensure_season_for_team_claim(self, *, guild_id: int | None, team_query: str, league_key: str | None = None) -> dict[str, Any] | None:
-        """When no season exists, find team in static DB and auto-create an active season for its league."""
+    async def _resolve_team_for_claim(self, *, guild_id: int | None, team_query: str, league_key: str | None = None) -> dict[str, Any] | None:
+        """Resolve a team for claiming from DB/bundled data (no season auto-create). Returns team dict with league_key."""
         q = (team_query or "").strip().lower()
         if not q:
             return None
         season_year = 2026
-        # Try to resolve team from DB (seeded teams table)
         rows = await self.db.fetchall(
             "SELECT * FROM teams WHERE season=?",
             (season_year,),
         )
         if not rows:
-            # try latest season in teams table
             rows = await self.db.fetchall("SELECT * FROM teams ORDER BY season DESC LIMIT 500")
         inv_league = {str(v).lower(): k for k, v in LEAGUE_DISPLAY.items()}
-        # Also support common aliases
         inv_league.update({
             "english premier league": "premier_league",
             "premier league": "premier_league",
@@ -1074,7 +1076,6 @@ class SeasonService:
             if score:
                 candidates.append((score, t))
         if not candidates:
-            # Fallback to bundled data if DB teams table is empty/incomplete
             try:
                 from data.bundled import list_league_keys as _lk2, list_all_teams as _lat2
                 for lk in list(_lk2()):
@@ -1090,20 +1091,16 @@ class SeasonService:
         if not candidates:
             return None
         candidates.sort(key=lambda x: (-x[0], str(x[1].get("name") or "")))
-        # if ambiguous exacts, don't auto-create blindly
         top_score = candidates[0][0]
         top = [t for s, t in candidates if s == top_score]
         if len(top) != 1:
-            return None
+            return {"ambiguous": True, "candidates": top[:10]}
         team = top[0]
-        team_league_key = league_key
-        if not team_league_key:
-            team_league_key = team.get("_league_key")
+        team_league_key = league_key or team.get("_league_key")
         if not team_league_key:
             lname = str(team.get("league_name") or "").lower().strip()
             team_league_key = inv_league.get(lname)
         if not team_league_key:
-            # fallback: infer from team api_id membership in known leagues by scanning all seeded teams
             try:
                 from data.bundled import list_league_keys as _lk, list_all_teams as _lat
                 for lk in (league_key and [league_key]) or list(_lk()):
@@ -1117,55 +1114,125 @@ class SeasonService:
                 pass
         if not team_league_key:
             return None
+        team["league_key"] = team_league_key
+        return team
 
-        # Find existing season for this guild+league (any status, prefer active)
-        existing = await self.get_active_season(guild_id, league_key=team_league_key)
-        if not existing:
-            # try any status
-            rows_s = await self.db.fetchall(
-                "SELECT * FROM seasons WHERE guild_id IS ? AND league_key=? ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
-                (guild_id, team_league_key),
-            )
-            if not rows_s and guild_id is not None:
-                rows_s = await self.db.fetchall(
-                    "SELECT * FROM seasons WHERE league_key=? ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
-                    (team_league_key,),
-                )
-            existing = dict(rows_s[0]) if rows_s else None
-
+    async def _upsert_team_claim(self, *, guild_id: int | None, league_key: str, team_api_id: int, team_name: str, short_name: str | None, logo: str | None, user_id: int) -> dict[str, Any]:
+        now = utc_now_iso()
+        existing = await self.db.fetchone(
+            "SELECT * FROM team_claims WHERE COALESCE(guild_id,-1)=COALESCE(?,-1) AND league_key=? AND team_api_id=?",
+            (guild_id, str(league_key), int(team_api_id)),
+        )
         if existing:
-            # make sure team exists in season_teams; if not, can't claim there
-            st = await self.get_season_team(str(existing.get("id")), int(team.get("api_id") or 0))
-            if st:
-                return existing
-            # season exists but team not in it (odd) - fall through to create if no active
-            if str(existing.get("status")) == "active":
-                return existing
+            await self.db.execute(
+                "UPDATE team_claims SET team_name=?, short_name=?, logo=?, user_id=?, updated_at=? WHERE id=?",
+                (team_name, short_name, logo, int(user_id), now, int(dict(existing)["id"])),
+            )
+            row = await self.db.fetchone("SELECT * FROM team_claims WHERE id=?", (int(dict(existing)["id"]),))
+        else:
+            cur = await self.db.execute(
+                """INSERT INTO team_claims(guild_id,league_key,team_api_id,team_name,short_name,logo,user_id,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (guild_id, str(league_key), int(team_api_id), team_name, short_name, logo, int(user_id), now, now),
+            )
+            row = await self.db.fetchone("SELECT * FROM team_claims WHERE id=?", (cur.lastrowid,))
+        return dict(row) if row else {"guild_id": guild_id, "league_key": league_key, "team_api_id": team_api_id, "team_name": team_name, "user_id": user_id}
 
-        # No usable season: auto-create
-        try:
-            created = await self.create_season(guild_id=guild_id, league_key=team_league_key, season_year=season_year)
-            return created
-        except ValueError:
-            # race/exists - fetch it
-            return await self.get_active_season(guild_id, league_key=team_league_key)
-        except Exception:
-            logger.exception("Failed to auto-create season for claim team=%s league=%s", team_query, team_league_key)
-            return None
+    async def _get_team_claim(self, guild_id: int | None, league_key: str, team_api_id: int) -> dict[str, Any] | None:
+        row = await self.db.fetchone(
+            "SELECT * FROM team_claims WHERE COALESCE(guild_id,-1)=COALESCE(?,-1) AND league_key=? AND team_api_id=?",
+            (guild_id, str(league_key), int(team_api_id)),
+        )
+        return dict(row) if row else None
+
+    async def _get_user_team_claim(self, guild_id: int | None, user_id: int, league_key: str | None = None) -> dict[str, Any] | None:
+        q = "SELECT * FROM team_claims WHERE COALESCE(guild_id,-1)=COALESCE(?,-1) AND user_id=?"
+        params: list[Any] = [guild_id, int(user_id)]
+        if league_key:
+            q += " AND league_key=?"
+            params.append(str(league_key))
+        q += " ORDER BY updated_at DESC LIMIT 1"
+        row = await self.db.fetchone(q, tuple(params))
+        if not row and guild_id is not None:
+            # fallback any guild
+            q2 = "SELECT * FROM team_claims WHERE user_id=?"
+            p2: list[Any] = [int(user_id)]
+            if league_key:
+                q2 += " AND league_key=?"
+                p2.append(str(league_key))
+            q2 += " ORDER BY updated_at DESC LIMIT 1"
+            row = await self.db.fetchone(q2, tuple(p2))
+        return dict(row) if row else None
+
+    async def _delete_team_claim(self, guild_id: int | None, league_key: str, team_api_id: int) -> None:
+        await self.db.execute(
+            "DELETE FROM team_claims WHERE COALESCE(guild_id,-1)=COALESCE(?,-1) AND league_key=? AND team_api_id=?",
+            (guild_id, str(league_key), int(team_api_id)),
+        )
+
+    async def _sync_team_claims_to_season(self, season_id: str) -> None:
+        season = await self.get_season(str(season_id))
+        if not season:
+            return
+        league_key = str(season.get("league_key") or "")
+        guild_id = season.get("guild_id")
+        claims = await self.db.fetchall(
+            "SELECT * FROM team_claims WHERE league_key=? AND (guild_id IS ? OR guild_id IS NULL)",
+            (league_key, guild_id),
+        )
+        now = utc_now_iso()
+        for r in claims:
+            c = dict(r)
+            tid = int(c.get("team_api_id") or 0)
+            uid = c.get("user_id")
+            if not tid or uid is None:
+                continue
+            st = await self.get_season_team(str(season_id), tid)
+            if not st:
+                continue
+            if st.get("manager_user_id") is not None:
+                continue
+            await self.db.execute(
+                "UPDATE season_teams SET manager_user_id=?, is_user_controlled=1, updated_at=? WHERE season_id=? AND team_api_id=?",
+                (int(uid), now, str(season_id), tid),
+            )
 
     async def claim_team(self, *, guild_id: int | None, user_id: int, team_query: str, league_key: str | None = None) -> dict[str, Any]:
         candidates = await self.find_team_in_active_seasons(guild_id, team_query, league_key=league_key)
         if not candidates:
-            # No season set / no active season / not found - try auto-create season
-            await self._ensure_season_for_team_claim(guild_id=guild_id, team_query=team_query, league_key=league_key)
-            candidates = await self.find_team_in_active_seasons(guild_id, team_query, league_key=league_key)
-        if not candidates:
-            return {"ok": False, "reason": "team_not_found"}
+            # No season candidates - fall back to season-independent claim (no auto-create)
+            resolved = await self._resolve_team_for_claim(guild_id=guild_id, team_query=team_query, league_key=league_key)
+            if not resolved:
+                return {"ok": False, "reason": "team_not_found"}
+            if resolved.get("ambiguous"):
+                cands = resolved.get("candidates") or []
+                return {
+                    "ok": False,
+                    "reason": "ambiguous_team",
+                    "candidates": [{"team_name": c.get("name"), "season_name": LEAGUE_DISPLAY.get(c.get("_league_key") or c.get("league_key"), c.get("league_key")), "league_key": c.get("_league_key") or c.get("league_key"), "team_api_id": c.get("api_id"), "season_id": None} for c in cands[:10]],
+                }
+            lk = str(resolved.get("league_key") or league_key or "")
+            tid = int(resolved.get("api_id") or resolved.get("team_api_id") or 0)
+            tname = str(resolved.get("name") or team_query)
+            if not lk or not tid:
+                return {"ok": False, "reason": "team_not_found"}
+            existing_claim = await self._get_team_claim(guild_id, lk, tid)
+            if existing_claim and int(existing_claim.get("user_id") or 0) == int(user_id):
+                return {"ok": True, "already_claimed_by_you": True, "team": {"team_name": tname, "team_api_id": tid, "league_key": lk, "manager_user_id": user_id}, "season_id": None, "season": None, "claim": existing_claim}
+            if existing_claim and existing_claim.get("user_id") is not None:
+                return {"ok": False, "reason": "already_claimed", "team": {"team_name": tname, "team_api_id": tid, "league_key": lk}, "season_id": None, "owner_user_id": int(existing_claim.get("user_id"))}
+            # prevent claiming multiple teams in same guild+league (independent of season)
+            my_claim = await self._get_user_team_claim(guild_id, user_id, league_key=lk)
+            if my_claim and int(my_claim.get("team_api_id") or 0) != tid:
+                return {"ok": False, "reason": "user_already_has_team", "team": {"team_name": tname, "team_api_id": tid, "league_key": lk}, "season_id": None, "current_team": {"team_name": my_claim.get("team_name"), "team_api_id": my_claim.get("team_api_id"), "league_key": my_claim.get("league_key")}}
+            claim = await self._upsert_team_claim(guild_id=guild_id, league_key=lk, team_api_id=tid, team_name=tname, short_name=resolved.get("short_name") or resolved.get("code"), logo=resolved.get("logo"), user_id=user_id)
+            team_obj = {"team_name": tname, "team_api_id": tid, "league_key": lk, "manager_user_id": user_id, "short_name": resolved.get("short_name") or resolved.get("code"), "logo": resolved.get("logo")}
+            return {"ok": True, "already_claimed_by_you": False, "team": team_obj, "season_id": None, "season": None, "claim": claim}
+
         # prefer exact match
         exact = [c for c in candidates if int(c.get("_match_score", 0)) == 3]
         pick = exact[0] if len(exact) == 1 else (candidates[0] if len(candidates) == 1 else None)
         if pick is None:
-            # ambiguous
             return {
                 "ok": False,
                 "reason": "ambiguous_team",
@@ -1178,11 +1245,16 @@ class SeasonService:
             return {"ok": False, "reason": "team_not_found"}
         owner = existing.get("manager_user_id")
         if owner is not None and int(owner) == int(user_id):
+            # ensure team_claims record exists too
+            try:
+                await self._upsert_team_claim(guild_id=guild_id, league_key=str(pick.get("season_league_key") or ""), team_api_id=team_api_id, team_name=str(existing.get("team_name") or ""), short_name=existing.get("short_name"), logo=existing.get("logo"), user_id=user_id)
+            except Exception:
+                pass
             return {"ok": True, "already_claimed_by_you": True, "team": existing, "season_id": season_id}
         if owner is not None and int(owner) != int(user_id):
             return {"ok": False, "reason": "already_claimed", "team": existing, "season_id": season_id, "owner_user_id": int(owner)}
 
-        # Optional: prevent claiming multiple teams in same season
+        # prevent claiming multiple teams in same season
         already = await self.db.fetchone(
             "SELECT * FROM season_teams WHERE season_id=? AND manager_user_id=?",
             (season_id, int(user_id)),
@@ -1190,6 +1262,12 @@ class SeasonService:
         if already:
             a = dict(already)
             return {"ok": False, "reason": "user_already_has_team", "team": existing, "season_id": season_id, "current_team": a}
+        # also prevent multiple claims in same league (season-independent)
+        lk_check = str(pick.get("season_league_key") or league_key or "")
+        if lk_check:
+            my_claim = await self._get_user_team_claim(guild_id, int(user_id), league_key=lk_check)
+            if my_claim and int(my_claim.get("team_api_id") or 0) != team_api_id:
+                return {"ok": False, "reason": "user_already_has_team", "team": existing, "season_id": season_id, "current_team": {"team_name": my_claim.get("team_name"), "team_api_id": my_claim.get("team_api_id"), "league_key": my_claim.get("league_key")}}
 
         now = utc_now_iso()
         await self.db.execute(
@@ -1198,12 +1276,31 @@ class SeasonService:
         )
         updated = await self.get_season_team(season_id, team_api_id)
         season = await self.get_season(season_id)
+        # also persist in team_claims (season-independent)
+        try:
+            await self._upsert_team_claim(guild_id=guild_id, league_key=str(pick.get("season_league_key") or (season or {}).get("league_key") or ""), team_api_id=team_api_id, team_name=str((updated or existing or {}).get("team_name") or ""), short_name=(updated or existing or {}).get("short_name"), logo=(updated or existing or {}).get("logo"), user_id=user_id)
+        except Exception:
+            pass
         return {"ok": True, "already_claimed_by_you": False, "team": updated, "season_id": season_id, "season": season}
 
     async def release_team(self, *, guild_id: int | None, user_id: int, team_query: str, league_key: str | None = None) -> dict[str, Any]:
         candidates = await self.find_team_in_active_seasons(guild_id, team_query, league_key=league_key)
         if not candidates:
-            return {"ok": False, "reason": "team_not_found"}
+            # try claim-only release
+            resolved = await self._resolve_team_for_claim(guild_id=guild_id, team_query=team_query, league_key=league_key)
+            if not resolved or resolved.get("ambiguous"):
+                if resolved and resolved.get("ambiguous"):
+                    return {"ok": False, "reason": "ambiguous_team", "candidates": resolved.get("candidates", [])[:10]}
+                return {"ok": False, "reason": "team_not_found"}
+            lk = str(resolved.get("league_key") or league_key or "")
+            tid = int(resolved.get("api_id") or 0)
+            claim = await self._get_team_claim(guild_id, lk, tid)
+            if not claim:
+                return {"ok": False, "reason": "not_claimed", "team": {"team_name": resolved.get("name"), "team_api_id": tid, "league_key": lk}}
+            if int(claim.get("user_id") or 0) != int(user_id):
+                return {"ok": False, "reason": "not_owner", "team": {"team_name": resolved.get("name"), "team_api_id": tid, "league_key": lk}, "owner_user_id": int(claim.get("user_id") or 0)}
+            await self._delete_team_claim(guild_id, lk, tid)
+            return {"ok": True, "team": {"team_name": resolved.get("name"), "team_api_id": tid, "league_key": lk, "manager_user_id": None}, "season_id": None}
         exact = [c for c in candidates if int(c.get("_match_score", 0)) == 3]
         pick = exact[0] if len(exact) == 1 else (candidates[0] if len(candidates) == 1 else None)
         if pick is None:
@@ -1223,6 +1320,11 @@ class SeasonService:
             "UPDATE season_teams SET manager_user_id=NULL, is_user_controlled=0, updated_at=? WHERE season_id=? AND team_api_id=?",
             (now, season_id, team_api_id),
         )
+        # also remove season-independent claim
+        try:
+            await self._delete_team_claim(guild_id, str(pick.get("season_league_key") or ""), team_api_id)
+        except Exception:
+            pass
         updated = await self.get_season_team(season_id, team_api_id)
         return {"ok": True, "team": updated, "season_id": season_id}
 
@@ -1250,7 +1352,7 @@ class SeasonService:
                 d = dict(r)
                 d["season_name"] = s.get("name")
                 d["season_league_key"] = s.get("league_key")
-                k = (str(d.get("season_id")), int(d.get("team_api_id") or 0))
+                k = (str(d.get("season_league_key") or ""), int(d.get("team_api_id") or 0))
                 if k in seen_team:
                     continue
                 seen_team.add(k)
@@ -1266,11 +1368,46 @@ class SeasonService:
                     d = dict(r)
                     d["season_name"] = s.get("name")
                     d["season_league_key"] = s.get("league_key")
-                    k = (str(d.get("season_id")), int(d.get("team_api_id") or 0))
+                    k = (str(d.get("season_league_key") or ""), int(d.get("team_api_id") or 0))
                     if k in seen_team:
                         continue
                     seen_team.add(k)
                     out.append(d)
+        # Include season-independent claims (no season set)
+        try:
+            q = "SELECT * FROM team_claims WHERE 1=1"
+            params: list[Any] = []
+            if guild_id is not None:
+                q += " AND (guild_id IS ? OR guild_id IS NULL)"
+                params.append(guild_id)
+            if league_key:
+                q += " AND league_key=?"
+                params.append(str(league_key))
+            q += " ORDER BY updated_at DESC LIMIT 200"
+            claim_rows = await self.db.fetchall(q, tuple(params))
+            for r in claim_rows:
+                c = dict(r)
+                lk = str(c.get("league_key") or "")
+                tid = int(c.get("team_api_id") or 0)
+                k = (lk, tid)
+                if k in seen_team:
+                    continue
+                seen_team.add(k)
+                out.append({
+                    "season_id": None,
+                    "team_api_id": tid,
+                    "team_name": c.get("team_name"),
+                    "league_key": lk,
+                    "season_league_key": lk,
+                    "manager_user_id": c.get("user_id"),
+                    "is_user_controlled": 1,
+                    "short_name": c.get("short_name"),
+                    "logo": c.get("logo"),
+                    "season_name": None,
+                    "claim_only": True,
+                })
+        except Exception:
+            pass
         return out
 
     async def get_fixture_managers(self, season_id: str, fixture: dict[str, Any]) -> dict[str, int | None]:
@@ -1328,4 +1465,26 @@ class SeasonService:
             found = await _lookup(lk, st)
             if found:
                 return found
+        # Fallback: season-independent team claim (no season set)
+        claim = await self._get_user_team_claim(guild_id, int(user_id), league_key=league_key)
+        if not claim and league_key:
+            claim = await self._get_user_team_claim(guild_id, int(user_id), league_key=None)
+        if claim:
+            lk = str(claim.get("league_key") or "")
+            d = {
+                "season_id": None,
+                "team_api_id": int(claim.get("team_api_id") or 0),
+                "team_name": claim.get("team_name"),
+                "league_key": lk,
+                "manager_user_id": int(user_id),
+                "is_user_controlled": 1,
+                "short_name": claim.get("short_name"),
+                "logo": claim.get("logo"),
+                "season_name": None,
+                "season_league_key": lk,
+                "season_year": 2026,
+                "_season": None,
+                "claim_only": True,
+            }
+            return d
         return None

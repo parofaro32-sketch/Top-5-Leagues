@@ -160,7 +160,7 @@ class ClubCog(commands.Cog):
         team = await ss.get_user_team_in_active_season(interaction.guild_id, interaction.user.id, league_key=league_key)
         return team
 
-    @app_commands.command(name="lockerroom", description="Open your team's locker room (claimed team in active season)")
+    @app_commands.command(name="lockerroom", description="Open your team's locker room (claimed team)")
     @app_commands.describe(league="League (optional)")
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def lockerroom(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None):
@@ -169,11 +169,32 @@ class ClubCog(commands.Cog):
         ss = self.bot.season_service
         team = await self._get_manager_team(interaction, league_key=league_key)
         if not team:
-            await interaction.followup.send(embed=error_embed("No Claimed Team", "You don't manage a claimed team in an active season. Use `/claim` first."), ephemeral=True)
+            await interaction.followup.send(embed=error_embed("No Claimed Team", "You don't manage a claimed team. Use `/claim` first."), ephemeral=True)
             return
-        season = team.get("_season") or await ss.get_season(str(team.get("season_id")))
+        season = team.get("_season") or (await ss.get_season(str(team.get("season_id"))) if team.get("season_id") else None)
         if not season:
-            await interaction.followup.send(embed=error_embed("Season Not Found", "Could not load the active season for your team."), ephemeral=True)
+            lk = team.get("league_key") or team.get("season_league_key")
+            league_name = LEAGUE_DISPLAY_NAMES.get(lk, str(lk or "League")) if 'LEAGUE_DISPLAY_NAMES' in globals() else str(lk or "League")
+            try:
+                from services.season_service import LEAGUE_DISPLAY as _LD, default_season_budgets as _dsb
+                league_name = _LD.get(lk, league_name)
+                defaults = _dsb(lk)
+                tb = defaults.get("transfer_budget", 0)
+                wb = defaults.get("wage_budget", 0)
+            except Exception:
+                tb = 0
+                wb = 0
+            lines = [
+                f"**Team:** {team.get('team_name')}",
+                f"**Manager:** <@{interaction.user.id}>",
+                f"**League:** {league_name}",
+                f"**Budgets (default):** Transfer {_money(tb)} • Wage {_money(wb)}/wk",
+                "",
+                "No season is set up yet for this team. Your claim is saved — once a season is created, your team will be ready.",
+            ]
+            embed = info_embed(f"Locker Room — {team.get('team_name')}", "\n".join(lines)[:3900])
+            embed.set_footer(text="Your claim is active even without a season. Use /claim to manage it.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
         season_id = str(season.get("id"))
         team_id = int(team.get("team_api_id"))
@@ -270,9 +291,10 @@ class ClubCog(commands.Cog):
         if not team:
             await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
             return
-        season = team.get("_season") or await self.bot.season_service.get_season(str(team.get("season_id")))
+        _sid = team.get("season_id")
+        season = team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
         if not season:
-            await interaction.followup.send(embed=error_embed("Season Not Found", "Active season not found."), ephemeral=True)
+            await interaction.followup.send(embed=error_embed("No Season Set", "Your claim is saved, but no season is set up yet. A season is needed for training."), ephemeral=True)
             return
         team_id = int(team.get("team_api_id"))
         season_year = int(season.get("season_year") or 2026)
@@ -419,8 +441,12 @@ class ClubCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Reason Required", "Please provide a valid detailed reason (at least 10 characters)."), ephemeral=True)
             return
 
-        season = team.get("_season") or await self.bot.season_service.get_season(str(team.get("season_id")))
-        season_id = str((season or {}).get("id") or team.get("season_id"))
+        _sid = team.get("season_id")
+        season = team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
+        if not season:
+            await interaction.followup.send(embed=error_embed("No Season Set", "Your claim is saved, but no season is set up yet. A season is needed for budget requests."), ephemeral=True)
+            return
+        season_id = str(season.get("id"))
         team_id = int(team.get("team_api_id"))
         team_name = str(team.get("team_name"))
         current_transfer = int(team.get("transfer_budget") or 0)

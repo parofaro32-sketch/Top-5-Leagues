@@ -450,6 +450,22 @@ CREATE TABLE IF NOT EXISTS board_requests (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_board_requests_status ON board_requests(status, kind, team_api_id);
+
+CREATE TABLE IF NOT EXISTS team_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER,
+    league_key TEXT NOT NULL,
+    team_api_id INTEGER NOT NULL,
+    team_name TEXT NOT NULL,
+    short_name TEXT,
+    logo TEXT,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_claims_unique ON team_claims(COALESCE(guild_id, -1), league_key, team_api_id);
+CREATE INDEX IF NOT EXISTS idx_team_claims_user ON team_claims(COALESCE(guild_id, -1), user_id);
+CREATE INDEX IF NOT EXISTS idx_team_claims_league ON team_claims(league_key, team_api_id);
 """
 
 

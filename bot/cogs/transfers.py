@@ -192,7 +192,8 @@ class TransfersCog(commands.Cog):
         if not buying_team and league_key:
             buying_team = await self._resolve_buying_team_for_user(interaction, None)
         if buying_team:
-            team_season = buying_team.get("_season") or await self.bot.season_service.get_season(str(buying_team.get("season_id")))
+            _sid = buying_team.get("season_id")
+            team_season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
             if team_season:
                 season = team_season
         return buying_team, season
@@ -265,7 +266,8 @@ class TransfersCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("No Claimed Team", "You must claim a team first with `/claim` to make bot offers."), ephemeral=True)
             return
         if not season:
-            season = buying_team.get("_season") or await self.bot.season_service.get_season(str(buying_team.get("season_id")))
+            _sid = buying_team.get("season_id")
+            season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
         if not season:
             await interaction.followup.send(embed=error_embed("No Active Season", "No active season found. Create one with `/season create`."), ephemeral=True)
             return
@@ -678,7 +680,8 @@ class TransfersCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
             return
         if not season:
-            season = buying_team.get("_season") or await self.bot.season_service.get_season(str(buying_team.get("season_id")))
+            _sid = buying_team.get("season_id")
+            season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
         if not season:
             await interaction.followup.send(embed=error_embed("No Active Season", "No active season found."), ephemeral=True)
             return

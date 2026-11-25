@@ -615,12 +615,21 @@ class SeasonCog(commands.Cog):
         t = res.get("team") or {}
         season = res.get("season") or {}
         team_name = t.get("team_name") or team
+        season_name = season.get("name") if isinstance(season, dict) else None
+        if not season_name:
+            lk = t.get("league_key") or t.get("season_league_key") or league_key
+            try:
+                from services.season_service import LEAGUE_DISPLAY as _LD
+                league_name = _LD.get(str(lk), str(lk or "this league"))
+            except Exception:
+                league_name = str(lk or "this league")
+            season_name = f"{league_name} (no season set)"
         if res.get("already_claimed_by_you"):
-            await interaction.followup.send(embed=info_embed("Already Claimed", f"You already manage **{team_name}** in **{season.get('name', 'this season')}**."), ephemeral=True)
+            await interaction.followup.send(embed=info_embed("Already Claimed", f"You already manage **{team_name}** in **{season_name}**."), ephemeral=True)
             return
-        await interaction.followup.send(embed=success_embed("Team Claimed", f"{interaction.user.mention} is now the manager of **{team_name}** in **{season.get('name', 'the active season')}**."), ephemeral=True)
+        await interaction.followup.send(embed=success_embed("Team Claimed", f"{interaction.user.mention} is now the manager of **{team_name}** in **{season_name}**."), ephemeral=True)
 
-    @app_commands.command(name="claimed", description="Show claimed teams and their managers in active seasons")
+    @app_commands.command(name="claimed", description="Show claimed teams and their managers")
     @app_commands.describe(league="League (optional)")
     @app_commands.choices(league=_league_choices())
     async def claimed(self, interaction: discord.Interaction, league: app_commands.Choice[str] | None = None):
@@ -634,7 +643,7 @@ class SeasonCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Claimed Failed", str(e)), ephemeral=True)
             return
         if not rows:
-            await interaction.followup.send(embed=info_embed("Claimed Teams", "No teams have been claimed yet in active seasons."), ephemeral=True)
+            await interaction.followup.send(embed=info_embed("Claimed Teams", "No teams have been claimed yet."), ephemeral=True)
             return
         lines = []
         for r in rows[:40]:
@@ -646,7 +655,13 @@ class SeasonCog(commands.Cog):
                     manager_txt = f"{m.display_name} ({m.mention})"
             except Exception:
                 pass
-            season_name = r.get("season_name") or LEAGUE_DISPLAY.get(r.get("season_league_key"), r.get("season_league_key"))
+            league_label = LEAGUE_DISPLAY.get(r.get("season_league_key") or r.get("league_key"), r.get("season_league_key") or r.get("league_key"))
+            if r.get("season_name"):
+                season_name = r.get("season_name")
+            elif r.get("claim_only") or not r.get("season_id"):
+                season_name = f"{league_label} (no season set)"
+            else:
+                season_name = league_label
             lines.append(f"• **{r.get('team_name')}** — {manager_txt} _{season_name}_")
         await interaction.followup.send(embed=info_embed("Claimed Teams", "\n".join(lines)[:3900]), ephemeral=True)
 
