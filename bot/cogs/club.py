@@ -805,6 +805,10 @@ class ClubCog(commands.Cog):
                 await message.reply(embed=error_embed("Board Meeting Result", "\n".join(board_lines)[:3900]))
         except Exception:
             logger.exception("Failed to process board request reply")
+            try:
+                await message.reply(embed=error_embed("Board Request Error", "I couldn't process your board request reply. Please try again with a clear amount and detailed case (include your promise to win the league and the cup)."))
+            except Exception:
+                pass
 
 async def setup(bot):
     await bot.add_cog(ClubCog(bot))

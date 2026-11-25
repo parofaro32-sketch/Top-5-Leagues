@@ -19,10 +19,18 @@ def money_to_int(text: str | int | float | None) -> int | None:
     if isinstance(text, (int, float)):
         return int(text)
     s = str(text).strip().lower().replace(",", "").replace("€", "").replace("$", "").replace("£", "")
-    s = s.replace("per week", "").replace("/wk", "").replace("pw", "").replace("weekly", "").strip()
+    # normalize common wage/time suffixes
+    s = re.sub(r"\bper\s*week\b", " ", s)
+    s = re.sub(r"\bper\s*wk\b", " ", s)
+    s = re.sub(r"\bp\s*/\s*w\b", " ", s)
+    s = s.replace("/wk", " ").replace("pw", " ").replace("weekly", " ").replace("p/w", " ").replace("p.w", " ")
+    # normalize word multipliers
+    s = re.sub(r"\b(millions?|mil)\b", "m", s)
+    s = re.sub(r"\b(billions?|bn)\b", "b", s)
+    s = re.sub(r"\b(thousands?|k)\b", "k", s)
+    s = s.strip()
     m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kmb])?", s)
     if not m:
-        # try to find first number
         m2 = re.search(r"(\d+(?:\.\d+)?)\s*([kmb])?", s)
         if not m2:
             return None
@@ -557,9 +565,14 @@ class TransferMarketService:
         out: dict[str, Any] = {}
 
         # years (look before money to avoid confusion)
-        ym = re.search(r"(\d+)\s*(?:year|yr|years|yrs)\b", t, re.I)
+        ym = re.search(r"(\d+)\s*(?:year|yr|years|yrs|season|seasons)\b", t, re.I)
+        if not ym:
+            ym = re.search(r"(?:contract|deal|length|duration)\s*[:=]?\s*(\d+)\b", t, re.I)
         if ym:
-            out["contract_years"] = int(ym.group(1))
+            try:
+                out["contract_years"] = max(1, min(7, int(ym.group(1))))
+            except Exception:
+                pass
 
         # role
         role = normalize_role(t)
@@ -568,8 +581,8 @@ class TransferMarketService:
 
         # signing bonus (before or after keyword)
         bonus_patterns = [
-            r"(?:signing\s*bonus|sign-on\s*bonus|sign\s*on\s*bonus|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
-            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:signing\s*bonus|sign-on\s*bonus|sign\s*on\s*bonus|bonus)\b",
+            r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k|m|bn|billion))?)",
+            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k|m|bn|billion))?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\b",
         ]
         for pat in bonus_patterns:
             m = re.search(pat, t, re.I)
@@ -581,11 +594,11 @@ class TransferMarketService:
 
         # wage
         wage_patterns = [
-            r"wage\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
-            r"salary\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
-            r"(?:pay|offer|give)\s+(?:him\s+)?([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*/?\s*(?:wk|week|weekly|pw|per week)\b",
-            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*/?\s*(?:wk|week|weekly|pw|per week)\b",
-            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:a|per)\s*week\b",
+            r"wages?\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)",
+            r"salary\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)",
+            r"(?:pay|offer|give)\s+(?:him\s+)?([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)\s*/?\s*(?:wk|week|weekly|pw|p/w|p\.w|per\s*week|per\s*wk|w)\b",
+            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)\s*/?\s*(?:wk|week|weekly|pw|p/w|p\.w|per\s*week|per\s*wk)\b",
+            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)\s*(?:a|per)\s*(?:week|wk)\b",
         ]
         for pat in wage_patterns:
             m = re.search(pat, t, re.I)
@@ -597,15 +610,14 @@ class TransferMarketService:
 
         # If no wage found, but there is a money token that is not the bonus and looks like wage (k/m small)
         if "wage" not in out:
-            # try to pick a plausible wage number (typically in thousands per week)
-            for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", t, re.I):
+            for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k|m|bn|billion))?)", t, re.I):
                 val = money_to_int(m.group(1))
                 if val is None:
                     continue
                 if val == out.get("signing_bonus"):
                     continue
-                # heuristic: wages in this system are usually 5k-2M weekly
-                if 5_000 <= val <= 2_000_000:
+                # heuristic: wages in this system are usually 1k-5M weekly
+                if 1_000 <= val <= 5_000_000:
                     out["wage"] = val
                     break
             # if just a number and wage missing, treat as wage

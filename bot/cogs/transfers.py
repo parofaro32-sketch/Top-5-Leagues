@@ -263,112 +263,119 @@ class TransfersCog(commands.Cog):
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def botoffer(self, interaction: discord.Interaction, team_name: str, player_name: str, fee: str, league: app_commands.Choice[str] | None = None):
         await interaction.response.defer(ephemeral=True)
-        league_key = league.value if league else None
-        buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
-        if not buying_team:
-            await interaction.followup.send(embed=error_embed("No Claimed Team", "You must claim a team first with `/claim` to make bot offers."), ephemeral=True)
-            return
-        if not season:
-            _sid = buying_team.get("season_id")
-            season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
-        if not season:
-            await interaction.followup.send(embed=error_embed("No Active Season", "No active season found. Create one with `/season create`."), ephemeral=True)
-            return
-        season_id = str(season.get("id"))
-        season_year = int(season.get("season_year") or 2026)
-        buying_team_id = int(buying_team.get("team_api_id"))
-        buying_team_name = str(buying_team.get("team_name"))
+        try:
+            league_key = league.value if league else None
+            buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
+            if not buying_team:
+                await interaction.followup.send(embed=error_embed("No Claimed Team", "You must claim a team first with `/claim` to make bot offers."), ephemeral=True)
+                return
+            if not season:
+                _sid = buying_team.get("season_id")
+                season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
+            if not season:
+                await interaction.followup.send(embed=error_embed("No Active Season", "No active season found. Create one with `/season create`."), ephemeral=True)
+                return
+            season_id = str(season.get("id"))
+            season_year = int(season.get("season_year") or 2026)
+            buying_team_id = int(buying_team.get("team_api_id"))
+            buying_team_name = str(buying_team.get("team_name"))
 
-        selling_team = await self._find_season_team_by_name(season_id, team_name)
-        selling_season = season
-        if not selling_team:
-            selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, team_name, prefer_season_id=season_id, league_key=league_key)
-        if not selling_team:
-            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}`. Check the team name and try again."), ephemeral=True)
-            return
-        if selling_season:
-            selling_sid = str(selling_season.get("id"))
-            buying_sid = str((buying_team or {}).get("season_id") or season_id)
-            # Prefer keeping buying team's season context when they differ (budget checks rely on it)
-            if not buying_team or selling_sid == buying_sid:
-                season = selling_season
-                season_id = selling_sid
-                season_year = int(season.get("season_year") or 2026)
-            else:
-                # keep buying team season; selling team came from another season - still usable but rare
-                season_id = buying_sid
-                season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
-        selling_team_id = int(selling_team.get("team_api_id"))
-        selling_team_name = str(selling_team.get("team_name"))
-        if selling_team.get("manager_user_id") is not None:
-            await interaction.followup.send(embed=error_embed("Not A Bot Team", f"**{selling_team_name}** is claimed by a manager. `/botoffer` is only for unclaimed bot teams. Use `/askaboutplayer` or `/contractnego`."), ephemeral=True)
-            return
-        if selling_team_id == buying_team_id:
-            await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot make an offer to your own team."), ephemeral=True)
-            return
+            selling_team = await self._find_season_team_by_name(season_id, team_name)
+            selling_season = season
+            if not selling_team:
+                selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, team_name, prefer_season_id=season_id, league_key=league_key)
+            if not selling_team:
+                await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}`. Check the team name and try again."), ephemeral=True)
+                return
+            if selling_season:
+                selling_sid = str(selling_season.get("id"))
+                buying_sid = str((buying_team or {}).get("season_id") or season_id)
+                # Prefer keeping buying team's season context when they differ (budget checks rely on it)
+                if not buying_team or selling_sid == buying_sid:
+                    season = selling_season
+                    season_id = selling_sid
+                    season_year = int(season.get("season_year") or 2026)
+                else:
+                    # keep buying team season; selling team came from another season - still usable but rare
+                    season_id = buying_sid
+                    season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
+            selling_team_id = int(selling_team.get("team_api_id"))
+            selling_team_name = str(selling_team.get("team_name"))
+            if selling_team.get("manager_user_id") is not None:
+                await interaction.followup.send(embed=error_embed("Not A Bot Team", f"**{selling_team_name}** is claimed by a manager. `/botoffer` is only for unclaimed bot teams. Use `/askaboutplayer` or `/contractnego`."), ephemeral=True)
+                return
+            if selling_team_id == buying_team_id:
+                await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot make an offer to your own team."), ephemeral=True)
+                return
 
-        # bot transfer limit
-        used = await self.market.get_bot_transfer_count(season_id, buying_team_id)
-        if used >= 2:
-            await interaction.followup.send(embed=error_embed("Bot Transfer Limit Reached", f"**{buying_team_name}** has used {used}/2 bot transfers this season. You hit max bot transfers available."), ephemeral=True)
-            return
+            # bot transfer limit
+            used = await self.market.get_bot_transfer_count(season_id, buying_team_id)
+            if used >= 2:
+                await interaction.followup.send(embed=error_embed("Bot Transfer Limit Reached", f"**{buying_team_name}** has used {used}/2 bot transfers this season. You hit max bot transfers available."), ephemeral=True)
+                return
 
-        player = await self.market.find_player_in_team(selling_team_id, player_name, season_year)
-        if not player:
-            await interaction.followup.send(embed=error_embed("Player Not Found", f"Could not find `{player_name}` in **{selling_team_name}**."), ephemeral=True)
-            return
+            player = await self.market.find_player_in_team(selling_team_id, player_name, season_year)
+            if not player:
+                await interaction.followup.send(embed=error_embed("Player Not Found", f"Could not find `{player_name}` in **{selling_team_name}**."), ephemeral=True)
+                return
 
-        offer_fee = self._parse_int_money(fee)
-        if offer_fee is None or offer_fee <= 0:
-            await interaction.followup.send(embed=error_embed("Invalid Fee", "Enter a valid fee like `25000000`, `25M`, or `€25M`."), ephemeral=True)
-            return
+            offer_fee = self._parse_int_money(fee)
+            if offer_fee is None or offer_fee <= 0:
+                await interaction.followup.send(embed=error_embed("Invalid Fee", "Enter a valid fee like `25000000`, `25M`, or `€25M`."), ephemeral=True)
+                return
 
-        val = self.market.value_player(player)
-        decision = self.market.evaluate_bot_offer(val, offer_fee, player)
+            val = self.market.value_player(player)
+            decision = self.market.evaluate_bot_offer(val, offer_fee, player)
 
-        now = utc_now_iso()
-        status = "negotiating" if decision["accept"] else "rejected"
-        cur = await self.bot.db.execute(
-            """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?, 'club_offer',0,0,?, ?,?)""",
-            (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision}), now, now),
-        )
-        offer_id = cur.lastrowid
+            now = utc_now_iso()
+            status = "negotiating" if decision["accept"] else "rejected"
+            cur = await self.bot.db.execute(
+                """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?, 'club_offer',0,0,?, ?,?)""",
+                (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision}), now, now),
+            )
+            offer_id = cur.lastrowid
 
-        if not decision["accept"]:
-            await interaction.followup.send(embed=error_embed(
-                "Offer Rejected",
-                f"**{selling_team_name}** (bot manager) response for **{player.get('name')}**:\n\n{decision['reason']}\n\n"
-                f"Your offer: {fmt_money(offer_fee)} • Club valuation: {fmt_money(val.market_value)} • Suggested fair fee: {fmt_money(val.fair_fee)}"
-            ), ephemeral=True)
-            return
+            if not decision["accept"]:
+                await interaction.followup.send(embed=error_embed(
+                    "Offer Rejected",
+                    f"**{selling_team_name}** (bot manager) response for **{player.get('name')}**:\n\n{decision['reason']}\n\n"
+                    f"Your offer: {fmt_money(offer_fee)} • Club valuation: {fmt_money(val.market_value)} • Suggested fair fee: {fmt_money(val.fair_fee)}"
+                ), ephemeral=True)
+                return
 
-        # accepted -> start contract negotiation
-        demand = self.market.contract_demand(val, player)
-        await self.bot.db.execute(
-            "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
-            (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0}), utc_now_iso(), int(offer_id)),
-        )
-        view = ContractNegView(self, int(offer_id))
-        bar = negotiation_pressure_bar(0, 10)
-        p = player
-        embed = success_embed(
-            "Offer Accepted — Contract Negotiation",
-            (
-                f"{bar}\n\n"
-                f"**{selling_team_name} (bot manager):** {decision['reason']}\n\n"
-                f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** "
-                f"({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'}).\n"
-                f"We are now moving to contract terms. I am representing the player's interests and I will be firm but fair.\n\n"
-                f"**Opening contract demands:**\n"
-                f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                f"• Requested role: **{demand['role']}**\n"
-                f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                f"• Contract length: **{demand['contract_years']} years**\n\n"
-                f"Submit a serious contract offer using the button below. Lowballing, stalling, or disrespecting the player's value will increase pressure and can end the negotiation."
-            ),
-        )
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            # accepted -> start contract negotiation
+            demand = self.market.contract_demand(val, player)
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0}), utc_now_iso(), int(offer_id)),
+            )
+            view = ContractNegView(self, int(offer_id))
+            bar = negotiation_pressure_bar(0, 10)
+            p = player
+            embed = success_embed(
+                "Offer Accepted — Contract Negotiation",
+                (
+                    f"{bar}\n\n"
+                    f"**{selling_team_name} (bot manager):** {decision['reason']}\n\n"
+                    f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** "
+                    f"({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'}).\n"
+                    f"We are now moving to contract terms. I am representing the player's interests and I will be firm but fair.\n\n"
+                    f"**Opening contract demands:**\n"
+                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
+                    f"• Requested role: **{demand['role']}**\n"
+                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
+                    f"• Contract length: **{demand['contract_years']} years**\n\n"
+                    f"Submit a serious contract offer using the button below. Lowballing, stalling, or disrespecting the player's value will increase pressure and can end the negotiation."
+                ),
+            )
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        except Exception:
+            logger.exception("botoffer command failed")
+            try:
+                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while processing the bot offer. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
     async def handle_contract_modal_submit(self, interaction: discord.Interaction, modal: ContractOfferModal):
         await interaction.response.defer(ephemeral=True)
@@ -399,26 +406,31 @@ class TransfersCog(commands.Cog):
         role = parsed.get("role")
         years = parsed.get("contract_years")
 
-        missing = []
+        # Be forgiving: accept any format by filling missing fields with sensible defaults.
+        assumed: list[str] = []
         if wage is None or int(wage) <= 0:
-            missing.append("weekly wage (e.g. 150k/wk)")
+            # Try to pull any plausible weekly-wage number from the message
+            for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
+                _v = money_to_int(_m.group(1))
+                if _v is None:
+                    continue
+                if bonus is not None and int(_v) == int(bonus):
+                    continue
+                if 1_000 <= int(_v) <= 5_000_000:
+                    wage = int(_v)
+                    break
+        if wage is None or int(wage) <= 0:
+            wage = max(1_000, int(float(demand.get("wage") or 50_000) * 0.8))
+            assumed.append(f"wage {fmt_money(int(wage))}/wk")
         if role is None:
-            missing.append("role (Crucial/Important/Rotation/Sporadic/Prospect)")
+            role = normalize_role(str(demand.get("role") or "Rotation")) or "Rotation"
+            assumed.append(f"role {role}")
         if bonus is None:
-            missing.append("signing bonus (e.g. 500k bonus)")
+            bonus = 0
+            assumed.append("signing bonus €0")
         if years is None:
-            missing.append("contract years (e.g. 4 years)")
-        if missing:
-            await interaction.followup.send(
-                embed=error_embed(
-                    "Could Not Understand Offer",
-                    "I couldn't fully understand your contract offer. Please include: " + ", ".join(missing) + ".\n\n"
-                    f"Your message: `{raw_msg[:300]}`\n\n"
-                    "Example: `I offer 180k per week, important role, 2M signing bonus, 4 year contract`"
-                ),
-                ephemeral=True,
-            )
-            return
+            years = int(demand.get("contract_years") or 3)
+            assumed.append(f"{int(years)}-year contract")
 
         wage = int(wage)
         bonus = max(0, int(bonus))
@@ -428,6 +440,8 @@ class TransfersCog(commands.Cog):
         except Exception:
             years = int(demand.get("contract_years") or 3)
         years = max(1, min(5, years))
+        if assumed:
+            meta["_last_assumptions"] = assumed
 
         round_no = int(meta.get("contract_round") or 0) + 1
         pressure = int(meta.get("pressure") or 0)
@@ -627,86 +641,107 @@ class TransfersCog(commands.Cog):
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def askaboutplayer(self, interaction: discord.Interaction, team_name: str, player_name: str, league: app_commands.Choice[str] | None = None):
         await interaction.response.defer(ephemeral=True)
-        league_key = league.value if league else None
-        buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
-        if not season:
-            # try any active season as fallback for selling team lookup
-            season = await self.bot.season_service.get_active_season(interaction.guild_id, league_key=league_key)
-        if not season:
-            await interaction.followup.send(embed=error_embed("No Active Season", "No active season found. Create one with `/season create`."), ephemeral=True)
-            return
-        season_id = str(season.get("id"))
-        season_year = int(season.get("season_year") or 2026)
-        buying_team_name = str(buying_team.get("team_name")) if buying_team else "Your club"
-        buying_team_id = int(buying_team.get("team_api_id")) if buying_team else None
+        try:
+            league_key = league.value if league else None
+            buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
+            if not season:
+                # try any active season as fallback for selling team lookup
+                season = await self.bot.season_service.get_active_season(interaction.guild_id, league_key=league_key)
+            if not season:
+                await interaction.followup.send(embed=error_embed("No Active Season", "No active season found. Create one with `/season create`."), ephemeral=True)
+                return
+            season_id = str(season.get("id"))
+            season_year = int(season.get("season_year") or 2026)
+            buying_team_name = str(buying_team.get("team_name")) if buying_team else "Your club"
+            buying_team_id = int(buying_team.get("team_api_id")) if buying_team else None
 
-        selling_team = await self._find_season_team_by_name(season_id, team_name)
-        selling_season = season
-        if not selling_team:
-            selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, team_name, prefer_season_id=season_id, league_key=league_key)
-        if not selling_team:
-            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}`. Check the team name and try again."), ephemeral=True)
-            return
-        # If found an unclaimed copy, look for a claimed copy in other seasons
-        if selling_team.get("manager_user_id") is None:
-            seasons_all = await self.bot.season_service.list_seasons(guild_id=interaction.guild_id, status=None)
-            if not seasons_all and interaction.guild_id is not None:
-                seasons_all = await self.bot.season_service.list_seasons(guild_id=None, status=None)
-            for s2 in seasons_all:
-                st2 = await self._find_season_team_by_name(str(s2.get("id")), team_name)
-                if st2 and st2.get("manager_user_id") is not None:
-                    selling_team, selling_season = st2, s2
-                    break
-        if selling_season:
-            selling_sid = str(selling_season.get("id"))
-            buying_sid = str((buying_team or {}).get("season_id") or season_id)
-            # Prefer keeping buying team's season context when they differ (budget checks rely on it)
-            if not buying_team or selling_sid == buying_sid:
-                season = selling_season
-                season_id = selling_sid
-                season_year = int(season.get("season_year") or 2026)
+            selling_team = await self._find_season_team_by_name(season_id, team_name)
+            selling_season = season
+            if not selling_team:
+                selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, team_name, prefer_season_id=season_id, league_key=league_key)
+            if not selling_team:
+                await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find team `{team_name}`. Check the team name and try again."), ephemeral=True)
+                return
+            # If found an unclaimed copy, look for a claimed copy in other seasons
+            if selling_team.get("manager_user_id") is None:
+                seasons_all = await self.bot.season_service.list_seasons(guild_id=interaction.guild_id, status=None)
+                if not seasons_all and interaction.guild_id is not None:
+                    seasons_all = await self.bot.season_service.list_seasons(guild_id=None, status=None)
+                for s2 in seasons_all:
+                    st2 = await self._find_season_team_by_name(str(s2.get("id")), team_name)
+                    if st2 and st2.get("manager_user_id") is not None:
+                        selling_team, selling_season = st2, s2
+                        break
+            if selling_season:
+                selling_sid = str(selling_season.get("id"))
+                buying_sid = str((buying_team or {}).get("season_id") or season_id)
+                # Prefer keeping buying team's season context when they differ (budget checks rely on it)
+                if not buying_team or selling_sid == buying_sid:
+                    season = selling_season
+                    season_id = selling_sid
+                    season_year = int(season.get("season_year") or 2026)
+                else:
+                    # keep buying team season; selling team came from another season - still usable but rare
+                    season_id = buying_sid
+                    season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
+            selling_team_name = str(selling_team.get("team_name"))
+            selling_team_id = int(selling_team.get("team_api_id"))
+            seller_manager_id = selling_team.get("manager_user_id")
+            if seller_manager_id is None:
+                await interaction.followup.send(embed=error_embed("Bot Team", f"**{selling_team_name}** is an unclaimed bot team. Use `/botoffer` for bot teams."), ephemeral=True)
+                return
+            if buying_team_id and selling_team_id == buying_team_id:
+                await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot enquire about your own team."), ephemeral=True)
+                return
+
+            player = await self.market.find_player_in_team(selling_team_id, player_name, season_year)
+            if not player:
+                await interaction.followup.send(embed=error_embed("Player Not Found", f"Could not find `{player_name}` in **{selling_team_name}**."), ephemeral=True)
+                return
+
+            now = utc_now_iso()
+            cur = await self.bot.db.execute(
+                """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,stage,meta_json,created_at,updated_at)
+                   VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?, 'ask', ?, ?,?)""",
+                (season_id, interaction.guild_id, interaction.channel_id, "ask_about", interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(seller_manager_id), int(player.get("api_id")), str(player.get("name")), json.dumps({}), now, now),
+            )
+            offer_id = cur.lastrowid
+            view = AskAboutView(self, int(offer_id))
+
+            seller_mention = f"<@{int(seller_manager_id)}>"
+            embed = info_embed(
+                "Player Availability Enquiry",
+                (
+                    f"{seller_mention}, **{interaction.user.display_name}** ({buying_team_name}) is asking if "
+                    f"**{player.get('name')}** ({selling_team_name}) is for sale.\n\n"
+                    f"Please respond using the buttons below."
+                ),
+            )
+            msg = None
+            send_err = None
+            if interaction.channel:
+                try:
+                    msg = await interaction.channel.send(content=seller_mention, embed=embed, view=view)
+                except Exception as e:
+                    send_err = e
+                    logger.exception("Failed to send askaboutplayer channel message offer_id=%s", offer_id)
+            if msg:
+                await self.bot.db.execute("UPDATE transfer_offers SET message_id=?, updated_at=? WHERE id=?", (msg.id, utc_now_iso(), int(offer_id)))
+                await interaction.followup.send(
+                    embed=success_embed("Enquiry Sent", f"Asked **{selling_team_name}** manager (<@{int(seller_manager_id)}>) if **{player.get('name')}** is for sale. They can respond with the **For Sale / Not For Sale** buttons in the channel message."),
+                    ephemeral=True,
+                )
             else:
-                # keep buying team season; selling team came from another season - still usable but rare
-                season_id = buying_sid
-                season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
-        selling_team_name = str(selling_team.get("team_name"))
-        selling_team_id = int(selling_team.get("team_api_id"))
-        seller_manager_id = selling_team.get("manager_user_id")
-        if seller_manager_id is None:
-            await interaction.followup.send(embed=error_embed("Bot Team", f"**{selling_team_name}** is an unclaimed bot team. Use `/botoffer` for bot teams."), ephemeral=True)
-            return
-        if buying_team_id and selling_team_id == buying_team_id:
-            await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot enquire about your own team."), ephemeral=True)
-            return
-
-        player = await self.market.find_player_in_team(selling_team_id, player_name, season_year)
-        if not player:
-            await interaction.followup.send(embed=error_embed("Player Not Found", f"Could not find `{player_name}` in **{selling_team_name}**."), ephemeral=True)
-            return
-
-        now = utc_now_iso()
-        cur = await self.bot.db.execute(
-            """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,stage,meta_json,created_at,updated_at)
-               VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?, 'ask', ?, ?,?)""",
-            (season_id, interaction.guild_id, interaction.channel_id, "ask_about", interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(seller_manager_id), int(player.get("api_id")), str(player.get("name")), json.dumps({}), now, now),
-        )
-        offer_id = cur.lastrowid
-        view = AskAboutView(self, int(offer_id))
-
-        seller_mention = f"<@{int(seller_manager_id)}>"
-        embed = info_embed(
-            "Player Availability Enquiry",
-            (
-                f"{seller_mention}, **{interaction.user.display_name}** ({buying_team_name}) is asking if "
-                f"**{player.get('name')}** ({selling_team_name}) is for sale.\n\n"
-                f"Please respond using the buttons below."
-            ),
-        )
-        msg = await interaction.channel.send(content=seller_mention, embed=embed, view=view) if interaction.channel else None
-        if msg:
-            await self.bot.db.execute("UPDATE transfer_offers SET message_id=?, updated_at=? WHERE id=?", (msg.id, utc_now_iso(), int(offer_id)))
-
-        await interaction.followup.send(embed=success_embed("Enquiry Sent", f"Asked **{selling_team_name}** manager if **{player.get('name')}** is for sale."), ephemeral=True)
+                await interaction.followup.send(
+                    embed=error_embed("Enquiry Created, Message Not Delivered", f"Your enquiry for **{player.get('name')}** was created, but I could not post the channel message to the manager. Please check bot permissions in this channel and try again."),
+                    ephemeral=True,
+                )
+        except Exception:
+            logger.exception("askaboutplayer command failed")
+            try:
+                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while sending the player enquiry. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
     async def handle_ask_response(self, interaction: discord.Interaction, offer_id: int, *, for_sale: bool, view: AskAboutView):
         offer = await self.get_offer(offer_id)
@@ -749,120 +784,127 @@ class TransfersCog(commands.Cog):
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def contractnego(self, interaction: discord.Interaction, player_name: str, fee: str, selling_club: str, league: app_commands.Choice[str] | None = None):
         await interaction.response.defer(ephemeral=True)
-        league_key = league.value if league else None
-        buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
-        if not buying_team:
-            await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
-            return
-        if not season:
-            _sid = buying_team.get("season_id")
-            season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
-        if not season:
-            await interaction.followup.send(embed=error_embed("No Active Season", "No active season found."), ephemeral=True)
-            return
-        season_id = str(season.get("id"))
-        season_year = int(season.get("season_year") or 2026)
-        buying_team_id = int(buying_team.get("team_api_id"))
-        buying_team_name = str(buying_team.get("team_name"))
-
-        selling_team = await self._find_season_team_by_name(season_id, selling_club)
-        selling_season = season
-        if not selling_team:
-            selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, selling_club, prefer_season_id=season_id, league_key=league_key)
-        if not selling_team:
-            await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find selling club `{selling_club}`. Check the name and try again."), ephemeral=True)
-            return
-        if selling_season:
-            selling_sid = str(selling_season.get("id"))
-            buying_sid = str((buying_team or {}).get("season_id") or season_id)
-            # Prefer keeping buying team's season context when they differ (budget checks rely on it)
-            if not buying_team or selling_sid == buying_sid:
-                season = selling_season
-                season_id = selling_sid
-                season_year = int(season.get("season_year") or 2026)
-            else:
-                # keep buying team season; selling team came from another season - still usable but rare
-                season_id = buying_sid
-                season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
-        selling_team_id = int(selling_team.get("team_api_id"))
-        selling_team_name = str(selling_team.get("team_name"))
-        if selling_team_id == buying_team_id:
-            await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot negotiate with your own club."), ephemeral=True)
-            return
-
-        player = await self.market.find_player_in_team(selling_team_id, player_name, season_year)
-        if not player:
-            await interaction.followup.send(embed=error_embed("Player Not Found", f"Could not find `{player_name}` in **{selling_team_name}**."), ephemeral=True)
-            return
-
-        offer_fee = self._parse_int_money(fee)
-        if offer_fee is None or offer_fee <= 0:
-            await interaction.followup.send(embed=error_embed("Invalid Fee", "Enter a valid fee (e.g. 20M)."), ephemeral=True)
-            return
-
-        # If selling team is bot/unclaimed, bot manager evaluates the fee realistically.
-        # If selling team is human-managed, the managers have agreed the fee between themselves -
-        # go straight to contract negotiation with NO fee refusal.
-        is_bot = selling_team.get("manager_user_id") is None
-        if is_bot:
-            used = await self.market.get_bot_transfer_count(season_id, buying_team_id)
-            if used >= 2:
-                await interaction.followup.send(embed=error_embed("Bot Transfer Limit Reached", f"**{buying_team_name}** has used {used}/2 bot transfers this season. You hit max bot transfers available."), ephemeral=True)
+        try:
+            league_key = league.value if league else None
+            buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
+            if not buying_team:
+                await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
                 return
-        val = self.market.value_player(player)
-        decision = self.market.evaluate_bot_offer(val, offer_fee, player)
-        if not is_bot:
-            # Manager-to-manager: fee is already agreed, no bot valuation refusal.
-            decision = {
-                "accept": True,
-                "reason": f"Manager-to-manager agreement confirmed. The fee of {fmt_money(offer_fee)} for {player.get('name')} ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT) has been accepted by the clubs. Moving straight to contract negotiation.",
-                "manager_agreed": True,
-            }
+            if not season:
+                _sid = buying_team.get("season_id")
+                season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
+            if not season:
+                await interaction.followup.send(embed=error_embed("No Active Season", "No active season found."), ephemeral=True)
+                return
+            season_id = str(season.get("id"))
+            season_year = int(season.get("season_year") or 2026)
+            buying_team_id = int(buying_team.get("team_api_id"))
+            buying_team_name = str(buying_team.get("team_name"))
 
-        now = utc_now_iso()
-        status = "negotiating" if decision["accept"] else "rejected"
-        cur = await self.bot.db.execute(
-            """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'club_offer',0,0,?,?,?)""",
-            (season_id, interaction.guild_id, interaction.channel_id, "contract_nego", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, selling_team.get("manager_user_id"), int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "selling_is_bot": is_bot}), now, now),
-        )
-        offer_id = cur.lastrowid
+            selling_team = await self._find_season_team_by_name(season_id, selling_club)
+            selling_season = season
+            if not selling_team:
+                selling_team, selling_season = await self._find_season_team_by_name_any(interaction.guild_id, selling_club, prefer_season_id=season_id, league_key=league_key)
+            if not selling_team:
+                await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find selling club `{selling_club}`. Check the name and try again."), ephemeral=True)
+                return
+            if selling_season:
+                selling_sid = str(selling_season.get("id"))
+                buying_sid = str((buying_team or {}).get("season_id") or season_id)
+                # Prefer keeping buying team's season context when they differ (budget checks rely on it)
+                if not buying_team or selling_sid == buying_sid:
+                    season = selling_season
+                    season_id = selling_sid
+                    season_year = int(season.get("season_year") or 2026)
+                else:
+                    # keep buying team season; selling team came from another season - still usable but rare
+                    season_id = buying_sid
+                    season = (buying_team or {}).get("_season") or await self.bot.season_service.get_season(buying_sid) or season
+            selling_team_id = int(selling_team.get("team_api_id"))
+            selling_team_name = str(selling_team.get("team_name"))
+            if selling_team_id == buying_team_id:
+                await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot negotiate with your own club."), ephemeral=True)
+                return
 
-        if not decision["accept"]:
-            bar = negotiation_pressure_bar(0)
-            await interaction.followup.send(embed=error_embed(
-                "Club Offer Rejected",
-                f"{bar}\n\n**{selling_team_name}** response for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT):\n\n{decision['reason']}\n\n"
-                f"Your offer: {fmt_money(offer_fee)} • Valuation: {fmt_money(val.market_value)}"
-            ), ephemeral=True)
-            return
+            player = await self.market.find_player_in_team(selling_team_id, player_name, season_year)
+            if not player:
+                await interaction.followup.send(embed=error_embed("Player Not Found", f"Could not find `{player_name}` in **{selling_team_name}**."), ephemeral=True)
+                return
 
-        demand = self.market.contract_demand(val, player)
-        await self.bot.db.execute(
-            "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
-            (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot}), utc_now_iso(), int(offer_id)),
-        )
-        view = ContractNegView(self, int(offer_id))
-        bar = negotiation_pressure_bar(0, 10)
-        p = player
-        seller_label = f"**{selling_team_name} (bot manager)**" if is_bot else f"**{selling_team_name} manager**"
-        embed = success_embed(
-            "Fee Accepted — Contract Negotiation",
-            (
-                f"{bar}\n\n"
-                f"{seller_label}: {decision['reason']}\n\n"
-                f"**Player:** {p.get('name')} ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'})\n"
-                f"**Agreed fee:** {fmt_money(offer_fee)}\n\n"
-                f"I am representing the player in this contract negotiation. The demands below are based on the player's quality, age, and market standing.\n\n"
-                f"**Opening contract demands:**\n"
-                f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                f"• Requested role: **{demand['role']}**\n"
-                f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                f"• Contract length: **{demand['contract_years']} years**\n\n"
-                f"Submit a realistic offer. This negotiation is strict - pressure will rise on lowball offers or stalling, and at high pressure talks will end."
-            ),
-        )
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            offer_fee = self._parse_int_money(fee)
+            if offer_fee is None or offer_fee <= 0:
+                await interaction.followup.send(embed=error_embed("Invalid Fee", "Enter a valid fee (e.g. 20M)."), ephemeral=True)
+                return
+
+            # If selling team is bot/unclaimed, bot manager evaluates the fee realistically.
+            # If selling team is human-managed, the managers have agreed the fee between themselves -
+            # go straight to contract negotiation with NO fee refusal.
+            is_bot = selling_team.get("manager_user_id") is None
+            if is_bot:
+                used = await self.market.get_bot_transfer_count(season_id, buying_team_id)
+                if used >= 2:
+                    await interaction.followup.send(embed=error_embed("Bot Transfer Limit Reached", f"**{buying_team_name}** has used {used}/2 bot transfers this season. You hit max bot transfers available."), ephemeral=True)
+                    return
+            val = self.market.value_player(player)
+            decision = self.market.evaluate_bot_offer(val, offer_fee, player)
+            if not is_bot:
+                # Manager-to-manager: fee is already agreed, no bot valuation refusal.
+                decision = {
+                    "accept": True,
+                    "reason": f"Manager-to-manager agreement confirmed. The fee of {fmt_money(offer_fee)} for {player.get('name')} ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT) has been accepted by the clubs. Moving straight to contract negotiation.",
+                    "manager_agreed": True,
+                }
+
+            now = utc_now_iso()
+            status = "negotiating" if decision["accept"] else "rejected"
+            cur = await self.bot.db.execute(
+                """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'club_offer',0,0,?,?,?)""",
+                (season_id, interaction.guild_id, interaction.channel_id, "contract_nego", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, selling_team.get("manager_user_id"), int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "selling_is_bot": is_bot}), now, now),
+            )
+            offer_id = cur.lastrowid
+
+            if not decision["accept"]:
+                bar = negotiation_pressure_bar(0)
+                await interaction.followup.send(embed=error_embed(
+                    "Club Offer Rejected",
+                    f"{bar}\n\n**{selling_team_name}** response for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT):\n\n{decision['reason']}\n\n"
+                    f"Your offer: {fmt_money(offer_fee)} • Valuation: {fmt_money(val.market_value)}"
+                ), ephemeral=True)
+                return
+
+            demand = self.market.contract_demand(val, player)
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot}), utc_now_iso(), int(offer_id)),
+            )
+            view = ContractNegView(self, int(offer_id))
+            bar = negotiation_pressure_bar(0, 10)
+            p = player
+            seller_label = f"**{selling_team_name} (bot manager)**" if is_bot else f"**{selling_team_name} manager**"
+            embed = success_embed(
+                "Fee Accepted — Contract Negotiation",
+                (
+                    f"{bar}\n\n"
+                    f"{seller_label}: {decision['reason']}\n\n"
+                    f"**Player:** {p.get('name')} ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'})\n"
+                    f"**Agreed fee:** {fmt_money(offer_fee)}\n\n"
+                    f"I am representing the player in this contract negotiation. The demands below are based on the player's quality, age, and market standing.\n\n"
+                    f"**Opening contract demands:**\n"
+                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
+                    f"• Requested role: **{demand['role']}**\n"
+                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
+                    f"• Contract length: **{demand['contract_years']} years**\n\n"
+                    f"Submit a realistic offer. This negotiation is strict - pressure will rise on lowball offers or stalling, and at high pressure talks will end."
+                ),
+            )
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        except Exception:
+            logger.exception("contractnego command failed")
+            try:
+                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while starting the contract negotiation. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
 
     @app_commands.command(name="freeagentcontract", description="Start a free-agent contract negotiation (natural language, auto-finalized on agreement)")
@@ -870,92 +912,99 @@ class TransfersCog(commands.Cog):
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def freeagentcontract(self, interaction: discord.Interaction, player_name: str, league: app_commands.Choice[str] | None = None):
         await interaction.response.defer(ephemeral=True)
-        league_key = league.value if league else None
-        buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
-        if not buying_team:
-            await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
-            return
-        if not season:
-            _sid = buying_team.get("season_id")
-            season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
-        if not season:
-            await interaction.followup.send(embed=error_embed("No Active Season", "No active season found for your claim. You need an active season to sign a free agent."), ephemeral=True)
-            return
+        try:
+            league_key = league.value if league else None
+            buying_team, season = await self._resolve_buying_team_and_season(interaction, league_key)
+            if not buying_team:
+                await interaction.followup.send(embed=error_embed("No Claimed Team", "Claim a team first with `/claim`."), ephemeral=True)
+                return
+            if not season:
+                _sid = buying_team.get("season_id")
+                season = buying_team.get("_season") or (await self.bot.season_service.get_season(str(_sid)) if _sid else None)
+            if not season:
+                await interaction.followup.send(embed=error_embed("No Active Season", "No active season found for your claim. You need an active season to sign a free agent."), ephemeral=True)
+                return
 
-        season_id = str(season.get("id"))
-        season_year = int(season.get("season_year") or 2026)
-        buying_team_id = int(buying_team.get("team_api_id"))
-        buying_team_name = str(buying_team.get("team_name"))
+            season_id = str(season.get("id"))
+            season_year = int(season.get("season_year") or 2026)
+            buying_team_id = int(buying_team.get("team_api_id"))
+            buying_team_name = str(buying_team.get("team_name"))
 
-        await self.bot.football_data.ensure_seeded()
-        free_team_id = 9000001
-        player = await self.market.find_player_in_team(free_team_id, player_name, season_year)
-        if not player:
-            # Helpful fallback: check if the player exists but is not a free agent
-            any_player = await self.bot.db.fetchone(
-                "SELECT name, team_api_id FROM players WHERE season=? AND LOWER(name) LIKE ? ORDER BY overall DESC LIMIT 1",
-                (season_year, f"%{str(player_name).strip().lower()}%"),
+            await self.bot.football_data.ensure_seeded()
+            free_team_id = 9000001
+            player = await self.market.find_player_in_team(free_team_id, player_name, season_year)
+            if not player:
+                # Helpful fallback: check if the player exists but is not a free agent
+                any_player = await self.bot.db.fetchone(
+                    "SELECT name, team_api_id FROM players WHERE season=? AND LOWER(name) LIKE ? ORDER BY overall DESC LIMIT 1",
+                    (season_year, f"%{str(player_name).strip().lower()}%"),
+                )
+                if any_player:
+                    ap = dict(any_player)
+                    if int(ap.get("team_api_id") or 0) != free_team_id:
+                        await interaction.followup.send(
+                            embed=error_embed("Not A Free Agent", f"**{ap.get('name') or player_name}** is not currently a free agent. Use `/transfer` or negotiation commands for signed players."),
+                            ephemeral=True,
+                        )
+                        return
+                await interaction.followup.send(embed=error_embed("Free Agent Not Found", f"Could not find a free agent matching `{player_name}`. Use `/freeagents` to browse available free agents."), ephemeral=True)
+                return
+
+            # Ensure player is still a free agent
+            if int(player.get("team_api_id") or 0) != free_team_id:
+                await interaction.followup.send(embed=error_embed("Not A Free Agent", f"**{player.get('name')}** is not currently a free agent."), ephemeral=True)
+                return
+
+            val = self.market.value_player(player)
+            demand = self.market.contract_demand(val, player)
+            now = utc_now_iso()
+            meta = {
+                "valuation": val.__dict__,
+                "demand": demand,
+                "contract_round": 0,
+                "pressure": 0,
+                "is_free_agent": True,
+                "selling_is_bot": True,
+            }
+            cur = await self.bot.db.execute(
+                """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'contract',0,0,?,?,?)""",
+                (
+                    season_id, interaction.guild_id, interaction.channel_id, "free_agent_contract", "negotiating",
+                    interaction.user.id, buying_team_id, buying_team_name, free_team_id, "Free Agents", None,
+                    int(player.get("api_id")), str(player.get("name")), 0,
+                    json.dumps(meta), now, now,
+                ),
             )
-            if any_player:
-                ap = dict(any_player)
-                if int(ap.get("team_api_id") or 0) != free_team_id:
-                    await interaction.followup.send(
-                        embed=error_embed("Not A Free Agent", f"**{ap.get('name') or player_name}** is not currently a free agent. Use `/transfer` or negotiation commands for signed players."),
-                        ephemeral=True,
-                    )
-                    return
-            await interaction.followup.send(embed=error_embed("Free Agent Not Found", f"Could not find a free agent matching `{player_name}`. Use `/freeagents` to browse available free agents."), ephemeral=True)
-            return
+            offer_id = cur.lastrowid
 
-        # Ensure player is still a free agent
-        if int(player.get("team_api_id") or 0) != free_team_id:
-            await interaction.followup.send(embed=error_embed("Not A Free Agent", f"**{player.get('name')}** is not currently a free agent."), ephemeral=True)
-            return
-
-        val = self.market.value_player(player)
-        demand = self.market.contract_demand(val, player)
-        now = utc_now_iso()
-        meta = {
-            "valuation": val.__dict__,
-            "demand": demand,
-            "contract_round": 0,
-            "pressure": 0,
-            "is_free_agent": True,
-            "selling_is_bot": True,
-        }
-        cur = await self.bot.db.execute(
-            """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'contract',0,0,?,?,?)""",
-            (
-                season_id, interaction.guild_id, interaction.channel_id, "free_agent_contract", "negotiating",
-                interaction.user.id, buying_team_id, buying_team_name, free_team_id, "Free Agents", None,
-                int(player.get("api_id")), str(player.get("name")), 0,
-                json.dumps(meta), now, now,
-            ),
-        )
-        offer_id = cur.lastrowid
-
-        view = ContractNegView(self, int(offer_id))
-        bar = negotiation_pressure_bar(0, 10)
-        p = player
-        embed = success_embed(
-            "Free Agent Contract Negotiation",
-            (
-                f"{bar}\n\n"
-                f"I am representing **{p.get('name')}** as a high-profile free agent. Following talks, **{buying_team_name}** is a potential destination, but this will be handled strictly and professionally.\n\n"
-                f"**Player profile (database):** {int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT • "
-                f"{p.get('detailed_position') or p.get('position') or '?'} • Age {p.get('age') or '?'} • Height {int(p.get('height_cm') or 0) or '?'}cm\n"
-                f"**Estimated market value:** {fmt_money(val.market_value)}\n\n"
-                f"**Opening demands:**\n"
-                f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                f"• Requested role: **{demand['role']}**\n"
-                f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                f"• Contract length: **{demand['contract_years']} years**\n\n"
-                f"Only <@{interaction.user.id}> may negotiate this deal. Submit a natural-language offer (e.g. `180k per week, important role, 2M signing bonus, 4 years`).\n"
-                f"Lowball offers or stalling will raise pressure. At high pressure, {p.get('name')}'s camp will walk away and explore other clubs."
-            ),
-        )
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            view = ContractNegView(self, int(offer_id))
+            bar = negotiation_pressure_bar(0, 10)
+            p = player
+            embed = success_embed(
+                "Free Agent Contract Negotiation",
+                (
+                    f"{bar}\n\n"
+                    f"I am representing **{p.get('name')}** as a high-profile free agent. Following talks, **{buying_team_name}** is a potential destination, but this will be handled strictly and professionally.\n\n"
+                    f"**Player profile (database):** {int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT • "
+                    f"{p.get('detailed_position') or p.get('position') or '?'} • Age {p.get('age') or '?'} • Height {int(p.get('height_cm') or 0) or '?'}cm\n"
+                    f"**Estimated market value:** {fmt_money(val.market_value)}\n\n"
+                    f"**Opening demands:**\n"
+                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
+                    f"• Requested role: **{demand['role']}**\n"
+                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
+                    f"• Contract length: **{demand['contract_years']} years**\n\n"
+                    f"Only <@{interaction.user.id}> may negotiate this deal. Submit a natural-language offer (e.g. `180k per week, important role, 2M signing bonus, 4 years`).\n"
+                    f"Lowball offers or stalling will raise pressure. At high pressure, {p.get('name')}'s camp will walk away and explore other clubs."
+                ),
+            )
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        except Exception:
+            logger.exception("freeagentcontract command failed")
+            try:
+                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while starting the free-agent negotiation. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
 
 async def setup(bot):
