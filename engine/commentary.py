@@ -223,7 +223,6 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
                 " The atmosphere shifts instantly as the contest tilts.",
                 "",
             ]
-            # Avoid duplicating the score if it's already present in the text
             opts = _noscore_opts if _ss in txt else (_score_opts + _noscore_opts)
             extra = _pick(rng, opts)
             if extra and extra.strip() not in txt:

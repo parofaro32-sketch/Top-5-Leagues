@@ -520,6 +520,39 @@ class TransfersCog(commands.Cog):
             if years is None:
                 missing.append("contract length (e.g. 4 years)")
 
+            # LLM fallback for missing fields (only fills gaps; deterministic parse takes precedence)
+            if missing and not meta.get("_agreement_accepted"):
+                try:
+                    llm = getattr(self.bot, "llm_service", None)
+                    if llm and getattr(llm, "enabled", False):
+                        llm_terms = await llm.parse_contract_terms_llm(
+                            raw_msg,
+                            context={
+                                "demand": demand,
+                                "known": {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years},
+                                "missing": list(missing),
+                            },
+                        )
+                        if isinstance(llm_terms, dict):
+                            if (wage is None or int(wage) <= 0) and llm_terms.get("wage") is not None:
+                                wage = int(llm_terms["wage"])
+                            if role is None and llm_terms.get("role"):
+                                role = str(llm_terms["role"])
+                            if bonus is None and llm_terms.get("signing_bonus") is not None:
+                                bonus = int(llm_terms["signing_bonus"])
+                            if years is None and llm_terms.get("contract_years") is not None:
+                                years = int(llm_terms["contract_years"])
+                            # Recompute missing
+                            missing = []
+                            if wage is None or int(wage) <= 0:
+                                missing.append("weekly wage (e.g. 200k/wk, 300k per week)")
+                            if role is None:
+                                missing.append("role (Crucial/Important/Rotation/Sporadic/Prospect)")
+                            if years is None:
+                                missing.append("contract length (e.g. 4 years)")
+                except Exception:
+                    logger.exception("LLM contract term fallback failed")
+
             if missing and not meta.get("_agreement_accepted"):
                 understood = []
                 if wage is not None and int(wage) > 0:
@@ -598,6 +631,26 @@ class TransfersCog(commands.Cog):
 
             offered = {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years}
             result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure, is_free_agent=is_free_agent)
+            try:
+                llm = getattr(self.bot, "llm_service", None)
+                if llm and getattr(llm, "enabled", False):
+                    llm_msg = await llm.generate_negotiation_message(
+                        player=player,
+                        demand=demand,
+                        offered=offered,
+                        counter=result.get("counter"),
+                        accepted=bool(result.get("accepted")),
+                        walked_away=bool(result.get("walked_away")),
+                        pressure=int(pressure),
+                        max_pressure=10,
+                        round_no=int(round_no),
+                        is_free_agent=bool(is_free_agent),
+                        deterministic_message=str(result.get("message") or ""),
+                    )
+                    if llm_msg:
+                        result["message"] = llm_msg
+            except Exception:
+                logger.exception("LLM negotiation message enhancement failed")
 
             meta["contract_round"] = round_no
             meta["pressure"] = pressure

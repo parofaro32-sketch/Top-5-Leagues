@@ -9,6 +9,7 @@ from discord.ext import commands
 from config import Settings
 from data.football_data import FootballDataService
 from db.database import Database
+from services.llm_service import LLMService
 from services.match_service import MatchService
 from services.season_service import SeasonService
 
@@ -25,6 +26,7 @@ class FootballBot(commands.Bot):
         self.football_data = FootballDataService(settings, db)
         self.match_service = MatchService(db)
         self.season_service = SeasonService(db)
+        self.llm_service = LLMService(settings)
 
     async def setup_hook(self) -> None:
         # Ensure data seeded
@@ -89,6 +91,13 @@ class FootballBot(commands.Bot):
                 logger.info("Synced global commands")
         except Exception:
             logger.exception("Failed to sync application commands")
+
+    async def close(self) -> None:
+        try:
+            await self.llm_service.close()
+        except Exception:
+            logger.exception("Failed to close LLM service")
+        await super().close()
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (%s)", self.user, getattr(self.user, "id", "?"))

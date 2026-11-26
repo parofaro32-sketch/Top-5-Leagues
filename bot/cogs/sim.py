@@ -2275,17 +2275,6 @@ class SimCog(commands.Cog):
                                 await channel.send(_clamp(f"📅 Matchday {adv.get('from_matchday')} complete. **Matchday {adv.get('to_matchday')}** fixtures are now loaded.", 1900))
                             elif adv.get("reason") == "season_completed":
                                 await channel.send(_clamp("🏁 Season completed! All matchdays have been played.", 1900))
-                    # Retry pending transfers that were blocked by active matches
-                    try:
-                        home_id = int(getattr(getattr(getattr(session.state, 'home', None), 'team', None), 'api_id', 0) or 0)
-                        away_id = int(getattr(getattr(getattr(session.state, 'away', None), 'team', None), 'api_id', 0) or 0)
-                        retried = await season_service.retry_pending_transfers_for_teams([home_id, away_id])
-                        confirmed = [r for r in retried if r.get("ok") and not r.get("already_confirmed")]
-                        if confirmed:
-                            names = ", ".join(str(r.get("player_name") or r.get("id")) for r in confirmed[:5])
-                            await channel.send(_clamp(f"✅ Pending transfer(s) finalized after match: {names}", 1900))
-                    except Exception:
-                        logger.exception("Failed to retry pending transfers after match_id=%s", session.state.id)
             except Exception:
                 logger.exception("Failed to finalize season fixture match_id=%s", session.state.id)
             # Post-match press conference auto-generation
