@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import random
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -146,48 +148,126 @@ class TransferMarketService:
         return dict(row) if row else None
 
     async def find_player_in_team(self, team_api_id: int, player_query: str, season_year: int = 2026) -> dict[str, Any] | None:
-        q = (player_query or "").strip()
-        if not q:
+        q_raw = (player_query or "").strip()
+        if not q_raw:
             return None
+
+        def _norm(s: str | None) -> str:
+            s = str(s or "").strip().lower()
+            try:
+                s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+            except Exception:
+                pass
+            s = re.sub(r"[^a-z0-9\s]", " ", s)
+            s = re.sub(r"\s+", " ", s).strip()
+            return s
+
+        qn = _norm(q_raw)
         rows = await self.db.fetchall(
             "SELECT * FROM players WHERE team_api_id=? AND season=?",
             (int(team_api_id), int(season_year)),
         )
         players = [dict(r) for r in rows]
         if not players:
+            # Fallback: try any season for this team (handles season mismatch)
+            rows = await self.db.fetchall(
+                "SELECT * FROM players WHERE team_api_id=? ORDER BY season DESC",
+                (int(team_api_id),),
+            )
+            players = [dict(r) for r in rows]
+        if not players:
             return None
-        if q.isdigit():
+
+        # Numeric lookup (api_id or shirt number)
+        if q_raw.isdigit():
+            qi = int(q_raw)
             for p in players:
-                if int(p.get("api_id") or 0) == int(q):
+                if int(p.get("api_id") or 0) == qi:
                     return p
-                if int(p.get("number") or -1) == int(q):
-                    return p
-        ql = q.lower()
-        # exact
+            for p in players:
+                try:
+                    if int(p.get("number") or -1) == qi:
+                        return p
+                except Exception:
+                    pass
+
+        # Exact normalized name
         for p in players:
-            if str(p.get("name") or "").lower().strip() == ql:
+            if _norm(p.get("name")) == qn and qn:
                 return p
-        # contains
-        cands = [p for p in players if ql in str(p.get("name") or "").lower() or str(p.get("name") or "").lower() in ql]
-        if len(cands) == 1:
-            return cands[0]
-        if cands:
-            cands.sort(key=lambda p: len(str(p.get("name") or "")))
-            return cands[0]
-        # token overlap
-        qt = set(ql.split())
-        best = None
+
+        # Contains / contained
+        contains: list[dict[str, Any]] = []
+        if qn:
+            for p in players:
+                pn = _norm(p.get("name"))
+                if not pn:
+                    continue
+                if qn in pn or pn in qn:
+                    contains.append(p)
+        if len(contains) == 1:
+            return contains[0]
+        if contains:
+            # Prefer best token overlap among contains candidates
+            qt = set(qn.split())
+            scored: list[tuple[float, int, dict[str, Any]]] = []
+            for p in contains:
+                pn = _norm(p.get("name"))
+                pt = set(pn.split())
+                sc = len(qt & pt) / max(1, len(qt | pt))
+                scored.append((sc, -len(pn), p))
+            scored.sort(reverse=True)
+            return scored[0][2]
+
+        # Token overlap
+        qt = set(qn.split())
+        best: dict[str, Any] | None = None
         best_sc = 0.0
-        for p in players:
-            pt = set(str(p.get("name") or "").lower().split())
-            if not pt:
-                continue
-            sc = len(qt & pt) / max(1, len(qt | pt))
-            if sc > best_sc:
-                best_sc = sc
-                best = p
-        if best and best_sc >= 0.34:
+        if qt:
+            for p in players:
+                pn = _norm(p.get("name"))
+                pt = set(pn.split())
+                if not pt:
+                    continue
+                inter = len(qt & pt)
+                if inter == 0:
+                    continue
+                sc = inter / max(1, len(qt | pt))
+                # bonus for last-name match
+                if qn.split() and pn.split() and qn.split()[-1] == pn.split()[-1]:
+                    sc += 0.15
+                if sc > best_sc:
+                    best_sc = sc
+                    best = p
+        if best is not None and best_sc >= 0.34:
             return best
+
+        # Difflib fallback on normalized names
+        if qn:
+            names = [_norm(p.get("name")) for p in players]
+            candidates: list[tuple[float, int]] = []
+            for i, pn in enumerate(names):
+                if not pn:
+                    continue
+                ratios = [difflib.SequenceMatcher(None, qn, pn).ratio()]
+                for tok in pn.split():
+                    if len(tok) >= 3:
+                        ratios.append(difflib.SequenceMatcher(None, qn, tok).ratio())
+                qcol = re.sub(r"[^a-z0-9]+", "", qn)
+                pcol = re.sub(r"[^a-z0-9]+", "", pn)
+                if qcol and pcol:
+                    ratios.append(difflib.SequenceMatcher(None, qcol, pcol).ratio())
+                sc = max(ratios) if ratios else 0.0
+                if sc > 0:
+                    candidates.append((sc, i))
+            candidates.sort(reverse=True)
+            if candidates:
+                top_sc, top_i = candidates[0]
+                second_sc = candidates[1][0] if len(candidates) > 1 else 0.0
+                if top_sc >= 0.72 or (top_sc >= 0.58 and (top_sc - second_sc) >= 0.08):
+                    return players[top_i]
+                if top_sc >= 0.62 and len(candidates) == 1:
+                    return players[top_i]
         return None
 
     @staticmethod
