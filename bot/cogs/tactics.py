@@ -10,17 +10,18 @@ logger = logging.getLogger(__name__)
 
 from bot.ui.embeds import error_embed, info_embed
 from bot.ui.modals import TacticsJsonModal
-from services.tactics_service import normalize_tactics, tactics_summary
+from services.tactics_service import normalize_tactics, parse_tactics_text, tactics_summary
 
 
 class TacticsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="tactics", description="Submit tactical settings for your team in a manager match")
+    @app_commands.command(name="tactics", description="Submit tactical settings for your team (natural language or structured options)")
     @app_commands.describe(
         match_id="Match ID",
         side="Which side you manage",
+        instructions="Natural language tactics (e.g. 'high press, play out from the back, 4-3-3, stay compact')",
         mentality="Attacking mentality",
         pressing="Pressing intensity",
         defensive_line="Defensive line height",
@@ -32,6 +33,7 @@ class TacticsCog(commands.Cog):
         defensive_line=[app_commands.Choice(name=v, value=v) for v in ["deep","standard","high","very_high"]],
     )
     async def tactics(self, interaction: discord.Interaction, match_id: str, side: app_commands.Choice[str],
+                      instructions: str | None = None,
                       mentality: app_commands.Choice[str] | None = None,
                       pressing: app_commands.Choice[str] | None = None,
                       defensive_line: app_commands.Choice[str] | None = None,
@@ -83,16 +85,40 @@ class TacticsCog(commands.Cog):
             await interaction.response.send_modal(TacticsJsonModal(on_modal))
             return
 
-        updates = {"attacking": {}, "defensive": {}}
-        if mentality: updates["attacking"]["mentality"] = mentality.value
-        if pressing: updates["defensive"]["pressing_intensity"] = pressing.value
-        if defensive_line: updates["defensive"]["defensive_line"] = defensive_line.value
-        if not updates["attacking"]: updates.pop("attacking")
-        if not updates["defensive"]: updates.pop("defensive")
+        updates: dict = {}
+        # Natural language instructions first
+        if instructions and str(instructions).strip():
+            try:
+                parsed = parse_tactics_text(str(instructions))
+                if isinstance(parsed, dict):
+                    updates = parsed
+            except Exception:
+                logger.exception("Failed to parse tactics instructions")
+                updates = {}
+
+        # Explicit choices override parsed NL
+        if mentality or pressing or defensive_line:
+            updates.setdefault("attacking", {})
+            updates.setdefault("defensive", {})
+            if mentality:
+                updates["attacking"]["mentality"] = mentality.value
+            if pressing:
+                updates["defensive"]["pressing_intensity"] = pressing.value
+            if defensive_line:
+                updates["defensive"]["defensive_line"] = defensive_line.value
+
+        # Clean empty sections
+        if isinstance(updates.get("attacking"), dict) and not updates["attacking"]:
+            updates.pop("attacking", None)
+        if isinstance(updates.get("defensive"), dict) and not updates["defensive"]:
+            updates.pop("defensive", None)
+        if isinstance(updates.get("set_pieces"), dict) and not updates["set_pieces"]:
+            updates.pop("set_pieces", None)
+
         if not updates:
             # show current
             team_state = session.state.team(s)
-            await interaction.response.send_message(embed=info_embed("Current Tactics", f"**{team_state.team.name}**\n{tactics_summary(team_state.tactics or {})}"), ephemeral=True)
+            await interaction.response.send_message(embed=info_embed("Current Tactics", f"**{team_state.team.name}**\n{tactics_summary(team_state.tactics or {})}\n\nTip: you can also pass `instructions` in natural language, e.g. 'high press, 4-3-3, play out from the back'."), ephemeral=True)
             return
         await apply(interaction, updates)
 

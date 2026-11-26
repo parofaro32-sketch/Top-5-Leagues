@@ -73,11 +73,11 @@ ROLE_TIERS = [
     "Crucial", "Important", "Rotation", "Sporadic", "Prospect"
 ]
 ROLE_ALIASES = {
-    "crucial": "Crucial", "key": "Crucial", "star": "Crucial", "essential": "Crucial",
-    "important": "Important", "regular": "Important", "starter": "Important", "first team": "Important", "first-team": "Important",
-    "rotation": "Rotation", "squad": "Rotation", "rotational": "Rotation",
-    "sporadic": "Sporadic", "backup": "Sporadic", "fringe": "Sporadic", "bench": "Sporadic", "reserve": "Sporadic",
-    "prospect": "Prospect", "youngster": "Prospect", "future": "Prospect", "youth": "Prospect",
+    "crucial": "Crucial", "key": "Crucial", "star": "Crucial", "star player": "Crucial", "key player": "Crucial", "essential": "Crucial", "main man": "Crucial", "undisputed": "Crucial", "leader": "Crucial", "cornerstone": "Crucial",
+    "important": "Important", "regular": "Important", "starter": "Important", "first team": "Important", "first-team": "Important", "regular starter": "Important", "first choice": "Important", "first-choice": "Important", "senior": "Important",
+    "rotation": "Rotation", "squad": "Rotation", "rotational": "Rotation", "squad player": "Rotation", "squad rotation": "Rotation", "impact sub": "Rotation", "rotation option": "Rotation", "cover": "Rotation",
+    "sporadic": "Sporadic", "backup": "Sporadic", "fringe": "Sporadic", "bench": "Sporadic", "reserve": "Sporadic", "bit-part": "Sporadic", "bit part": "Sporadic", "fringe player": "Sporadic", "backup option": "Sporadic", "deputy": "Sporadic",
+    "prospect": "Prospect", "youngster": "Prospect", "future": "Prospect", "youth": "Prospect", "development": "Prospect", "academy": "Prospect", "future prospect": "Prospect", "young prospect": "Prospect",
 }
 
 
@@ -85,15 +85,29 @@ def normalize_role(text: str | None) -> str | None:
     if not text:
         return None
     s = str(text).strip().lower()
+    s_clean = re.sub(r"[^a-z0-9\s-]", " ", s)
+    s_clean = re.sub(r"\s+", " ", s_clean).strip()
     if s in ROLE_ALIASES:
         return ROLE_ALIASES[s]
+    if s_clean in ROLE_ALIASES:
+        return ROLE_ALIASES[s_clean]
     # Check longer aliases first to avoid "star" matching inside "starter"
     for k, v in sorted(ROLE_ALIASES.items(), key=lambda kv: -len(kv[0])):
-        if re.search(rf"\b{re.escape(k)}\b", s):
+        if re.search(rf"\b{re.escape(k)}\b", s_clean):
             return v
     for r in ROLE_TIERS:
-        if re.search(rf"\b{re.escape(r.lower())}\b", s):
+        if re.search(rf"\b{re.escape(r.lower())}\b", s_clean):
             return r
+    # fuzzy fallback for short inputs
+    if len(s_clean.split()) <= 4:
+        best_role = None
+        best_sc = 0.0
+        for k, v in ROLE_ALIASES.items():
+            sc = difflib.SequenceMatcher(None, s_clean, k).ratio()
+            if sc > best_sc:
+                best_sc, best_role = sc, v
+        if best_role and best_sc >= 0.82:
+            return best_role
     return None
 
 

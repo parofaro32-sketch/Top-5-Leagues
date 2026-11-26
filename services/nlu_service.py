@@ -472,6 +472,147 @@ def any_regex(text: str | None, patterns: Iterable[str]) -> bool:
 
 
 # -------------------------
+# General intent / entity helpers
+# -------------------------
+
+INTENT_SYNONYMS: dict[str, list[str]] = {
+    "yes": ["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "fine", "alright", "all right", "do it", "go ahead", "confirm", "accept", "agree", "deal", "sounds good", "works for me", "let's do it", "lets do it"],
+    "no": ["no", "nope", "nah", "never", "don't", "dont", "do not", "cancel", "stop", "decline", "reject", "refuse", "not now", "no thanks", "no way"],
+    "help": ["help", "how", "what can you do", "what do i do", "commands", "guide", "explain"],
+    "status": ["status", "how are we", "where are we", "what's happening", "whats happening", "update", "progress"],
+}
+
+
+def normalize_free_text(text: str | None) -> str:
+    """Normalize messy user text: lowercase, strip accents, collapse whitespace, normalize punctuation."""
+    s = str(text or "").strip()
+    s = s.replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+    s = s.replace("\u2013", "-").replace("\u2014", "-")
+    try:
+        s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    except Exception:
+        pass
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def fuzzy_contains(text: str | None, phrase: str, threshold: float = 0.84) -> bool:
+    """True if phrase appears exactly or as a close fuzzy match in text."""
+    t = norm_token(text)
+    p = norm_token(phrase)
+    if not t or not p:
+        return False
+    if p in t:
+        return True
+    # token-window fuzzy match
+    t_toks = t.split()
+    p_toks = p.split()
+    if not p_toks:
+        return False
+    n = len(p_toks)
+    if len(t_toks) < n:
+        return fuzzy_ratio(t, p) >= threshold
+    for i in range(0, len(t_toks) - n + 1):
+        window = " ".join(t_toks[i:i + n])
+        if fuzzy_ratio(window, p) >= threshold:
+            return True
+    # also try whole-text ratio for short phrases
+    if len(p_toks) <= 3:
+        return fuzzy_ratio(t, p) >= (threshold - 0.05)
+    return False
+
+
+def detect_yes_no(text: str | None) -> bool | None:
+    """Detect clear yes/no intent in short replies. Returns True/False or None if ambiguous."""
+    s = norm_text(text)
+    if not s:
+        return None
+    # explicit negation-first
+    if any_regex(s, [r"^\s*(no|nope|nah|never|cancel|stop|decline|reject)\b", r"\bdon'?t\b", r"\bdo not\b", r"\bnot now\b"]):
+        # but avoid "not bad" style false positives in very short replies - rare here
+        if any_regex(s, [r"^\s*(yes|yeah|yep|sure|ok|okay|fine|alright|do it|go ahead|confirm|accept|agree)\b"]):
+            return None
+        return False
+    if any_regex(s, [r"^\s*(yes|yeah|yep|yup|sure|ok|okay|fine|alright|all right|do it|go ahead|confirm|accept|agree|deal)\b", r"\bsounds good\b", r"\bworks for me\b", r"\blet'?s do it\b"]):
+        return True
+    # fuzzy for short messages
+    if len(s.split()) <= 4:
+        y_score = max((fuzzy_ratio(s, p) for p in INTENT_SYNONYMS["yes"]), default=0.0)
+        n_score = max((fuzzy_ratio(s, p) for p in INTENT_SYNONYMS["no"]), default=0.0)
+        if y_score >= 0.88 and y_score > n_score + 0.08:
+            return True
+        if n_score >= 0.88 and n_score > y_score + 0.08:
+            return False
+    return None
+
+
+def extract_number(text: str | None) -> int | None:
+    """Extract a plain integer from text (for shirt numbers, counts, etc.)."""
+    s = str(text or "").strip()
+    m = re.search(r"\b(\d{1,4})\b", s)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def extract_player_mentions(text: str | None) -> list[str]:
+    """Extract likely player name mentions from free text. Heuristic: capitalized words, quoted names, or #numbers."""
+    raw = str(text or "")
+    out: list[str] = []
+    # quoted
+    for m in re.finditer(r"[\"']([^\"']{2,40})[\"']", raw):
+        v = m.group(1).strip()
+        if v:
+            out.append(v)
+    # #number
+    for m in re.finditer(r"#\s*(\d{1,3})\b", raw):
+        out.append(f"#{m.group(1)}")
+    # capitalized sequences (2-4 words) - keep conservative
+    for m in re.finditer(r"\b([A-Z][a-zA-ZÀ-ÿ\.\-']+(?:\s+[A-Z][a-zA-ZÀ-ÿ\.\-']+){0,3})\b", raw):
+        v = m.group(1).strip()
+        if len(v) < 3:
+            continue
+        if norm_token(v) in {"i", "we", "my", "our", "the", "a", "please", "can", "could", "would", "should", "start", "bench", "sub", "off", "on"}:
+            continue
+        out.append(v)
+    # dedupe preserve order
+    seen = set()
+    deduped = []
+    for v in out:
+        k = norm_token(v)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        deduped.append(v)
+    return deduped
+
+
+def parse_flexible_intent(text: str | None) -> dict[str, Any]:
+    """General-purpose intent extraction for football manager chat messages."""
+    raw = normalize_free_text(text)
+    s = norm_text(raw)
+    intents: list[str] = []
+    flags: dict[str, bool] = {}
+
+    def add(name: str, cond: bool):
+        if cond:
+            intents.append(name)
+            flags[name] = True
+
+    add("agree", bool(detect_yes_no(raw) is True) or any_regex(s, [r"\bwe agree\b", r"\bi agree\b", r"\bdeal\b", r"\baccept\b"]))
+    add("reject", bool(detect_yes_no(raw) is False) or any_regex(s, [r"\breject\b", r"\bdecline\b", r"\bno thanks\b"]))
+    add("negotiate", any_regex(s, [r"\bcounter\b", r"\bnegotiate\b", r"\bhow about\b", r"\bwhat about\b", r"\bcan you do\b", r"\bmeet me\b", r"\bmiddle ground\b"]))
+    add("ask_info", any_regex(s, [r"\bwhat\b", r"\bhow much\b", r"\bwhy\b", r"\bexplain\b", r"\btell me\b", r"\bdetails\b", r"\bstatus\b"]))
+    add("urgent", any_regex(s, [r"\burgent\b", r"\basap\b", r"\bnow\b", r"\bquickly\b", r"\bimmediately\b"]))
+    add("insult_or_frustration", any_regex(s, [r"\bridiculous\b", r"\bjoke\b", r"\bunacceptable\b", r"\bdisrespect\b", r"\binsult\b", r"\bangry\b"]))
+
+    return {"text": raw, "norm": s, "intents": intents, "flags": flags}
+
+
+# -------------------------
 # Board / budget request analysis
 # -------------------------
 

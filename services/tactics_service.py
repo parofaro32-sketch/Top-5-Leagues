@@ -292,13 +292,16 @@ def parse_tactics_text(text: str) -> dict[str, Any]:
         t["defensive"]["compactness"] = "high"
 
     # Fullbacks / movement
-    if has_re(r"\boverlap\b", r"\boverlapping fullbacks\b", r"\boverlapping full backs\b", r"\bfullbacks push up\b", r"\bfull backs push up\b"):
+    if has_re(r"\boverlap\b", r"\boverlapping fullbacks\b", r"\boverlapping full backs\b", r"\bfullbacks push up\b", r"\bfull backs push up\b", r"\boverlap with the fullbacks\b"):
         t["attacking"]["overlapping_fullbacks"] = True
     if has_neg_re(r"\boverlap\b"):
         t["attacking"]["overlapping_fullbacks"] = False
-    if has_re(r"\bunderlap\b", r"\bunderlapping\b", r"\binverted fullbacks\b"):
+    if has_re(r"\bunderlap\b", r"\bunderlapping\b", r"\binverted fullbacks\b", r"\bcut inside\b", r"\bcut in\b", r"\binside forwards\b", r"\bwingers cut inside\b", r"\binvert the wingers\b"):
         t["attacking"]["underlapping_movements"] = True
-    if has_neg_re(r"\bunderlap\b"):
+        # cutting inside often means narrower attacking shape
+        if t["attacking"].get("attacking_width") == "balanced":
+            t["attacking"]["attacking_width"] = "narrow"
+    if has_neg_re(r"\bunderlap\b", r"\bcut inside\b"):
         t["attacking"]["underlapping_movements"] = False
 
     # Crossing
@@ -369,12 +372,12 @@ def parse_tactics_text(text: str) -> dict[str, Any]:
         t["attacking"]["passing_directness"] = "direct" if t["attacking"]["passing_directness"] != "short" else t["attacking"]["passing_directness"]
 
     # Protect lead / game state phrases
-    if has_re(r"\bprotect the lead\b", r"\bprotecting the lead\b", r"\bsee out the game\b", r"\bgame management\b", r"\bhold onto the lead\b"):
+    if has_re(r"\bprotect the lead\b", r"\bprotecting the lead\b", r"\bsee out the game\b", r"\bgame management\b", r"\bhold onto the lead\b", r"\brun down the clock\b", r"\bkill the game\b", r"\btime wasting\b", r"\bwaste time\b", r"\bshut up shop\b", r"\bmanage the game\b", r"\bsee it out\b"):
         t["attacking"]["mentality"] = "cautious"
         t["attacking"]["possession_style"] = "patient"
         t["attacking"]["attacking_transitions"] = "slow"
         t["defensive"]["compactness"] = "high"
-    if has_re(r"\bneed a goal\b", r"\bchasing the game\b", r"\bgo for broke\b", r"\ball out\b"):
+    if has_re(r"\bneed a goal\b", r"\bchasing the game\b", r"\bgo for broke\b", r"\ball out\b", r"\bthrow men forward\b", r"\bdesperate\b", r"\blast resort\b"):
         t["attacking"]["mentality"] = "very_attacking"
         t["attacking"]["attacking_transitions"] = "fast"
         t["defensive"]["defensive_line"] = "high"

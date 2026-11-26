@@ -88,25 +88,40 @@ class LineupCog(commands.Cog):
             return items
 
         try:
-            if auto or (not starters_json):
+            starters_raw = str(starters_json or "").strip()
+            bench_raw = str(bench_json or "").strip()
+            use_manual = bool(starters_raw)
+            # If user gave starters, prefer their input; auto only when no starters provided.
+            if (not use_manual) or (auto and not use_manual):
                 lu = auto_build_lineup(team_state.team.api_id, team_state.team.name, squad, formation=formation)
             else:
-                starters = _parse_players_input(starters_json)
-                bench = _parse_players_input(bench_json)
-                if len(starters) != 11:
-                    raise LineupValidationError(
-                        f"Provide exactly 11 starters (got {len(starters)}). Use a JSON array or comma/newline-separated names. "
-                        "You can include positions for custom players, e.g. 'Alisson (GK), Van Dijk (DEF), ...'"
+                # Try natural-language lineup parser first (handles "best XI", "4-3-3 with...", messy text)
+                try:
+                    from services.lineup_service import parse_lineup_submission
+                    lu = parse_lineup_submission(
+                        formation=formation,
+                        starters_raw=starters_raw,
+                        bench_raw=bench_raw,
+                        squad=squad,
+                        team_api_id=team_state.team.api_id,
+                        team_name=team_state.team.name,
                     )
-                lu, custom_players = validate_lineup(
-                    team_api_id=team_state.team.api_id,
-                    team_name=team_state.team.name,
-                    formation=formation,
-                    starters=starters,
-                    bench=bench,
-                    squad=squad,
-                    return_custom=True,
-                )
+                except LineupValidationError:
+                    starters = _parse_players_input(starters_json)
+                    bench = _parse_players_input(bench_json)
+                    if len(starters) != 11:
+                        raise LineupValidationError(
+                            f"Provide exactly 11 starters (got {len(starters)}). You can send names/numbers in any format, or describe your lineup in natural language."
+                        )
+                    lu, custom_players = validate_lineup(
+                        team_api_id=team_state.team.api_id,
+                        team_name=team_state.team.name,
+                        formation=formation,
+                        starters=starters,
+                        bench=bench,
+                        squad=squad,
+                        return_custom=True,
+                    )
         except (LineupValidationError, json.JSONDecodeError, Exception) as e:
             await interaction.followup.send(embed=error_embed("Lineup Error", f"Failed to set lineup: {e}"), ephemeral=True)
             return

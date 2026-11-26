@@ -1137,10 +1137,11 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
         r = str(r or "").strip()
         r = re.sub(r"^\s*\d+[\).\-\:]\s*", "", r).strip()  # leading list number
         r = re.sub(r"^\s*[-*•]\s*", "", r).strip()
-        r = re.sub(r"\b(bring\s+on|take\s+off|come\s+on|come\s+off|put\s+on|swap\s+in|swap\s+out|sub\s*out|sub\s*in|sub\s*off|sub\s*on)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub(r"\b(bring\s+on|take\s+off|come\s+on|come\s+off|put\s+on|swap\s+in|swap\s+out|sub\s*out|sub\s*in|sub\s*off|sub\s*on|get\s+on|get\s+off)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub(r"\b(replace|substitute|swap|switch|change)\b", " ", r, flags=re.IGNORECASE)
         r = re.sub(r"\b(out|off|in|on)\b", " ", r, flags=re.IGNORECASE)
         r = re.sub("[\"'\u2018\u2019\u201c\u201d]", "", r)
-        r = re.sub(r"\b(please|pls|thanks|thank you|now)\b", " ", r, flags=re.IGNORECASE)
+        r = re.sub(r"\b(please|pls|thanks|thank you|now|instead|place)\b", " ", r, flags=re.IGNORECASE)
         r = re.sub(r"\s+", " ", r).strip(" -:>.,;/\\")
         return r.strip()
 
@@ -1238,7 +1239,7 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
         seps = [
             r"\s*(?:->|=>|→)\s*",
             r"\s*(?:<->)\s*",
-            r"\s+(?:for|to|with|replaces|replace)\s+",
+            r"\s+(?:for|to|with|replaces|replace|instead of|in place of|comes on for|comes in for|coming on for|on for|off for|in for)\s+",
             r"\s*/\s*",
             r"\s*\|\s*",
             r"\s+>\s+",

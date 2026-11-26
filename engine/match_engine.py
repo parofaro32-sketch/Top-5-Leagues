@@ -568,29 +568,42 @@ class MatchEngine:
             self.state.away.possession_share = round(100-self.state.home.possession_share,1)
 
     def _pick_att(self, hs, as_):
-        hc = hs["midfield"]*1.05 + hs["attack"]*0.25 + hs.get("press", 50)*0.08
-        ac = as_["midfield"]*1.0 + as_["attack"]*0.25 + as_.get("press", 50)*0.08
+        hc = hs["midfield"] * 1.05 + hs["attack"] * 0.25 + hs.get("press", 50) * 0.08
+        ac = as_["midfield"] * 1.0 + as_["attack"] * 0.25 + as_.get("press", 50) * 0.08
         # momentum and stamina influence
         hc *= (0.85 + self._momentum.get("home", 50.0) / 200.0)
         ac *= (0.85 + self._momentum.get("away", 50.0) / 200.0)
         hc *= (0.75 + self._avg_stam("home") / 200.0)
         ac *= (0.75 + self._avg_stam("away") / 200.0)
         diff = self.state.home.score - self.state.away.score
-        mf = min(1.0, self.state.minute/90.0)
+        mf = min(1.0, self.state.minute / 90.0)
         # game-state realism: trailing side pushes more late
         if diff > 0:
-            ac *= 1 + (0.06 + 0.08*mf)
-            hc *= 1 - 0.02*mf
+            ac *= 1 + (0.06 + 0.08 * mf)
+            hc *= 1 - 0.02 * mf
         elif diff < 0:
-            hc *= 1 + (0.06 + 0.08*mf)
-            ac *= 1 - 0.02*mf
+            hc *= 1 + (0.06 + 0.08 * mf)
+            ac *= 1 - 0.02 * mf
+        # numerical disadvantage / red card impact
+        try:
+            home_men = len(self.on_pitch("home"))
+            away_men = len(self.on_pitch("away"))
+            men_diff = home_men - away_men
+            if men_diff < 0:
+                hc *= max(0.70, 1.0 + 0.07 * men_diff)  # men_diff negative
+                ac *= min(1.20, 1.0 + 0.04 * abs(men_diff))
+            elif men_diff > 0:
+                ac *= max(0.70, 1.0 - 0.07 * men_diff)
+                hc *= min(1.20, 1.0 + 0.04 * men_diff)
+        except Exception:
+            pass
         # slight possession persistence for realism
         if self.state.possession_side == "home":
             hc *= 1.05
         else:
             ac *= 1.05
-        p_home = hc/(hc+ac) if (hc+ac)>0 else 0.5
-        return "home" if self.rng.random() < max(0.22,min(0.78,p_home)) else "away"
+        p_home = hc / (hc + ac) if (hc + ac) > 0 else 0.5
+        return "home" if self.rng.random() < max(0.22, min(0.78, p_home)) else "away"
 
     def _quiet_detail(self, att, deff, hs, as_):
         an = self.state.team(att).team.name
