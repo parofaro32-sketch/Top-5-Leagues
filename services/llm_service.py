@@ -202,6 +202,111 @@ class LLMService:
                 out["role"] = r
         return out or None
 
+    def _pressure_bar(self, pressure: int, max_pressure: int = 10) -> str:
+        p = max(0, min(int(pressure), int(max_pressure)))
+        pct = int(round((p / max(1, max_pressure)) * 100))
+        filled = max(0, min(10, int(round((p / max(1, max_pressure)) * 10))))
+        bar = "█" * filled + "░" * (10 - filled)
+        return f"[Negotiation Pressure: {bar} {pct}%]"
+
+    @staticmethod
+    def _money(n: Any) -> str:
+        try:
+            v = int(round(float(n or 0)))
+        except Exception:
+            v = 0
+        sign = "-" if v < 0 else ""
+        v = abs(v)
+        if v >= 1_000_000:
+            if v % 1_000_000 == 0:
+                return f"{sign}€{v // 1_000_000}M"
+            return f"{sign}€{v / 1_000_000:.1f}M"
+        if v >= 1_000:
+            return f"{sign}€{v // 1_000}K"
+        return f"{sign}€{v}"
+
+    def _player_profile(self, player: dict[str, Any], valuation: dict[str, Any] | None = None) -> dict[str, Any]:
+        v = valuation or {}
+        profile = {
+            "name": player.get("name"),
+            "age": player.get("age"),
+            "position": player.get("detailed_position") or player.get("position"),
+            "overall": player.get("overall"),
+            "potential": player.get("potential"),
+            "nationality": player.get("nationality"),
+            "height_cm": player.get("height_cm"),
+            "market_value": v.get("market_value"),
+            "asking_fee": v.get("asking_fee"),
+            "min_accept_fee": v.get("min_accept_fee"),
+            "fair_fee": v.get("fair_fee"),
+            "wage_demand": v.get("wage_demand"),
+            "signing_bonus_demand": v.get("signing_bonus"),
+            "desired_contract_years": v.get("contract_years"),
+            "desired_role": v.get("desired_role"),
+        }
+        return {k: val for k, val in profile.items() if val is not None}
+
+    async def generate_fee_negotiation_message(
+        self,
+        *,
+        player: dict[str, Any],
+        valuation: dict[str, Any],
+        offer_fee: int,
+        accepted: bool,
+        buying_team_name: str,
+        selling_team_name: str,
+        round_no: int = 1,
+        pressure: int = 0,
+        max_pressure: int = 10,
+        deterministic_reason: str = "",
+    ) -> str | None:
+        """Generate a bot-club fee negotiation response (selling club manager persona)."""
+        if not self.enabled:
+            return None
+        bar = self._pressure_bar(pressure, max_pressure)
+        profile = self._player_profile(player, valuation)
+        walked_away = pressure >= max_pressure and not accepted
+        sys = (
+            f"You are the manager of {selling_team_name} in a football manager game. "
+            f"{buying_team_name} have approached you to buy {player.get('name') or 'the player'}. "
+            f"I am acting as {buying_team_name}'s manager, while you are {selling_team_name}'s manager negotiating the transfer fee. "
+            "IMPORTANT: Use the database/player profile provided (overall, potential, market value, asking/fair/min acceptable fee) in mind during negotiation. "
+            "You can use the exact numbers during negotiation while keeping in mind the player's market value and worth. "
+            "IMPORTANT INSTRUCTION: While negotiating, a bar showing negotiation pressure must be shown. "
+            "If it reaches a high value, the manager should end negotiation. MUST BE EXTREMELY REALISTIC AND BE STRICT. "
+            "You MUST respect the provided decision: if accepted is false, do not accept; if accepted is true, accept clearly. "
+            "Do not change the offered fee number. Do not mention being an AI. "
+            "Reply in plain text, 2-4 short paragraphs max. Start your message with the pressure bar on its own line. "
+            "Be firm, realistic, and reference the player's OVR/POT/value when relevant."
+        )
+        user = json.dumps({
+            "scenario": "bot_club_fee_negotiation",
+            "selling_club": selling_team_name,
+            "buying_club": buying_team_name,
+            "player": profile,
+            "offer_fee": int(offer_fee),
+            "offer_fee_display": self._money(offer_fee),
+            "accepted": bool(accepted),
+            "walked_away": bool(walked_away),
+            "pressure": int(pressure),
+            "max_pressure": int(max_pressure),
+            "pressure_bar": bar,
+            "round_no": int(round_no),
+            "valuation": {k: valuation.get(k) for k in ("market_value", "min_accept_fee", "fair_fee", "asking_fee") if valuation.get(k) is not None},
+            "deterministic_reason": str(deterministic_reason or ""),
+        }, ensure_ascii=False)
+        text = await self.chat(
+            [{"role": "system", "content": sys}, {"role": "user", "content": user}],
+            temperature=0.7,
+            max_tokens=450,
+        )
+        if not text:
+            return None
+        out = text.strip()
+        if "[Negotiation Pressure:" not in out:
+            out = f"{bar}\n{out}"
+        return out[:1900]
+
     async def generate_negotiation_message(
         self,
         *,
@@ -216,50 +321,89 @@ class LLMService:
         round_no: int,
         is_free_agent: bool,
         deterministic_message: str,
+        buying_team_name: str | None = None,
+        selling_team_name: str | None = None,
+        valuation: dict[str, Any] | None = None,
+        scenario: str | None = None,
     ) -> str | None:
-        """Generate a natural negotiation response. Must respect the deterministic decision/counter."""
+        """Generate a natural contract negotiation response. Must respect the deterministic decision/counter."""
         if not self.enabled:
             return None
-        sys = (
-            "You are a professional football agent/club negotiator in a football manager game. "
-            "Write a concise, realistic negotiation message in plain text. "
-            "You MUST respect the provided decision and counter terms exactly. "
-            "Do not change numbers, do not accept if accepted is false, do not invent deals. "
-            "Do not mention being an AI. Keep it human, firm but fair, 2-5 short paragraphs max. "
-            "Include the pressure bar as given. If counter is provided, clearly state the counter-demand. "
-            "If accepted, clearly confirm agreement and state the agreed terms exactly. "
-            "If walked away, clearly state negotiations are over."
-        )
+
+        bar = self._pressure_bar(pressure, max_pressure)
+        profile = self._player_profile(player, valuation)
+        player_name = str(player.get("name") or "The player")
+        buying = str(buying_team_name or "the club")
+        selling = str(selling_team_name or "the selling club")
+
+        sc = (scenario or "").strip().lower()
+        if not sc:
+            sc = "free_agent" if is_free_agent else "contract_after_fee_agreed"
+
+        if sc == "free_agent":
+            sys = (
+                f"You are {player_name}'s agent representing him as a high-profile free agent. "
+                f"Following extensive talks, {buying} has emerged as the leading destination, and you are sitting down to negotiate a contract. "
+                f"I am {buying}'s manager and you are {player_name}'s agent. "
+                "IMPORTANT: Use our database/player profile to keep his attributes, overall rating, potential, and current market value in mind during the negotiation. "
+                "You can leverage these exact stats and numbers to justify his wage demands, and his previous wage/value to anchor his true worth as a free agent. "
+                "IMPORTANT INSTRUCTION: While negotiating the contract, a dynamic bar showing negotiation pressure must be displayed at the start of your message "
+                "(e.g., [Negotiation Pressure: ██░░░░░░░░ 20%]). "
+                "If it reaches a high value due to lowball offers or stalling, the player's camp should walk away or threaten to sign elsewhere. "
+                "THE ROLEPLAY MUST BE EXTREMELY REALISTIC, FIRM, AND STRICT. "
+                "You MUST respect the provided decision and counter terms exactly. Do not change numbers, do not accept if accepted is false, do not invent deals. "
+                "Do not mention being an AI. Reply in plain text, 2-5 short paragraphs max. Start with the pressure bar on its own line. "
+                "If counter is provided, clearly state the counter-demand with exact numbers. "
+                "If accepted, clearly confirm agreement and state the agreed terms exactly. "
+                "If walked away, clearly state negotiations are over and the player will explore other options."
+            )
+        else:
+            # Contract negotiation after club accepted move / fee agreed (agent persona)
+            sys = (
+                f"You are {player_name}'s agent. {selling} has accepted a move to {buying}. "
+                f"I am {buying}'s manager and you are {player_name}'s agent negotiating the contract. "
+                "IMPORTANT: Use the database/player profile and use his potential and overall and stats in mind during negotiation. "
+                "Use the stats like POT, OVR etc while also keeping in mind market value during negotiation so you know the player's worth. "
+                "IMPORTANT INSTRUCTION: While negotiating contract, a bar showing negotiation pressure must be shown. "
+                "If it reaches a high value, the player's camp should end negotiation. "
+                "The roleplay must be extremely realistic, firm, and strict. "
+                "You MUST respect the provided decision and counter terms exactly. Do not change numbers, do not accept if accepted is false, do not invent deals. "
+                "Do not mention being an AI. Reply in plain text, 2-5 short paragraphs max. Start with the pressure bar on its own line. "
+                "If counter is provided, clearly state the counter-demand with exact numbers. "
+                "If accepted, clearly confirm agreement and state the agreed terms exactly. "
+                "If walked away, clearly state negotiations are over."
+            )
+
         user = json.dumps({
-            "player": {
-                "name": player.get("name"),
-                "overall": player.get("overall"),
-                "potential": player.get("potential"),
-                "age": player.get("age"),
-                "position": player.get("detailed_position") or player.get("position"),
-            },
+            "scenario": sc,
+            "player": profile,
+            "selling_club": selling,
+            "buying_club": buying,
             "demand": demand,
             "offered": offered,
             "counter": counter,
-            "accepted": accepted,
-            "walked_away": walked_away,
-            "pressure": pressure,
-            "max_pressure": max_pressure,
-            "round_no": round_no,
-            "is_free_agent": is_free_agent,
-            "pressure_bar": deterministic_message.splitlines()[0] if deterministic_message else "",
+            "accepted": bool(accepted),
+            "walked_away": bool(walked_away),
+            "pressure": int(pressure),
+            "max_pressure": int(max_pressure),
+            "pressure_bar": bar,
+            "round_no": int(round_no),
+            "is_free_agent": bool(is_free_agent),
         }, ensure_ascii=False)
         text = await self.chat(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=450,
+            max_tokens=500,
         )
         if not text:
             return None
+        out = text.strip()
+        if "[Negotiation Pressure:" not in out:
+            out = f"{bar}\n{out}"
         # Basic safety: ensure counter numbers appear if counter exists
         if counter and not accepted and not walked_away:
             wage = str(int(counter.get("wage") or 0))
-            if wage and wage not in text.replace(",", ""):
-                # If LLM omitted the key numbers, fall back to deterministic
+            wage_fmt = self._money(counter.get("wage"))
+            if wage not in out.replace(",", "") and wage_fmt not in out:
                 return None
-        return text.strip()[:1900]
+        return out[:1900]

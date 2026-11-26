@@ -339,48 +339,96 @@ class TransfersCog(commands.Cog):
             val = self.market.value_player(player)
             decision = self.market.evaluate_bot_offer(val, offer_fee, player)
 
+            # Fee negotiation pressure (single-shot fee decision, but pressure bar is always shown)
+            _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
+            if decision.get("accept"):
+                _fee_pressure = 0 if _fee_ratio >= 1.15 else 1
+            elif _fee_ratio < 0.50:
+                _fee_pressure = 10
+            elif _fee_ratio < 0.70:
+                _fee_pressure = 8
+            elif _fee_ratio < 0.85:
+                _fee_pressure = 6
+            elif _fee_ratio < 1.00:
+                _fee_pressure = 4
+            else:
+                _fee_pressure = 2
+            _fee_bar = negotiation_pressure_bar(_fee_pressure, 10)
+
             now = utc_now_iso()
             status = "negotiating" if decision["accept"] else "rejected"
             cur = await self.bot.db.execute(
                 """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?, 'club_offer',0,0,?, ?,?)""",
-                (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision}), now, now),
+                (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "fee_pressure": _fee_pressure}), now, now),
             )
             offer_id = cur.lastrowid
 
+            llm_fee_msg = None
+            try:
+                llm = getattr(self.bot, "llm_service", None)
+                if llm and getattr(llm, "enabled", False):
+                    llm_fee_msg = await llm.generate_fee_negotiation_message(
+                        player=player,
+                        valuation=val.__dict__,
+                        offer_fee=int(offer_fee),
+                        accepted=bool(decision.get("accept")),
+                        buying_team_name=str(buying_team_name),
+                        selling_team_name=str(selling_team_name),
+                        round_no=1,
+                        pressure=int(_fee_pressure),
+                        max_pressure=10,
+                        deterministic_reason=str(decision.get("reason") or ""),
+                    )
+            except Exception:
+                logger.exception("LLM fee negotiation message failed (botoffer)")
+
             if not decision["accept"]:
-                await interaction.followup.send(embed=error_embed(
-                    "Offer Rejected",
+                reason_text = llm_fee_msg or (
+                    f"{_fee_bar}\n\n"
                     f"**{selling_team_name}** (bot manager) response for **{player.get('name')}**:\n\n{decision['reason']}\n\n"
                     f"Your offer: {fmt_money(offer_fee)} • Club valuation: {fmt_money(val.market_value)} • Suggested fair fee: {fmt_money(val.fair_fee)}"
-                ), ephemeral=True)
+                )
+                await interaction.followup.send(embed=error_embed("Offer Rejected", reason_text), ephemeral=True)
                 return
 
             # accepted -> start contract negotiation
             demand = self.market.contract_demand(val, player)
             await self.bot.db.execute(
                 "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
-                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0}), utc_now_iso(), int(offer_id)),
+                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "fee_pressure": _fee_pressure}), utc_now_iso(), int(offer_id)),
             )
             view = ContractNegView(self, int(offer_id))
             bar = negotiation_pressure_bar(0, 10)
             p = player
-            embed = success_embed(
-                "Offer Accepted — Contract Negotiation",
-                (
-                    f"{bar}\n\n"
+            if llm_fee_msg:
+                accept_desc = (
+                    f"{llm_fee_msg}\n\n"
+                    f"**Fee agreed:** {fmt_money(offer_fee)}\n\n"
+                    f"{bar}\n"
+                    f"**Contract negotiation (agent):**\n"
+                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
+                    f"• Requested role: **{demand['role']}**\n"
+                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
+                    f"• Contract length: **{demand['contract_years']} years**\n\n"
+                    f"Submit a serious contract offer using the button below. Lowballing, stalling, or disrespecting the player's value will increase pressure and can end the negotiation."
+                )
+            else:
+                accept_desc = (
+                    f"{_fee_bar}\n\n"
                     f"**{selling_team_name} (bot manager):** {decision['reason']}\n\n"
                     f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** "
                     f"({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'}).\n"
                     f"We are now moving to contract terms. I am representing the player's interests and I will be firm but fair.\n\n"
+                    f"{bar}\n"
                     f"**Opening contract demands:**\n"
                     f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
                     f"• Requested role: **{demand['role']}**\n"
                     f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
                     f"• Contract length: **{demand['contract_years']} years**\n\n"
                     f"Submit a serious contract offer using the button below. Lowballing, stalling, or disrespecting the player's value will increase pressure and can end the negotiation."
-                ),
-            )
+                )
+            embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc)
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
             logger.exception("botoffer command failed")
@@ -646,6 +694,10 @@ class TransfersCog(commands.Cog):
                         round_no=int(round_no),
                         is_free_agent=bool(is_free_agent),
                         deterministic_message=str(result.get("message") or ""),
+                        buying_team_name=str(offer.get("buying_team_name") or ""),
+                        selling_team_name=str(offer.get("selling_team_name") or ""),
+                        valuation=valuation if isinstance(valuation, dict) else None,
+                        scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
                     )
                     if llm_msg:
                         result["message"] = llm_msg
@@ -707,10 +759,12 @@ class TransfersCog(commands.Cog):
             view = ContractNegView(self, int(offer.get("id")))
             counter_line = ""
             if counter:
+                _bar_in_msg = "[Negotiation Pressure:" in str(result.get("message") or "")
+                _bar_part = "" if _bar_in_msg else f" • {bar}"
                 counter_line = (
                     f"\n\n**Your offer:** {fmt_money(wage)}/wk • {role} • bonus {fmt_money(bonus)} • {years} yrs\n"
                     f"**Counter-demand:** {fmt_money(counter.get('wage'))}/wk • {counter.get('role')} • bonus {fmt_money(counter.get('signing_bonus'))} • {counter.get('contract_years')} yrs\n"
-                    f"Round: {round_no} • {bar}\n"
+                    f"Round: {round_no}{_bar_part}\n"
                     "Submit a revised offer or pull out. Lowballing or stalling will raise pressure."
                 )
             await interaction.followup.send(embed=info_embed(
@@ -1156,49 +1210,96 @@ class TransfersCog(commands.Cog):
                     "manager_agreed": True,
                 }
 
+            _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
+            if decision.get("accept"):
+                _fee_pressure = 0 if _fee_ratio >= 1.15 else 1
+            elif _fee_ratio < 0.50:
+                _fee_pressure = 10
+            elif _fee_ratio < 0.70:
+                _fee_pressure = 8
+            elif _fee_ratio < 0.85:
+                _fee_pressure = 6
+            elif _fee_ratio < 1.00:
+                _fee_pressure = 4
+            else:
+                _fee_pressure = 2
+            _fee_bar = negotiation_pressure_bar(_fee_pressure, 10)
+
             now = utc_now_iso()
             status = "negotiating" if decision["accept"] else "rejected"
             cur = await self.bot.db.execute(
                 """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'club_offer',0,0,?,?,?)""",
-                (season_id, interaction.guild_id, interaction.channel_id, "contract_nego", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, selling_team.get("manager_user_id"), int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "selling_is_bot": is_bot}), now, now),
+                (season_id, interaction.guild_id, interaction.channel_id, "contract_nego", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, selling_team.get("manager_user_id"), int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "selling_is_bot": is_bot, "fee_pressure": _fee_pressure}), now, now),
             )
             offer_id = cur.lastrowid
 
+            llm_fee_msg = None
+            if is_bot:
+                try:
+                    llm = getattr(self.bot, "llm_service", None)
+                    if llm and getattr(llm, "enabled", False):
+                        llm_fee_msg = await llm.generate_fee_negotiation_message(
+                            player=player,
+                            valuation=val.__dict__,
+                            offer_fee=int(offer_fee),
+                            accepted=bool(decision.get("accept")),
+                            buying_team_name=str(buying_team_name),
+                            selling_team_name=str(selling_team_name),
+                            round_no=1,
+                            pressure=int(_fee_pressure),
+                            max_pressure=10,
+                            deterministic_reason=str(decision.get("reason") or ""),
+                        )
+                except Exception:
+                    logger.exception("LLM fee negotiation message failed (contractnego)")
+
             if not decision["accept"]:
-                bar = negotiation_pressure_bar(0)
-                await interaction.followup.send(embed=error_embed(
-                    "Club Offer Rejected",
-                    f"{bar}\n\n**{selling_team_name}** response for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT):\n\n{decision['reason']}\n\n"
+                reason_text = llm_fee_msg or (
+                    f"{_fee_bar}\n\n"
+                    f"**{selling_team_name}** response for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT):\n\n{decision['reason']}\n\n"
                     f"Your offer: {fmt_money(offer_fee)} • Valuation: {fmt_money(val.market_value)}"
-                ), ephemeral=True)
+                )
+                await interaction.followup.send(embed=error_embed("Club Offer Rejected", reason_text), ephemeral=True)
                 return
 
             demand = self.market.contract_demand(val, player)
             await self.bot.db.execute(
                 "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
-                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot}), utc_now_iso(), int(offer_id)),
+                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot, "fee_pressure": _fee_pressure}), utc_now_iso(), int(offer_id)),
             )
             view = ContractNegView(self, int(offer_id))
             bar = negotiation_pressure_bar(0, 10)
             p = player
             seller_label = f"**{selling_team_name} (bot manager)**" if is_bot else f"**{selling_team_name} manager**"
-            embed = success_embed(
-                "Fee Accepted — Contract Negotiation",
-                (
-                    f"{bar}\n\n"
+            if llm_fee_msg:
+                accept_desc = (
+                    f"{llm_fee_msg}\n\n"
+                    f"**Fee agreed:** {fmt_money(offer_fee)}\n\n"
+                    f"{bar}\n"
+                    f"**Contract negotiation (agent):**\n"
+                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
+                    f"• Requested role: **{demand['role']}**\n"
+                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
+                    f"• Contract length: **{demand['contract_years']} years**\n\n"
+                    f"Submit a realistic offer. This negotiation is strict - pressure will rise on lowball offers or stalling, and at high pressure talks will end."
+                )
+            else:
+                accept_desc = (
+                    f"{_fee_bar}\n\n"
                     f"{seller_label}: {decision['reason']}\n\n"
                     f"**Player:** {p.get('name')} ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'})\n"
                     f"**Agreed fee:** {fmt_money(offer_fee)}\n\n"
                     f"I am representing the player in this contract negotiation. The demands below are based on the player's quality, age, and market standing.\n\n"
+                    f"{bar}\n"
                     f"**Opening contract demands:**\n"
                     f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
                     f"• Requested role: **{demand['role']}**\n"
                     f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
                     f"• Contract length: **{demand['contract_years']} years**\n\n"
                     f"Submit a realistic offer. This negotiation is strict - pressure will rise on lowball offers or stalling, and at high pressure talks will end."
-                ),
-            )
+                )
+            embed = success_embed("Fee Accepted — Contract Negotiation", accept_desc)
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
             logger.exception("contractnego command failed")
