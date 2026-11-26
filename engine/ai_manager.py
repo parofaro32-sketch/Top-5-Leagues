@@ -58,14 +58,20 @@ def decide_ai_break_actions(state: MatchState, side: Side, rng: random.Random | 
     cands = []
     for ps in on_pitch:
         s = 0.0
+        if getattr(ps, "injured", False):
+            s += 6.0
         if ps.stamina < 48:
             s += (48 - ps.stamina) * 0.07
         if ps.stamina < 32:
             s += 1.4
+        if ps.stamina < 25:
+            s += 1.0
         if ps.rating < 5.9 and ps.minutes_played >= 20:
             s += (5.9 - ps.rating) * 0.55
-        if ps.yellow_cards >= 1 and minute >= 68 and ps.position != "GK":
-            s += 0.35
+        if ps.yellow_cards >= 1 and minute >= 65 and ps.position != "GK":
+            s += 0.45
+        if ps.yellow_cards >= 1 and diff > 0 and minute >= 75 and ps.position != "GK":
+            s += 0.25
         if ps.position == "GK":
             s *= 0.15
         cands.append((s, ps))
@@ -84,6 +90,8 @@ def decide_ai_break_actions(state: MatchState, side: Side, rng: random.Random | 
         else:
             desired = 1 if any(s > 1.0 for s, _ in cands[:3]) else (1 if rng.random() < 0.4 else 0)
 
+    forced = sum(1 for sc, ps in cands if getattr(ps, "injured", False))
+    desired = max(desired, forced)
     desired = min(desired, max(0, 5 - team.substitutions_made), len(bench), 3)
     used_off = set()
     used_on = set()

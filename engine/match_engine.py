@@ -681,6 +681,10 @@ class MatchEngine:
         turnover = 0.09 + max(0.0, (def_s["press"] - att_s["midfield"] * 0.9)) * 0.0035
         turnover += max(0, (100 - self._avg_stam(att))) * 0.0007
         turnover -= (control - 1.0) * 0.03
+        if goal_diff > 0 and self.state.minute >= 75:
+            turnover -= 0.015  # safer possession when protecting lead
+        if goal_diff < 0 and self.state.minute >= 75:
+            turnover += 0.01   # more risk when chasing
         if self.rng.random() < max(0.03, min(0.38, turnover)):
             self._pressure_chain = 0
             evs.extend(self._turnover(deff, att, def_s, att_s))
@@ -697,14 +701,27 @@ class MatchEngine:
         if def_s.get("line_height", 1.0) >= 1.12 and att_s.get("transition_attack", 1.0) >= 1.0:
             chance_p *= 1.03
         # game state: chasing team creates more but can be vulnerable
-        if (att == "home" and self.state.home.score < self.state.away.score) or (att == "away" and self.state.away.score < self.state.home.score):
-            if self.state.minute >= 55:
-                chance_p *= 1.14
+        att_goals = self.state.home.score if att == "home" else self.state.away.score
+        def_goals = self.state.away.score if att == "home" else self.state.home.score
+        goal_diff = att_goals - def_goals
+        men_att = sum(1 for p in self.state.player_states.values() if p.team_side == att and p.on_pitch and not p.red_card)
+        men_def = sum(1 for p in self.state.player_states.values() if p.team_side == deff and p.on_pitch and not p.red_card)
+        if men_att < men_def:
+            chance_p *= max(0.72, 1.0 - 0.08 * (men_def - men_att))
+        elif men_att > men_def:
+            chance_p *= min(1.18, 1.0 + 0.05 * (men_att - men_def))
+        if goal_diff < 0:
+            if self.state.minute >= 75:
+                chance_p *= 1.18
+            elif self.state.minute >= 55:
+                chance_p *= 1.12
             elif self.state.minute >= 35:
-                chance_p *= 1.06
-        if (att == "home" and self.state.home.score > self.state.away.score) or (att == "away" and self.state.away.score > self.state.home.score):
+                chance_p *= 1.05
+        if goal_diff > 0:
             if self.state.minute >= 80:
-                chance_p *= 0.95  # protect lead a bit late
+                chance_p *= 0.88 if goal_diff == 1 else 0.82  # protect lead late
+            elif self.state.minute >= 70 and goal_diff >= 2:
+                chance_p *= 0.93
         chance_p = max(0.06, min(0.60, chance_p))
         if self.rng.random() < chance_p:
             evs.extend(self._attack(att, deff, att_s, def_s))

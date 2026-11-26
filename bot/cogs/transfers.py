@@ -431,7 +431,7 @@ class TransfersCog(commands.Cog):
             _plain_accept = bool(re.fullmatch(r"(ok|okay|yes|yep|yeah|sure|fine|alright|all right|agree|agreed|deal|accept|yup)\W*", _raw_low))
             _explicit_accept_ref = bool(re.search(r"\b(accept|agree to|take)\b.{0,30}\b(your|the|that|those)\b.{0,20}\b(offer|counter|terms|demand|deal)\b", _raw_low))
             # Treat as agreement only when it's clearly accepting bot terms (no conflicting specific contract numbers)
-            _has_specific_contract_terms = bool(re.search(r"(\d[\d,.]*\s*[kmb]?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)) or bool(re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)) or bool(re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low))
+            _has_specific_contract_terms = bool(re.search(r"(\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)) or bool(re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)) or bool(re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low))
             _is_agreement = (not _negated_agree) and (_agreement_phrases or _plain_accept or _explicit_accept_ref) and not _has_specific_contract_terms
             if _is_agreement:
                 _agree_terms = meta.get("last_counter") or demand or {}
@@ -441,59 +441,68 @@ class TransfersCog(commands.Cog):
                 years = _agree_terms.get("contract_years", years)
                 meta["_agreement_accepted"] = True
 
-            # Parse strictly from the user's message (no silent defaults for wage/role/years).
+            # Parse natural language contract terms (NLU-first, no rigid format).
             missing: list[str] = []
+            try:
+                from services.nlu_service import extract_contract_terms
+                nlu_terms = extract_contract_terms(raw_msg)
+            except Exception:
+                nlu_terms = {}
 
-            # Bonus: if explicitly stated, or clearly "no bonus", or no bonus mentioned at all -> 0
+            # Merge NLU results only when the local values are missing
+            if wage is None and nlu_terms.get("wage") is not None:
+                wage = int(nlu_terms["wage"])
+            if bonus is None and nlu_terms.get("signing_bonus") is not None:
+                bonus = int(nlu_terms["signing_bonus"])
+            if role is None and nlu_terms.get("role"):
+                role = str(nlu_terms["role"])
+            if years is None and nlu_terms.get("contract_years") is not None:
+                years = int(nlu_terms["contract_years"])
+
+            _bonus_mentioned = bool(re.search(r"\b(signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|upfront|bonus)\b", raw_msg, re.I))
             if bonus is None:
-                _bonus_kw = re.search(
-                    r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
-                    raw_msg, re.I,
-                )
-                if not _bonus_kw:
-                    _bonus_kw = re.search(
-                        r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\b",
-                        raw_msg, re.I,
-                    )
-                if _bonus_kw:
-                    _bv = money_to_int(_bonus_kw.group(1))
-                    if _bv is not None and _bv >= 0:
-                        bonus = int(_bv)
-            if bonus is None:
-                # If there's a second distinct money number, treat it as bonus
+                # If user mentioned bonus but we couldn't parse a value, ask for clarification.
+                if _bonus_mentioned and not re.search(r"\b(no|without|zero|none)\b", raw_msg, re.I):
+                    # try to parse any money near the bonus cue
+                    _b2 = None
+                    for pat in (
+                        r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|upfront|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)",
+                        r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|upfront|bonus)\b",
+                    ):
+                        _m = re.search(pat, raw_msg, re.I)
+                        if _m:
+                            _v = money_to_int(_m.group(1))
+                            if _v is not None:
+                                _b2 = int(_v)
+                                break
+                    if _b2 is not None:
+                        bonus = _b2
+                    else:
+                        missing.append("signing bonus amount (e.g. 1m signing bonus, or say 'no bonus')")
+                else:
+                    # No bonus mentioned - treat as no signing bonus
+                    bonus = 0
+
+            # If wage missing, try to infer from remaining money tokens not equal to bonus
+            if wage is None or int(wage) <= 0:
                 _nums: list[int] = []
-                for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
+                for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)", raw_msg, re.I):
                     _v = money_to_int(_m.group(1))
                     if _v is not None and _v > 0:
                         _nums.append(int(_v))
-                _nums_unique = []
-                for _v in _nums:
-                    if _v not in _nums_unique:
-                        _nums_unique.append(_v)
-                if wage is not None and len(_nums_unique) >= 2:
-                    for _v in _nums_unique:
-                        if int(_v) == int(wage):
-                            continue
-                        if 1_000 <= int(_v) <= 200_000_000:
-                            bonus = int(_v)
-                            break
-            if bonus is None:
-                # No bonus mentioned - interpret as no signing bonus
-                bonus = 0
-
-            # Wage: try to extract from any clear money mention
+                # remove values that are clearly years
+                _nums = [v for v in _nums if not (years is not None and int(v) == int(years) and v <= 10)]
+                if bonus is not None:
+                    _nums = [v for v in _nums if int(v) != int(bonus)]
+                # prefer plausible weekly wage range
+                wage_cands = [v for v in _nums if 1_000 <= v <= 5_000_000]
+                if wage_cands:
+                    # if bonus exists and two cands, pick the one that's not bonus-like? usually lower
+                    wage = int(wage_cands[0]) if len(wage_cands) == 1 else int(min(wage_cands))
+                elif _nums:
+                    wage = int(_nums[0])
             if wage is None or int(wage) <= 0:
-                for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
-                    _v = money_to_int(_m.group(1))
-                    if _v is None:
-                        continue
-                    if bonus is not None and int(_v) == int(bonus):
-                        continue
-                    if 1_000 <= int(_v) <= 5_000_000:
-                        wage = int(_v)
-                        break
-            if wage is None or int(wage) <= 0:
-                missing.append("weekly wage (e.g. 200k/wk)")
+                missing.append("weekly wage (e.g. 200k/wk, 300k per week)")
 
             if role is None:
                 missing.append("role (Crucial/Important/Rotation/Sporadic/Prospect)")
@@ -870,67 +879,62 @@ class TransfersCog(commands.Cog):
             offer_id = cur.lastrowid
             view = AskAboutView(self, int(offer_id))
 
-            seller_mention = f"<@{int(seller_manager_id)}>"
-            embed = info_embed(
+            dm_embed = info_embed(
                 "Player Availability Enquiry",
                 (
-                    f"{seller_mention}, **{interaction.user.display_name}** ({buying_team_name}) is asking if "
+                    f"**{interaction.user.display_name}** ({buying_team_name}) has asked whether "
                     f"**{player.get('name')}** ({selling_team_name}) is for sale.\n\n"
-                    f"Please respond using the buttons below."
+                    f"Please respond using the buttons below. This enquiry was sent privately (no public pings)."
                 ),
             )
+
             msg = None
+            dm_failed = False
             send_err = None
-            # Try channel.send first
-            channel = interaction.channel
-            if channel is None and interaction.channel_id:
-                try:
-                    channel = self.bot.get_channel(int(interaction.channel_id)) or await self.bot.fetch_channel(int(interaction.channel_id))
-                except Exception as e:
-                    send_err = e
-            if channel is not None:
-                try:
-                    msg = await channel.send(content=seller_mention, embed=embed, view=view)
-                except Exception as e:
-                    send_err = e
-                    logger.exception("Failed to send askaboutplayer channel message offer_id=%s", offer_id)
-            # Fallback: public followup message (works via interaction webhook)
-            if msg is None:
-                try:
-                    msg = await interaction.followup.send(content=seller_mention, embed=embed, view=view, ephemeral=False, wait=True)
-                except Exception as e:
-                    send_err = e
-                    logger.exception("Failed to send askaboutplayer public followup offer_id=%s", offer_id)
-            if msg is None:
-                # Last fallback: DM the selling manager directly
-                try:
-                    seller_user = self.bot.get_user(int(seller_manager_id)) or await self.bot.fetch_user(int(seller_manager_id))
-                    dm_embed = info_embed(
-                        "Player Availability Enquiry",
-                        (
-                            f"**{interaction.user.display_name}** ({buying_team_name}) is asking if "
-                            f"**{player.get('name')}** ({selling_team_name}) is for sale.\n\n"
-                            f"Please respond using the buttons below."
-                        ),
-                    )
-                    msg = await seller_user.send(embed=dm_embed, view=view)
-                except Exception as e:
-                    send_err = e
-                    logger.exception("Failed to DM askaboutplayer seller offer_id=%s", offer_id)
+            # DM-first delivery (no public mentions/pings)
+            try:
+                seller_user = self.bot.get_user(int(seller_manager_id)) or await self.bot.fetch_user(int(seller_manager_id))
+                msg = await seller_user.send(embed=dm_embed, view=view)
+            except discord.Forbidden:
+                dm_failed = True
+                send_err = "seller_dms_disabled"
+                logger.info("askaboutplayer seller DMs disabled offer_id=%s seller=%s", offer_id, seller_manager_id)
+            except Exception as e:
+                send_err = e
+                logger.exception("Failed to DM askaboutplayer seller offer_id=%s", offer_id)
 
             if msg:
                 try:
-                    await self.bot.db.execute("UPDATE transfer_offers SET message_id=?, updated_at=? WHERE id=?", (int(msg.id), utc_now_iso(), int(offer_id)))
+                    await self.bot.db.execute("UPDATE transfer_offers SET message_id=?, channel_id=?, updated_at=? WHERE id=?", (int(msg.id), int(getattr(msg.channel, "id", 0) or 0) or interaction.channel_id, utc_now_iso(), int(offer_id)))
                 except Exception:
                     logger.exception("Failed to store askaboutplayer message_id offer_id=%s", offer_id)
                 await interaction.followup.send(
-                    embed=success_embed("Enquiry Sent", f"Asked **{selling_team_name}** manager (<@{int(seller_manager_id)}>) if **{player.get('name')}** is for sale. They can respond with the **For Sale / Not For Sale** buttons."),
+                    embed=success_embed(
+                        "Enquiry Sent (DM)",
+                        f"Your enquiry about **{player.get('name')}** ({selling_team_name}) was sent privately to the club manager's DMs. "
+                        f"They can respond with **For Sale / Not For Sale** buttons.\n\n"
+                        f"You'll receive a DM when they respond."
+                    ),
+                    ephemeral=True,
+                )
+            elif dm_failed:
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "DM Delivery Failed",
+                        f"I couldn't DM **{selling_team_name}**'s manager because their DMs are disabled or unavailable.\n\n"
+                        f"Your enquiry for **{player.get('name')}** was recorded (ID: {offer_id}), but it was **not** delivered publicly to avoid exposing negotiations. "
+                        f"Please ask them to enable DMs from server members/bots, or contact them directly to check their availability."
+                    ),
                     ephemeral=True,
                 )
             else:
                 logger.error("askaboutplayer could not deliver message offer_id=%s err=%s", offer_id, send_err)
                 await interaction.followup.send(
-                    embed=success_embed("Enquiry Created", f"Your enquiry for **{player.get('name')}** was created for **{selling_team_name}** manager (<@{int(seller_manager_id)}>). The enquiry is recorded (ID: {offer_id}); ask them to respond when available."),
+                    embed=error_embed(
+                        "Enquiry Not Delivered",
+                        f"Your enquiry for **{player.get('name')}** ({selling_team_name}) was created (ID: {offer_id}), but I couldn't deliver it to the manager's DMs right now. "
+                        f"No public message was sent. Please try again shortly."
+                    ),
                     ephemeral=True,
                 )
         except Exception:
@@ -943,36 +947,85 @@ class TransfersCog(commands.Cog):
     async def handle_ask_response(self, interaction: discord.Interaction, offer_id: int, *, for_sale: bool, view: AskAboutView):
         offer = await self.get_offer(offer_id)
         if not offer:
-            await interaction.response.send_message("This enquiry is no longer available.", ephemeral=True)
+            msg = "This enquiry is no longer available."
+            if not interaction.response.is_done():
+                await interaction.response.send_message(msg, ephemeral=True)
+            else:
+                await interaction.followup.send(msg, ephemeral=True)
             return
         seller_id = int(offer.get("selling_manager_user_id") or 0)
         if interaction.user.id != seller_id and not _is_admin(interaction):
-            await interaction.response.send_message("Only the selling manager can respond to this enquiry.", ephemeral=True)
+            msg = "Only the selling manager can respond to this enquiry."
+            if not interaction.response.is_done():
+                await interaction.response.send_message(msg, ephemeral=True)
+            else:
+                await interaction.followup.send(msg, ephemeral=True)
             return
         if offer.get("status") != "pending":
-            await interaction.response.send_message("This enquiry has already been answered.", ephemeral=True)
+            msg = "This enquiry has already been answered."
+            if not interaction.response.is_done():
+                await interaction.response.send_message(msg, ephemeral=True)
+            else:
+                await interaction.followup.send(msg, ephemeral=True)
             return
 
         status = "accepted" if for_sale else "rejected"
         await self.bot.db.execute("UPDATE transfer_offers SET status=?, updated_at=? WHERE id=?", (status, utc_now_iso(), int(offer_id)))
         for child in view.children:
             child.disabled = True
-        answer = "✅ **For Sale**" if for_sale else "❌ **Not For Sale**"
-        await interaction.response.edit_message(
-            embed=info_embed("Player Availability Response", f"**{offer.get('player_name')}** ({offer.get('selling_team_name')}): {answer}\nResponded by <@{interaction.user.id}>."),
-            view=view,
-        )
 
-        # DM buying user
+        player_name = str(offer.get("player_name") or "Player")
+        selling_team_name = str(offer.get("selling_team_name") or "Selling club")
+        buying_team_name = str(offer.get("buying_team_name") or "Buying club")
+        answer = "For Sale" if for_sale else "Not For Sale"
+        seller_embed = success_embed(
+            "Response Recorded",
+            f"You marked **{player_name}** ({selling_team_name}) as **{answer}**.\n\nThe enquiring manager has been notified by DM."
+        ) if for_sale else info_embed(
+            "Response Recorded",
+            f"You marked **{player_name}** ({selling_team_name}) as **{answer}**.\n\nThe enquiring manager has been notified by DM."
+        )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.edit_message(embed=seller_embed, view=view)
+            else:
+                await interaction.edit_original_response(embed=seller_embed, view=view)
+        except Exception:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=seller_embed, ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=seller_embed, ephemeral=True)
+            except Exception:
+                pass
+
+        # DM buying user with relevant info
         buyer_id = int(offer.get("buying_user_id") or 0)
         if buyer_id:
             try:
                 user = self.bot.get_user(buyer_id) or await self.bot.fetch_user(buyer_id)
-                dm_text = (
-                    f"Enquiry update: **{offer.get('selling_team_name')}** manager responded about **{offer.get('player_name')}**.\n"
-                    f"Status: {'For sale' if for_sale else 'Not for sale'}."
-                )
-                await user.send(dm_text)
+                if for_sale:
+                    dm_embed = success_embed(
+                        "Player For Sale",
+                        (
+                            f"**{player_name}** ({selling_team_name}) is **available for sale**.\n\n"
+                            f"Enquiry from: **{buying_team_name}**\n"
+                            f"Selling club: **{selling_team_name}**\n\n"
+                            f"Next step: you can approach them with `/contractnego` (manager-to-manager) or use the appropriate transfer command for your situation."
+                        )
+                    )
+                else:
+                    dm_embed = info_embed(
+                        "Player Not For Sale",
+                        (
+                            f"**{player_name}** ({selling_team_name}) is **not for sale** at this time.\n\n"
+                            f"Enquiry from: **{buying_team_name}**\n"
+                            f"Selling club: **{selling_team_name}**"
+                        )
+                    )
+                await user.send(embed=dm_embed)
+            except discord.Forbidden:
+                logger.info("Could not DM buyer for askaboutplayer offer_id=%s (DMs disabled)", offer_id)
             except Exception:
                 logger.exception("Failed to DM askaboutplayer buyer offer_id=%s", offer_id)
 

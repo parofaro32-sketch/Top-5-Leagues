@@ -51,6 +51,32 @@ class FootballBot(commands.Bot):
             except Exception:
                 logger.exception("Failed to load extension %s", ext)
 
+        # Allow commands in DMs where possible (discord.py 2.4+ contexts/install types)
+        try:
+            dm_contexts = None
+            user_installs = None
+            try:
+                dm_contexts = app_commands.AppCommandContext(guild=True, dm_channel=True, private_channel=True)
+            except Exception:
+                try:
+                    dm_contexts = app_commands.AppCommandContext(guild=True, dm_channel=True, private_channel=True)
+                except Exception:
+                    dm_contexts = None
+            try:
+                user_installs = app_commands.AppInstallationType(guild=True, user=True)
+            except Exception:
+                user_installs = None
+            for cmd in self.tree.walk_commands():
+                try:
+                    if dm_contexts is not None and getattr(cmd, "allowed_contexts", None) is None:
+                        cmd.allowed_contexts = dm_contexts
+                    if user_installs is not None and getattr(cmd, "allowed_installs", None) is None:
+                        cmd.allowed_installs = user_installs
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("Failed to set DM command contexts")
+
         # Sync commands (guild-specific if configured for faster dev)
         try:
             if self.settings.discord_guild_id:

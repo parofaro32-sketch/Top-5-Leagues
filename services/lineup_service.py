@@ -831,6 +831,85 @@ def parse_lineup_submission(formation: str, starters_raw: str, bench_raw: str, s
             refs.append(nm)
         return refs
 
+    # Natural-language intent handling
+    combined_raw = f"{formation} {starters_raw} {bench_raw}".strip()
+    combined_low = _norm_name(combined_raw)
+    auto_intent = any(k in combined_low for k in [
+        "strongest xi", "strongest 11", "strongest lineup", "strongest team", "best xi", "best 11",
+        "best lineup", "best available", "best team", "best eleven", "strongest eleven",
+        "auto pick", "auto lineup", "pick for me", "put out our best", "best possible lineup",
+        "strongest possible", "optimal lineup", "optimal xi", "rest tired", "rest the tired",
+        "fresh legs", "rotate the squad"
+    ])
+    fastest_intent = any(k in combined_low for k in ["fastest players", "quickest players", "most pace", "fastest xi", "fastest lineup"])
+    youngest_intent = any(k in combined_low for k in ["young players", "youngest players", "youth", "academy players", "youngsters"])
+    two_strikers = any(k in combined_low for k in ["two strikers", "2 strikers", "front two", "strike partnership", "pair of strikers"])
+    width_intent = any(k in combined_low for k in ["need width", "with width", "make sure we have width", "play wide"])
+
+    if two_strikers and formation_norm in {"4-3-3", "4-2-3-1", "3-4-3", "4-5-1"}:
+        formation_norm = "4-4-2"
+    if any(k in combined_low for k in ["4 3 3", "433"]):
+        formation_norm = "4-3-3"
+    if any(k in combined_low for k in ["4 2 3 1", "4231"]):
+        formation_norm = "4-2-3-1"
+    if any(k in combined_low for k in ["4 4 2", "442"]):
+        formation_norm = "4-4-2"
+    if any(k in combined_low for k in ["3 5 2", "352"]):
+        formation_norm = "3-5-2"
+    if width_intent and formation_norm in {"4-4-2", "3-5-2", "5-3-2", "5-4-1", "4-5-1"}:
+        formation_norm = "4-3-3"
+
+    if auto_intent or fastest_intent or youngest_intent:
+        try:
+            lu = auto_build_lineup(team_api_id=team_api_id, team_name=team_name, squad=squad, formation=formation_norm)
+        except Exception:
+            lu = None
+        if lu is not None:
+            # Apply attribute-based selection if requested
+            if fastest_intent or youngest_intent:
+                squad_by_id = {int(p.get("api_id") or 0): p for p in squad}
+                def _pace(pl):
+                    attrs = (pl.get("attributes") or {})
+                    try: return float(attrs.get("pace") or attrs.get("speed") or pl.get("pace") or 0)
+                    except Exception: return 0.0
+                def _age(pl):
+                    try: return float(pl.get("age") or 99)
+                    except Exception: return 99.0
+                def _ovr(pl):
+                    try: return float(pl.get("overall") or pl.get("rating") or 0)
+                    except Exception: return 0.0
+                try:
+                    slots = get_formation_slots(formation_norm)
+                except Exception:
+                    slots = get_formation_slots("4-3-3")
+                pool = [dict(p) for p in squad if int(p.get("api_id") or 0)]
+                avail = [p for p in pool if not (bool(p.get("injured")) or str(p.get("status") or "active").lower() in {"injured","unavailable","suspended"})]
+                if len(avail) >= 11:
+                    pool = avail
+                used_ids = set()
+                starters = []
+                for sl in slots:
+                    cands = [p for p in pool if int(p.get("api_id") or 0) not in used_ids]
+                    if not cands:
+                        continue
+                    want = sl.group
+                    def score(pl, want=want):
+                        pos = norm_pos(pl.get("position"))
+                        fit = 1.0 if pos == want else (0.5 if want != "GK" and pos != "GK" else 0.0)
+                        if fastest_intent:
+                            return (fit, _pace(pl), _ovr(pl))
+                        return (fit, -_age(pl), _ovr(pl))
+                    cands.sort(key=score, reverse=True)
+                    pickp = cands[0]
+                    starters.append(pickp)
+                    used_ids.add(int(pickp.get("api_id") or 0))
+                bench = [p for p in sorted(pool, key=lambda p: _ovr(p), reverse=True) if int(p.get("api_id") or 0) not in used_ids][:9]
+                try:
+                    lu = validate_lineup(team_api_id=team_api_id, team_name=team_name, formation=formation_norm, starters=starters, bench=bench, squad=squad)
+                except Exception:
+                    pass
+            return lu
+
     # If parsing gave too few starters, try harder: scan raw text against squad
     if len(starter_refs) < 11:
         scanned = _scan_refs_from_text(starters_raw + "\n" + bench_raw, squad)
@@ -1006,15 +1085,36 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
     def row_for(ps):
         p = state.players_index.get(state.player_key(side, ps.player_api_id))
         p_name = getattr(p, "name", None) if p else None
+        ovr = 0.0
+        pace = 0.0
+        try:
+            attrs = getattr(p, "attributes", None) if p else None
+            if attrs is not None:
+                ovr = float(getattr(attrs, "overall", 0) or 0)
+                pace = float(getattr(attrs, "pace", 0) or 0)
+        except Exception:
+            pass
+        if not ovr:
+            try:
+                ovr = float(getattr(p, "overall", 0) or 0)
+            except Exception:
+                ovr = 0.0
         return {
             "api_id": int(ps.player_api_id),
             "name": ps.name or p_name or str(ps.player_api_id),
             "number": getattr(p, "number", None) if p else None,
-            "position": ps.position,
+            "position": norm_pos(getattr(ps, "position", None) or getattr(p, "position", None)),
+            "raw_position": str(getattr(ps, "position", None) or getattr(p, "position", "") or ""),
             "team_api_id": team.team.api_id,
             "on_pitch": bool(ps.on_pitch),
             "red_card": bool(ps.red_card),
             "injured": bool(getattr(ps, "injured", False)),
+            "stamina": float(getattr(ps, "stamina", 100.0) or 100.0),
+            "yellow_cards": int(getattr(ps, "yellow_cards", 0) or 0),
+            "rating": float(getattr(ps, "rating", 6.5) or 6.5),
+            "overall": float(ovr or 0.0),
+            "pace": float(pace or 0.0),
+            "is_goalkeeper": bool(getattr(ps, "is_goalkeeper", False) or norm_pos(getattr(ps, "position", None)) == "GK"),
         }
 
     all_rows = [row_for(ps) for ps in state.player_states.values() if ps.team_side == side]
@@ -1205,7 +1305,166 @@ def parse_break_subs_text(text: str, state: Any, side: str) -> list[dict[str, An
         # fallback: assume first is off, second is on
         return a_p, b_p
 
+    def _intent_subs(text: str):
+        t = _norm_name(text)
+        if not t:
+            return None
+        subs = []
+        used_off = set()
+        used_on = set()
+
+        def _pos_group(r):
+            return norm_pos(r.get("position"))
+        def _is_gk(r):
+            return _pos_group(r) == "GK" or bool(r.get("is_goalkeeper"))
+        def _bench_same_group(off_r, prefer_group=None):
+            g = prefer_group or _pos_group(off_r)
+            cands = [r for r in bench if int(r.get("api_id") or 0) not in used_on and not _is_gk(r)]
+            # prefer same group
+            same = [r for r in cands if _pos_group(r) == g]
+            pool = same if same else cands
+            if not pool:
+                return None
+            pool.sort(key=lambda r: (float(r.get("overall") or 0), float(r.get("rating") or 0)), reverse=True)
+            return pool[0]
+        def _bench_by_group(group):
+            cands = [r for r in bench if int(r.get("api_id") or 0) not in used_on and not _is_gk(r) and _pos_group(r) == group]
+            cands.sort(key=lambda r: (float(r.get("overall") or 0), float(r.get("rating") or 0)), reverse=True)
+            return cands[0] if cands else None
+        def _bench_fastest(group=None):
+            cands = [r for r in bench if int(r.get("api_id") or 0) not in used_on and not _is_gk(r)]
+            if group:
+                g = [r for r in cands if _pos_group(r) == group]
+                if g: cands = g
+            cands.sort(key=lambda r: (float(r.get("pace") or 0), float(r.get("overall") or 0)), reverse=True)
+            return cands[0] if cands else None
+        def _add(off_r, on_r, reason):
+            if not off_r or not on_r:
+                return False
+            oid, nid = int(off_r.get("api_id") or 0), int(on_r.get("api_id") or 0)
+            if not oid or not nid or oid == nid or oid in used_off or nid in used_on:
+                return False
+            if bool(off_r.get("red_card")) or bool(off_r.get("injured")) or not bool(off_r.get("on_pitch")):
+                return False
+            if bool(on_r.get("on_pitch")) or bool(on_r.get("red_card")) or bool(on_r.get("injured")):
+                return False
+            used_off.add(oid); used_on.add(nid)
+            subs.append({"off_player_id": oid, "off_name": str(off_r.get("name") or oid), "on_player_id": nid, "on_name": str(on_r.get("name") or nid), "reason": reason})
+            return True
+
+        # tired / stamina / fresh legs
+        tired_intent = any(k in t for k in ["tired", "fatigue", "fatigued", "fresh legs", "low stamina", "exhausted", "legs gone"])
+        stamina_thresh = None
+        m_st = re.search(r"below\s*(\d{1,3})\s*%?\s*stamina", t)
+        if not m_st:
+            m_st = re.search(r"stamina\s*(?:below|under|less than)\s*(\d{1,3})", t)
+        if m_st:
+            try: stamina_thresh = float(m_st.group(1))
+            except Exception: stamina_thresh = 50.0
+            tired_intent = True
+        if tired_intent:
+            thr = stamina_thresh if stamina_thresh is not None else 55.0
+            cands = [r for r in on_pitch if not _is_gk(r) and float(r.get("stamina") or 100) < thr and int(r.get("api_id") or 0) not in used_off]
+            cands.sort(key=lambda r: float(r.get("stamina") or 100))
+            for off_r in cands[:3]:
+                on_r = _bench_same_group(off_r)
+                _add(off_r, on_r, "low stamina")
+
+        # injured on-pitch (rare at break, but handle)
+        if any(k in t for k in ["injured player", "replace the injured", "take off the injured"]):
+            cands = [r for r in on_pitch if bool(r.get("injured")) and int(r.get("api_id") or 0) not in used_off]
+            for off_r in cands[:2]:
+                on_r = _bench_same_group(off_r)
+                _add(off_r, on_r, "injured")
+
+        # yellow-carded
+        if "yellow" in t or "booked" in t:
+            # try to find position mentioned
+            yg = None
+            if "midfielder" in t or "midfield" in t: yg = "MID"
+            elif "defender" in t or "defence" in t or "defense" in t: yg = "DEF"
+            elif "striker" in t or "forward" in t or "attacker" in t: yg = "FWD"
+            elif "winger" in t: yg = None
+            cands = [r for r in on_pitch if int(r.get("yellow_cards") or 0) > 0 and int(r.get("api_id") or 0) not in used_off and not _is_gk(r)]
+            if yg:
+                cands = [r for r in cands if _pos_group(r) == yg] or cands
+            cands.sort(key=lambda r: (-int(r.get("yellow_cards") or 0), float(r.get("stamina") or 100)))
+            for off_r in cands[:2]:
+                on_r = _bench_same_group(off_r)
+                _add(off_r, on_r, "yellow card risk")
+
+        # defensive/protect lead
+        if any(k in t for k in ["defender on", "get a defender on", "someone defensive on", "more defensive", "protect the lead", "protecting the lead", "shut up shop", "see it out"]):
+            on_r = _bench_by_group("DEF")
+            if on_r:
+                # take off an attacker or lowest-rated non-GK
+                cands = [r for r in on_pitch if int(r.get("api_id") or 0) not in used_off and not _is_gk(r)]
+                fwd = [r for r in cands if _pos_group(r) == "FWD"]
+                pool = fwd if fwd else cands
+                pool.sort(key=lambda r: (float(r.get("overall") or 0), float(r.get("stamina") or 100)))
+                if pool:
+                    _add(pool[0], on_r, "defensive change")
+
+        # attacking/more goals
+        if any(k in t for k in ["attacking options", "more attacking", "need a goal", "go for it", "more forward", "attacker on", "striker on"]):
+            on_r = _bench_by_group("FWD")
+            if on_r:
+                cands = [r for r in on_pitch if int(r.get("api_id") or 0) not in used_off and not _is_gk(r)]
+                defs = [r for r in cands if _pos_group(r) == "DEF"]
+                pool = defs if defs else cands
+                pool.sort(key=lambda r: (float(r.get("overall") or 0), float(r.get("stamina") or 100)))
+                if pool:
+                    _add(pool[0], on_r, "attacking change")
+
+        # midfielder to control game
+        if any(k in t for k in ["midfielder to control", "control the game", "control midfield", "midfielder on"]):
+            on_r = _bench_by_group("MID")
+            if on_r:
+                cands = [r for r in on_pitch if int(r.get("api_id") or 0) not in used_off and not _is_gk(r) and _pos_group(r) != "MID"]
+                if not cands:
+                    cands = [r for r in on_pitch if int(r.get("api_id") or 0) not in used_off and not _is_gk(r)]
+                cands.sort(key=lambda r: (float(r.get("overall") or 0), float(r.get("stamina") or 100)))
+                if cands:
+                    _add(cands[0], on_r, "midfield control")
+
+        # fastest winger
+        if any(k in t for k in ["fastest winger", "quick winger", "pace on the wing", "fast winger"]):
+            on_r = _bench_fastest("FWD")
+            if on_r:
+                cands = [r for r in on_pitch if int(r.get("api_id") or 0) not in used_off and _pos_group(r) == "FWD"]
+                cands.sort(key=lambda r: (float(r.get("pace") or 0), float(r.get("stamina") or 100)))
+                if cands:
+                    _add(cands[0], on_r, "pace change")
+
+        # two changes up front
+        if any(k in t for k in ["two changes up front", "2 changes up front", "change both strikers", "change the front two", "two strikers off"]):
+            on_fwds = [r for r in bench if int(r.get("api_id") or 0) not in used_on and _pos_group(r) == "FWD"]
+            on_fwds.sort(key=lambda r: float(r.get("overall") or 0), reverse=True)
+            off_fwds = [r for r in on_pitch if int(r.get("api_id") or 0) not in used_off and _pos_group(r) == "FWD"]
+            off_fwds.sort(key=lambda r: (float(r.get("stamina") or 100), float(r.get("overall") or 0)))
+            for off_r, on_r in zip(off_fwds[:2], on_fwds[:2]):
+                _add(off_r, on_r, "front line change")
+
+        return subs if subs else None
+
+    # Try intent-based subs for natural language requests
+    intent_subs = _intent_subs(raw)
+    if intent_subs:
+        # If the message is purely intent-based (no explicit pair patterns), return intent subs
+        has_explicit_pair = False
+        for _ln in str(raw).replace(";", "\n").split("\n"):
+            _ln = _ln.strip()
+            if not _ln:
+                continue
+            if try_parse_separator(_ln) or try_parse_in_out(_ln):
+                has_explicit_pair = True
+                break
+        if not has_explicit_pair:
+            # also check for simple "X for Y" name pairs by attempting smart split? skip to be safe
+            return intent_subs
+
     chunks = split_chunks(raw)
+
     if not chunks:
         raise LineupValidationError("No substitutions provided.")
 

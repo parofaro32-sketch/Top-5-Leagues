@@ -572,9 +572,9 @@ class ClubCog(commands.Cog):
                 "1. **Amount requested** (e.g. `€50M`, `75,000,000`)\n"
                 "2. **Footballing need** - which positions/roles you need, squad depth issues, injuries, tactical reasons\n"
                 "3. **Competition objectives** - what you are competing for this season\n"
-                "4. **Insurance/commitment** - you must clearly promise to **win the league and the cup** (be explicit)\n"
+                "4. **Commitment/track record** - your promise, targets, or achievements (e.g. win league/cup, double, Champions League qualification, strong season)\n"
                 "5. **Plan** - how the funds will be used responsibly\n\n"
-                "The board is strict and needs-based. Vague requests, unrealistic amounts, or missing league+cup commitment will be rejected. "
+                "The board is strict and needs-based. Vague requests or unrealistic amounts will be rejected. You can explain your case in natural language. "
                 "Do not send a one-liner - make your case properly."
             )
         else:
@@ -588,9 +588,9 @@ class ClubCog(commands.Cog):
                 "1. **Weekly wage increase requested** (e.g. `€200k/wk`, `250000`)\n"
                 "2. **Why it is needed** - contract renewals, new signings, squad role balance, retention risks\n"
                 "3. **Competition objectives** - what you are competing for this season\n"
-                "4. **Insurance/commitment** - you must clearly promise to **win the league and the cup** (be explicit)\n"
+                "4. **Commitment/track record** - your promise, targets, or achievements (e.g. win league/cup, double, Champions League qualification, strong season)\n"
                 "5. **Sustainability** - how this wage increase fits the club plan\n\n"
-                "The board is strict and needs-based. Vague requests, unrealistic amounts, or missing league+cup commitment will be rejected. "
+                "The board is strict and needs-based. Vague requests or unrealistic amounts will be rejected. You can explain your case in natural language. "
                 "Do not send a one-liner - make your case properly."
             )
 
@@ -609,8 +609,9 @@ class ClubCog(commands.Cog):
     async def on_message(self, message: discord.Message):
         # Handle replies to board request prompts
         try:
-            if message.author.bot or not message.guild:
+            if message.author.bot:
                 return
+            is_dm = message.guild is None
             req = None
             ref = getattr(message, "reference", None)
             if ref and getattr(ref, "message_id", None):
@@ -621,32 +622,41 @@ class ClubCog(commands.Cog):
                 )
                 if row:
                     req = dict(row)
-            # Fallback: if user didn't use Discord reply, handle their latest awaiting request in this channel/thread
+            # Fallback: if user didn't use Discord reply, handle their latest awaiting request
             if req is None:
                 content = (message.content or "").strip()
                 if not content or content.startswith("/"):
                     return
-                channel_ids: list[int] = [int(message.channel.id)]
-                parent_id = getattr(getattr(message, "channel", None), "parent_id", None)
-                if parent_id:
-                    channel_ids.append(int(parent_id))
                 row = None
-                for cid in channel_ids:
+                if not is_dm:
+                    channel_ids: list[int] = [int(message.channel.id)]
+                    parent_id = getattr(getattr(message, "channel", None), "parent_id", None)
+                    if parent_id:
+                        channel_ids.append(int(parent_id))
+                    for cid in channel_ids:
+                        row = await self.bot.db.fetchone(
+                            """SELECT * FROM board_requests
+                               WHERE guild_id=? AND channel_id=? AND user_id=? AND status='awaiting_reply'
+                               ORDER BY id DESC LIMIT 1""",
+                            (int(message.guild.id), int(cid), int(message.author.id)),
+                        )
+                        if row:
+                            break
+                    # Last resort: latest awaiting request for this user in this guild
+                    if not row:
+                        row = await self.bot.db.fetchone(
+                            """SELECT * FROM board_requests
+                               WHERE guild_id=? AND user_id=? AND status='awaiting_reply'
+                               ORDER BY id DESC LIMIT 1""",
+                            (int(message.guild.id), int(message.author.id)),
+                        )
+                else:
+                    # DM: latest awaiting request for this user across guilds
                     row = await self.bot.db.fetchone(
                         """SELECT * FROM board_requests
-                           WHERE guild_id=? AND channel_id=? AND user_id=? AND status='awaiting_reply'
+                           WHERE user_id=? AND status='awaiting_reply'
                            ORDER BY id DESC LIMIT 1""",
-                        (int(message.guild.id), int(cid), int(message.author.id)),
-                    )
-                    if row:
-                        break
-                # Last resort: latest awaiting request for this user in this guild
-                if not row:
-                    row = await self.bot.db.fetchone(
-                        """SELECT * FROM board_requests
-                           WHERE guild_id=? AND user_id=? AND status='awaiting_reply'
-                           ORDER BY id DESC LIMIT 1""",
-                        (int(message.guild.id), int(message.author.id)),
+                        (int(message.author.id),),
                     )
                 if not row:
                     return
@@ -655,7 +665,7 @@ class ClubCog(commands.Cog):
             if int(req.get("user_id") or 0) != int(message.author.id):
                 return
             # Basic channel/guild sanity
-            if req.get("guild_id") and int(req.get("guild_id")) != int(message.guild.id):
+            if not is_dm and req.get("guild_id") and int(req.get("guild_id")) != int(message.guild.id):
                 return
             status_now = str(req.get("status") or "")
             if status_now != "awaiting_reply":
@@ -721,43 +731,72 @@ class ClubCog(commands.Cog):
                 )))
                 return
 
-            text = reason.lower()
-            need_signals = [
-                "injur", "depth", "squad", "sign", "transfer", "reinforc", "replace", "rebuild", "compete",
-                "window", "striker", "midfield", "defend", "goalkeeper", "winger", "fullback", "centre-back",
-                "center-back", "contract", "renew", "wage", "salary", "upgrade", "cover", "short", "thin",
-                "promotion", "relegation", "europe", "title", "cup", "season objective", "project", "finance",
-                "budget", "fund", "cash", "sell", "loan", "youth", "academy"
-            ]
-            need_hits = [w for w in need_signals if w in text]
-            need_score = min(1.0, 0.25 + 0.12 * len(set(need_hits)) + min(0.25, len(reason) / 400.0))
+            # Natural-language board reasoning (local, no LLM)
+            from services.nlu_service import board_argument_strength
+            analysis = board_argument_strength(reason, kind=kind, amount=amount, current_budget=(current_transfer if kind == "funds" else current_wage))
+            achievements = analysis.get("achievements") or {}
+            commit = analysis.get("commitment") or {}
+            need_hits = list(analysis.get("need_hits") or [])
 
-            commitment_words = ["win", "guarantee", "promise", "commit", "deliver", "secure", "bring home", "lift", "ensure"]
-            has_commitment = any(w in text for w in commitment_words)
-            league_win_phrase = any(k in text for k in [
-                "win the league", "win league", "league title", "win the title", "champions of the league",
-                "win la liga", "win premier league", "win bundesliga", "win serie a", "win ligue 1", "league champions",
-            ])
-            cup_win_phrase = any(k in text for k in [
-                "win the cup", "win cup", "domestic cup", "cup title", "win both cups",
-                "win fa cup", "win copa", "win dfb", "win coppa", "win coupe",
-            ])
-            combined_promise = any(k in text for k in [
-                "league and cup", "cup and league", "league and the cup", "cup and the league",
-                "league and a cup", "cup and a league", "both the league and the cup", "both league and cup",
-                "domestic double", "league & cup", "cup & league", "league + cup",
-            ])
-            if combined_promise and has_commitment:
-                league_win_phrase = True
-                cup_win_phrase = True
-            if has_commitment and ("league" in text) and ("cup" in text):
-                if re.search(r"\b(win|guarantee|promise|deliver|secure|bring|lift|ensure)\b.*\bleague\b", text) and re.search(r"\b(win|guarantee|promise|deliver|secure|bring|lift|ensure)\b.*\bcup\b", text):
-                    league_win_phrase = True
-                    cup_win_phrase = True
-                if any(w in text for w in ["win both", "win the league", "win league"]) and "cup" in text:
-                    cup_win_phrase = True
-            insurance_ok = bool(league_win_phrase and cup_win_phrase and has_commitment)
+            # Season evidence for verification when available
+            season_evidence = {}
+            try:
+                st_rows = await self.bot.db.fetchall(
+                    "SELECT team_api_id, position, played, won, drawn, lost, gf, ga, gd, points, team_name FROM season_teams WHERE season_id=? ORDER BY position ASC",
+                    (season_id,),
+                )
+                st_rows = [dict(r) for r in st_rows]
+                total_teams = len(st_rows)
+                my_row = next((r for r in st_rows if int(r.get("team_api_id") or 0) == team_id), None)
+                if my_row is None:
+                    my_row = next((r for r in st_rows if str(r.get("team_name") or "").strip().lower() == team_name.strip().lower()), None)
+                if my_row is None:
+                    st_rows2 = await self.bot.db.fetchall("SELECT * FROM season_teams WHERE season_id=? AND team_api_id=?", (season_id, team_id))
+                    if st_rows2:
+                        my_row = dict(st_rows2[0])
+                        # compute position by points if missing
+                        if my_row.get("position") is None and total_teams:
+                            # rough: count teams with better sort key
+                            pass
+                played_rows = await self.bot.db.fetchall("SELECT status FROM fixtures WHERE season_id=?", (season_id,))
+                played_rows = [dict(r) for r in played_rows]
+                total_fixtures = len(played_rows)
+                played_fixtures = sum(1 for r in played_rows if str(r.get("status") or "") in {"played", "completed", "finalized"})
+                season_evidence = {
+                    "total_teams": total_teams,
+                    "my_position": int(my_row.get("position") or 0) if my_row else None,
+                    "my_points": int(my_row.get("points") or 0) if my_row else None,
+                    "my_played": int(my_row.get("played") or 0) if my_row else None,
+                    "my_won": int(my_row.get("won") or 0) if my_row else None,
+                    "my_drawn": int(my_row.get("drawn") or 0) if my_row else None,
+                    "my_lost": int(my_row.get("lost") or 0) if my_row else None,
+                    "total_fixtures": total_fixtures,
+                    "played_fixtures": played_fixtures,
+                }
+            except Exception:
+                logger.exception("Failed to collect season evidence for board request")
 
+            # Interpret achievements/commitments flexibly
+            text_l = reason.lower()
+            double_claim = bool(achievements.get("double"))
+            treble_claim = bool(achievements.get("treble"))
+            league_claim = bool(achievements.get("league_title") or double_claim or treble_claim)
+            cup_claim = bool(achievements.get("domestic_cup") or double_claim or treble_claim)
+            continental_claim = bool(achievements.get("continental") or treble_claim)
+            strong_claim = bool(achievements.get("strong_season") or achievements.get("qualification") or achievements.get("promotion") or achievements.get("survival"))
+
+            # Commitment/insurance is satisfied by explicit promise OR strong achievement-based argument
+            explicit_insurance = bool(commit.get("league_commitment") and commit.get("cup_commitment"))
+            achievement_insurance = bool(double_claim or treble_claim or (league_claim and cup_claim))
+            competing_many = bool(re.search(r"\b(4|four|three|3|multiple)\s+competitions?\b", text_l) or "champions league" in text_l or "europe" in text_l)
+            insurance_ok = explicit_insurance or achievement_insurance
+
+            # Need/argument quality
+            need_score = float(analysis.get("need_score") or 0.0)
+            reason_quality = float(analysis.get("reason_quality") or 0.0)
+            clear_need = reason_quality >= 0.45 and len(reason.strip()) >= 20
+
+            # Amount limits
             if kind == "funds":
                 max_reasonable = 120_000_000
                 soft_cap = 60_000_000
@@ -769,40 +808,83 @@ class ClubCog(commands.Cog):
 
             amount_reasonable = amount <= max_reasonable
             amount_soft = amount <= soft_cap
-            clear_need = need_score >= 0.45 and len(reason.strip()) >= 25
 
-            reasons = []
+            # Slightly relax strictness when user provides strong natural context (double/treble/CL etc.)
+            if (double_claim or treble_claim or continental_claim or competing_many) and reason_quality < 0.45:
+                clear_need = len(reason.strip()) >= 15
+            if (achievement_insurance or explicit_insurance) and not clear_need and len(reason.strip()) >= 30:
+                clear_need = True
+
+            reasons_out = []
             approved = False
             approved_amount = int(amount)
+
             if not insurance_ok:
-                reasons.append("Missing required insurance: you must clearly promise to win **the league and the cup**.")
+                reasons_out.append("Board needs a stronger commitment/achievement case. Explain clearly what you're competing for and what you've achieved or are committing to deliver (league/cup/double/treble/European success).")
             if not clear_need:
-                reasons.append("The case is not detailed enough. Explain the footballing need clearly (positions, depth, injuries, objectives).")
+                reasons_out.append("The case is not detailed enough. Explain the footballing need clearly (squad depth, injuries, competitions, renewals, objectives).")
             if not amount_reasonable:
-                reasons.append(f"Requested amount ({_money(amount)}) is above the reasonable single-request board limit ({_money(max_reasonable)}).")
+                reasons_out.append(f"Requested amount ({_money(amount)}) is above the reasonable single-request board limit ({_money(max_reasonable)}).")
+
+            # Realistic board decision
             if insurance_ok and clear_need and amount_reasonable:
-                if not amount_soft and need_score < 0.75:
+                # verify claims softly against season data when possible
+                verified_note = None
+                pos = season_evidence.get("my_position")
+                if league_claim and pos == 1:
+                    verified_note = "League claim aligns with current standings (1st place)."
+                elif league_claim and isinstance(pos, int) and pos > 1:
+                    verified_note = f"League-title claim noted, but current standings show {pos}th place; board weighed it as ambition/context."
+                if double_claim or treble_claim:
+                    verified_note = (verified_note + " " if verified_note else "") + "Major trophy claim noted; board considered it as strong performance context."
+                if verified_note:
+                    reasons_out.append(verified_note)
+
+                if not amount_soft and reason_quality < 0.75:
                     approved_amount = int(soft_cap + (amount - soft_cap) * 0.5)
-                    approved_amount = max(1, min(approved_amount, amount))
-                    reasons.append(f"Board adjusted amount based on stated need: {_money(amount)} → {_money(approved_amount)}.")
+                    approved_amount = max(1, min(approved_amount, int(amount)))
+                    reasons_out.append(f"Board adjusted amount based on case strength: {_money(amount)} → {_money(approved_amount)}.")
+                elif not amount_soft and reason_quality < 0.90:
+                    # partial approval closer to request
+                    approved_amount = int(soft_cap + (amount - soft_cap) * 0.75)
+                    approved_amount = max(1, min(approved_amount, int(amount)))
+                    if approved_amount != int(amount):
+                        reasons_out.append(f"Board partially adjusted amount after review: {_money(amount)} → {_money(approved_amount)}.")
                 approved = True
 
             status = "approved" if approved else "rejected"
             meta_out = {
                 **meta,
                 "need_score": round(need_score, 3),
-                "need_hits": sorted(set(need_hits))[:20],
+                "reason_quality": round(reason_quality, 3),
+                "need_hits": need_hits[:20],
                 "insurance_ok": insurance_ok,
-                "league_promise": league_win_phrase,
-                "cup_promise": cup_win_phrase,
+                "explicit_insurance": explicit_insurance,
+                "achievement_insurance": achievement_insurance,
+                "achievements": achievements,
+                "commitment": commit,
+                "season_evidence": season_evidence,
                 "amount_reasonable": amount_reasonable,
                 "amount_soft": amount_soft,
                 "approved_amount": approved_amount if approved else 0,
+                "natural_language_eval": True,
             }
             await self.bot.db.execute(
                 "UPDATE board_requests SET amount=?, reason=?, status=?, meta_json=?, updated_at=? WHERE id=?",
                 (int(amount), reason, status, json.dumps(meta_out), utc_now_iso(), int(req["id"])),
             )
+
+            # Human-readable achievement summary
+            ach_labels = []
+            if treble_claim: ach_labels.append("treble claim")
+            elif double_claim: ach_labels.append("double/league+cup claim")
+            else:
+                if league_claim: ach_labels.append("league title claim")
+                if cup_claim: ach_labels.append("cup claim")
+                if continental_claim: ach_labels.append("continental/Champions League claim")
+            if achievements.get("qualification"): ach_labels.append("qualification claim")
+            if achievements.get("strong_season"): ach_labels.append("strong season claim")
+            if competing_many: ach_labels.append("multiple competitions / squad demand")
 
             board_lines = []
             board_lines.append(f"**Board Meeting — {team_name}**")
@@ -815,8 +897,11 @@ class ClubCog(commands.Cog):
                 board_lines.append(f"- Current transfer budget: {_money(current_transfer)}")
             else:
                 board_lines.append(f"- Current wage budget: {_money(current_wage)}/wk")
-            board_lines.append(f"- Identified needs: {', '.join(sorted(set(need_hits))[:8]) if need_hits else 'none clearly identified'}")
-            board_lines.append(f"- League+Cup insurance promise: {'✅ provided' if insurance_ok else '❌ missing'}")
+            board_lines.append(f"- Case understood: {', '.join(ach_labels[:6]) if ach_labels else 'no clear achievement/competition context detected'}")
+            board_lines.append(f"- Identified needs: {', '.join(need_hits[:8]) if need_hits else 'none clearly identified'}")
+            board_lines.append(f"- Commitment/achievement case: {'✅ accepted' if insurance_ok else '❌ insufficient'}")
+            if season_evidence.get("my_position"):
+                board_lines.append(f"- Season context: {team_name} are currently {season_evidence.get('my_position')}th with {season_evidence.get('my_points', 0)} pts ({season_evidence.get('my_played', 0)} played).")
 
             if approved:
                 final_amount = int(approved_amount)
@@ -828,7 +913,7 @@ class ClubCog(commands.Cog):
                     new_val = current_transfer + final_amount
                     board_lines.append("")
                     board_lines.append("**Decision: APPROVED ✅**")
-                    for r in reasons:
+                    for r in reasons_out:
                         board_lines.append(f"- {r}")
                     board_lines.append(f"- Approved transfer funds: **{_money(final_amount)}**")
                     board_lines.append(f"- Transfer budget updated: {_money(current_transfer)} → **{_money(new_val)}**")
@@ -840,11 +925,11 @@ class ClubCog(commands.Cog):
                     new_val = current_wage + final_amount
                     board_lines.append("")
                     board_lines.append("**Decision: APPROVED ✅**")
-                    for r in reasons:
+                    for r in reasons_out:
                         board_lines.append(f"- {r}")
                     board_lines.append(f"- Approved wage increase: **{_money(final_amount)}/wk**")
                     board_lines.append(f"- Wage budget updated: {_money(current_wage)}/wk → **{_money(new_val)}/wk**")
-                board_lines.append("- Board note: approval is conditional on your stated commitment to compete for the league and cup.")
+                board_lines.append("- Board note: approval is based on the case presented and the club's competitive expectations.")
                 result_embed = success_embed("Board Meeting Result", "\n".join(board_lines)[:3900])
                 try:
                     await message.reply(embed=result_embed)
@@ -860,9 +945,9 @@ class ClubCog(commands.Cog):
             else:
                 board_lines.append("")
                 board_lines.append("**Decision: REJECTED ❌**")
-                for r in reasons:
+                for r in reasons_out:
                     board_lines.append(f"- {r}")
-                board_lines.append("- Reply with a stronger, detailed case and explicitly include your promise to win the league and the cup.")
+                board_lines.append("- Reply with a stronger, detailed case (achievements, competition demands, squad need, and your plan). Natural language is fine.")
                 result_embed = error_embed("Board Meeting Result", "\n".join(board_lines)[:3900])
                 try:
                     await message.reply(embed=result_embed)
@@ -877,7 +962,7 @@ class ClubCog(commands.Cog):
                     pass
         except Exception:
             logger.exception("Failed to process board request reply")
-            err = error_embed("Board Request Error", "I couldn't process your board request reply. Please try again with a clear amount and a detailed case (include your promise to win the league and the cup).")
+            err = error_embed("Board Request Error", "I couldn't process your board request reply. Please try again with a clear amount and a detailed case in natural language (what you need, why, and your objectives/achievements).")
             try:
                 await message.reply(embed=err)
             except Exception:

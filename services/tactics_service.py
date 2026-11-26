@@ -173,20 +173,33 @@ def parse_tactics_text(text: str) -> dict[str, Any]:
 
     t = default_tactics()
     low = raw.lower()
-    # normalize punctuation for matching
     compact = re.sub(r"[^a-z0-9+#\s-]", " ", low)
     compact = re.sub(r"\s+", " ", compact).strip()
 
-    def has(*words: str) -> bool:
-        return any(w in compact for w in words)
+    NEG = r"(?:don\'?t|do not|dont|never|no|avoid|stop|without|not|isn\'?t|aren\'?t|can\'?t|won\'?t)"
+    def _window_has_neg(m_start: int, window: int = 40) -> bool:
+        pre = compact[max(0, m_start - window):m_start]
+        return bool(re.search(r"\b" + NEG + r"\b", pre))
 
     def has_re(*patterns: str) -> bool:
-        return any(re.search(p, compact) for p in patterns)
+        for p in patterns:
+            for m in re.finditer(p, compact):
+                if not _window_has_neg(m.start()):
+                    return True
+        return False
+
+    def has_neg_re(*patterns: str) -> bool:
+        for p in patterns:
+            for m in re.finditer(p, compact):
+                if _window_has_neg(m.start()):
+                    return True
+        return False
 
     def pick(patterns: list[tuple[str, str]], default: str | None = None) -> str | None:
         for pat, val in patterns:
-            if re.search(pat, compact):
-                return val
+            for m in re.finditer(pat, compact):
+                if not _window_has_neg(m.start()):
+                    return val
         return default
 
     # Formation
@@ -194,174 +207,180 @@ def parse_tactics_text(text: str) -> dict[str, Any]:
     if fm:
         t["formation"] = fm.group(1)
     else:
-        # natural language formation hints
-        if has_re(r"\bfour at the back\b", r"\bback four\b", r"\b4 at the back\b"):
-            # don't override if a specific 4-x-x was implied; leave default unless other clues
-            pass
-        if has_re(r"\bthree at the back\b", r"\bback three\b", r"\b3 at the back\b", r"\b3 cb\b"):
+        if has_re(r"\bthree at the back\b", r"\bback three\b", r"\b3 at the back\b", r"\b3 cb\b", r"\bthree centre backs\b"):
             t["formation"] = "3-5-2"
         if has_re(r"\bfive at the back\b", r"\bback five\b", r"\b5 at the back\b"):
             t["formation"] = "5-3-2"
+        if has_re(r"\b4 3 3\b", r"\b433\b"):
+            t["formation"] = "4-3-3"
+        if has_re(r"\b4 2 3 1\b", r"\b4231\b"):
+            t["formation"] = "4-2-3-1"
+        if has_re(r"\b4 4 2\b", r"\b442\b"):
+            t["formation"] = "4-4-2"
 
     # Mentality / intent
     ment = pick([
-        (r"\bvery attacking\b|\ball out attack\b|\ball-out attack\b|\bgo all out\b|\bfull attack\b|\bthrow everything forward\b", "very_attacking"),
-        (r"\battacking\b|\battack\b|\bgo forward\b|\bpush forward\b|\bplay on the front foot\b|\bfront foot\b", "attacking"),
+        (r"\bvery attacking\b|\ball out attack\b|\ball-out attack\b|\bgo all out\b|\bfull attack\b|\bthrow everything forward\b|\bgo for it\b|\bwe need a goal\b|\bchase the game\b|\bpush for a goal\b", "very_attacking"),
+        (r"\battacking\b|\battack\b|\bgo forward\b|\bpush forward\b|\bplay on the front foot\b|\bfront foot\b|\bmore attacking\b|\bbe aggressive\b|\btake risks\b", "attacking"),
         (r"\bpositive\b|\bproactive\b", "positive"),
-        (r"\bcautious\b|\bcareful\b|\bdefensive mentality\b|\bplay safe\b|\bplay it safe\b|\bmore defensive\b|\bsit back\b", "cautious"),
+        (r"\bultra defensive\b|\bpark the bus\b|\ball behind the ball\b", "cautious"),
+        (r"\bcautious\b|\bcareful\b|\bdefensive mentality\b|\bplay safe\b|\bplay it safe\b|\bmore defensive\b|\bsit back\b|\bprotect the lead\b|\bprotecting the lead\b|\bhold on\b|\bsee it out\b|\bkeep it tight\b|\bstay organized\b|\bstay organised\b|\bno risks\b|\bdon\'?t take risks\b|\bstop taking risks\b", "cautious"),
         (r"\bbalanced\b|\bneutral\b", "balanced"),
     ])
     if ment:
         t["attacking"]["mentality"] = ment
 
-    # Build-up / passing style
-    build = pick([
-        (r"\btiki taka\b|\btiki-taka\b|\bshort passing\b|\bshort passes\b|\bplay out from the back\b|\bbuild from the back\b|\bkeep possession\b|\bpossession football\b|\bpossession based\b|\bpass it around\b", "short"),
-        (r"\bdirect\b|\blong ball\b|\blong balls\b|\bgo long\b|\bpump it long\b|\bhit long\b|\bplay direct\b|\bdirect football\b|\broute one\b", "direct"),
-        (r"\bmixed build\b|\bmixed passing\b", "mixed"),
-    ])
-    if build:
-        t["attacking"]["build_up"] = build
-        t["attacking"]["passing_directness"] = build if build in {"short", "direct", "mixed"} else "mixed"
-        if build == "short":
-            t["attacking"]["possession_style"] = "patient"
-        elif build == "direct":
+    # Build-up / passing style / possession control
+    if has_re(r"\bkeep possession\b", r"\bcontrol possession\b", r"\bpossession football\b", r"\bpossession based\b", r"\bpass it around\b", r"\bcontrol the game\b", r"\bdominate possession\b", r"\btiki taka\b", r"\btiki-taka\b", r"\bplay out from the back\b", r"\bbuild from the back\b", r"\bshort passing\b", r"\bshort passes\b"):
+        t["attacking"]["build_up"] = "short"
+        t["attacking"]["passing_directness"] = "short"
+        t["attacking"]["possession_style"] = "patient"
+    if has_re(r"\bdirect\b", r"\blong ball\b", r"\blong balls\b", r"\bgo long\b", r"\bpump it long\b", r"\bhit long\b", r"\bplay direct\b", r"\bdirect football\b", r"\broute one\b", r"\bget the ball forward quickly\b", r"\bforward quickly\b", r"\bquickly forward\b"):
+        # don't override a clear possession instruction unless direct is explicit
+        if not has_re(r"\bkeep possession\b", r"\bcontrol possession\b", r"\btiki taka\b"):
+            t["attacking"]["build_up"] = "direct"
+            t["attacking"]["passing_directness"] = "direct"
             t["attacking"]["possession_style"] = "fast"
 
     # Possession/tempo
-    poss = pick([
-        (r"\bpatient\b|\bslow tempo\b|\bkeep the ball\b|\bcontrol the game\b|\bcontrol possession\b|\bslow it down\b", "patient"),
-        (r"\bfast tempo\b|\bhigh tempo\b|\bquick tempo\b|\bplay fast\b|\bquick passing\b|\bmove the ball quickly\b", "fast"),
-        (r"\bbalanced tempo\b", "balanced"),
-    ])
-    if poss:
-        t["attacking"]["possession_style"] = poss
+    if has_re(r"\bpatient\b", r"\bslow tempo\b", r"\bslow it down\b", r"\bslow things down\b", r"\bkeep the ball\b", r"\bcalm it down\b", r"\bcontrol the tempo\b"):
+        t["attacking"]["possession_style"] = "patient"
+        if t["attacking"]["build_up"] == "mixed":
+            t["attacking"]["build_up"] = "short"
+            t["attacking"]["passing_directness"] = "short"
+    if has_re(r"\bfast tempo\b", r"\bhigh tempo\b", r"\bquick tempo\b", r"\bplay fast\b", r"\bquick passing\b", r"\bmove the ball quickly\b", r"\bup the tempo\b", r"\bspeed it up\b"):
+        t["attacking"]["possession_style"] = "fast"
 
     # Width
     width = pick([
-        (r"\bwide\b|\buse the wings\b|\buse wings\b|\bstretch\b|\bwing play\b|\bstay wide\b|\bget wide\b|\bhug the touchline\b", "wide"),
-        (r"\bnarrow\b|\bthrough the middle\b|\bcentral\b|\bhalf spaces\b|\bplay narrow\b|\binside\b", "narrow"),
+        (r"\bwide\b|\buse the wings\b|\buse wings\b|\bstretch\b|\bwing play\b|\bstay wide\b|\bget wide\b|\bhug the touchline\b|\bkeep the width\b|\bstretch their defense\b|\bstretch the defense\b", "wide"),
+        (r"\bnarrow\b|\bthrough the middle\b|\bplay through the middle\b|\bcentral\b|\bhalf spaces\b|\bplay narrow\b|\binside\b|\bblock the middle\b", "narrow"),
         (r"\bbalanced width\b", "balanced"),
     ])
     if width:
         t["attacking"]["attacking_width"] = width
-        t["defensive"]["defensive_width"] = "balanced" if width == "narrow" else width
+        if width == "narrow":
+            t["defensive"]["defensive_width"] = "narrow"
+        elif width == "wide":
+            t["defensive"]["defensive_width"] = "wide"
+    if re.search(r"\b(don\'?t let them|stop them|prevent them from)\s+play(?:ing)?\s+through the middle\b", compact) or re.search(r"\bblock the middle\b", compact):
+        t["attacking"]["attacking_width"] = "narrow"
+        t["defensive"]["defensive_width"] = "narrow"
+        t["defensive"]["compactness"] = "high"
 
-    # Transitions
-    trans = pick([
-        (r"\bfast transition\b|\bquick transition\b|\btransition quickly\b|\bbreak fast\b|\bfast breaks\b|\bhit on the break\b", "fast"),
-        (r"\bslow transition\b|\bpatient transition\b|\bsettle back\b", "slow"),
-    ])
-    if trans:
-        t["attacking"]["attacking_transitions"] = trans
-        if trans == "fast":
-            t["attacking"]["counterattacking"] = True
+    # Compactness / shape
+    if has_re(r"\bcompact\b", r"\bmore compact\b", r"\bkeep it tight\b", r"\btight shape\b", r"\bclose the gaps\b", r"\bstay organized\b", r"\bstay organised\b", r"\bharder to break down\b", r"\bdifficult to break down\b", r"\bmake us solid\b", r"\bsolid shape\b"):
+        t["defensive"]["compactness"] = "high"
+    if has_neg_re(r"\bcompact\b") or has_re(r"\bloose shape\b", r"\bspread out\b"):
+        t["defensive"]["compactness"] = "low"
 
-    # Counterattacking
-    if has_re(r"\bcounterattack\b", r"\bcounter attack\b", r"\bcounter-attack\b", r"\bhit them on the break\b", r"\bbreak quickly\b", r"\bplay on the counter\b"):
+    # Transitions / counters
+    if has_re(r"\bcounterattack\b", r"\bcounter attack\b", r"\bcounter-attack\b", r"\bhit them on the break\b", r"\bbreak quickly\b", r"\bplay on the counter\b", r"\bfast breaks\b", r"\bcounter attacking\b"):
         t["attacking"]["counterattacking"] = True
-    if has_re(r"\bno counterattack\b", r"\bno counter attack\b", r"\bdon t counter\b", r"\bdo not counter\b"):
+        t["attacking"]["attacking_transitions"] = "fast"
+    if has_re(r"\bfast transition\b", r"\bquick transition\b", r"\btransition quickly\b", r"\bbreak fast\b", r"\bget forward quickly\b", r"\battack quickly\b"):
+        t["attacking"]["attacking_transitions"] = "fast"
+    if has_re(r"\bslow transition\b", r"\bpatient transition\b", r"\bsettle back\b", r"\bno risks\b"):
+        t["attacking"]["attacking_transitions"] = "slow"
+    if has_neg_re(r"\bcounterattack\b", r"\bcounter attack\b", r"\bcounter-attack\b") or has_re(r"\bno counterattack\b", r"\bdon\'?t counter\b", r"\bdo not counter\b"):
         t["attacking"]["counterattacking"] = False
 
-    # Fullback/width movement
-    if has_re(r"\boverlap\b", r"\boverlapping fullbacks\b", r"\boverlapping full backs\b", r"\bfullbacks push up\b"):
+    # Stop counterattacks (opponent) - be conservative: keep shape, slower transitions, possible counterpress
+    if has_re(r"\bstop their counterattacks\b", r"\bprevent counterattacks\b", r"\bstop counters\b", r"\bno counterattacks\b", r"\bwatch the counter\b"):
+        t["attacking"]["attacking_transitions"] = "slow"
+        t["defensive"]["counterpressing"] = True
+        t["defensive"]["compactness"] = "high"
+
+    # Fullbacks / movement
+    if has_re(r"\boverlap\b", r"\boverlapping fullbacks\b", r"\boverlapping full backs\b", r"\bfullbacks push up\b", r"\bfull backs push up\b"):
         t["attacking"]["overlapping_fullbacks"] = True
+    if has_neg_re(r"\boverlap\b"):
+        t["attacking"]["overlapping_fullbacks"] = False
     if has_re(r"\bunderlap\b", r"\bunderlapping\b", r"\binverted fullbacks\b"):
         t["attacking"]["underlapping_movements"] = True
+    if has_neg_re(r"\bunderlap\b"):
+        t["attacking"]["underlapping_movements"] = False
 
     # Crossing
     cross = pick([
-        (r"\bcross a lot\b|\blots of crosses\b|\bwhip crosses\b|\bget crosses in\b|\bcross early\b|\bhigh crossing\b", "high"),
-        (r"\blow crossing\b|\bfew crosses\b|\bdon t cross\b|\bavoid crosses\b", "low"),
+        (r"\bcross a lot\b|\blots of crosses\b|\bwhip crosses\b|\bget crosses in\b|\bcross early\b|\bhigh crossing\b|\bflood the box\b", "high"),
+        (r"\blow crossing\b|\bfew crosses\b|\bdon\'?t cross\b|\bavoid crosses\b|\bwork it into the box\b", "low"),
+        (r"\bmixed crossing\b", "mixed"),
     ])
     if cross:
         t["attacking"]["crossing"] = cross
 
-    # Pressing
-    press = pick([
-        (r"\bgegenpress\b|\bgegenpressing\b|\bvery high press\b|\brelentless press\b|\bpress like crazy\b|\bpress everywhere\b", "very_high"),
-        (r"\bhigh press\b|\bpress high\b|\bpress intensely\b|\bpress hard\b|\bpress them\b|\bclose down\b|\bpress aggressively\b", "high"),
-        (r"\bmedium press\b|\bbalanced press\b|\bmid press\b", "medium"),
-        (r"\blow press\b|\bno press\b|\bdon t press\b|\bdrop off\b|\bstand off\b|\bsit off\b|\bdo not press\b", "low"),
-    ])
-    if press:
-        t["defensive"]["pressing_intensity"] = press
-        if press in ("high", "very_high"):
-            t["defensive"]["pressing_triggers"] = "aggressive"
-            t["defensive"]["counterpressing"] = True
-        elif press == "low":
-            t["defensive"]["pressing_triggers"] = "conservative"
+    # Pressing / out of possession
+    if has_re(r"\bgegenpress\b", r"\bgegenpressing\b", r"\bpress after losing possession\b", r"\bpress after loss\b", r"\bwin it back quickly\b", r"\bcounterpress\b", r"\bcounter press\b"):
+        t["defensive"]["pressing_intensity"] = "high" if t["defensive"]["pressing_intensity"] == "medium" else t["defensive"]["pressing_intensity"]
+        t["defensive"]["counterpressing"] = True
+        t["defensive"]["pressing_triggers"] = "aggressive"
+    if has_re(r"\bhigh press\b", r"\bpress high\b", r"\bpress intensely\b", r"\bpress hard\b", r"\bpress them constantly\b", r"\bpress them\b", r"\bclose down\b", r"\bpress aggressively\b", r"\bconstant press\b"):
+        t["defensive"]["pressing_intensity"] = "high"
+        t["defensive"]["pressing_triggers"] = "aggressive"
+        t["defensive"]["counterpressing"] = True
+    if has_re(r"\bvery high press\b", r"\brelentless press\b", r"\bpress everywhere\b", r"\bpress like crazy\b"):
+        t["defensive"]["pressing_intensity"] = "very_high"
+        t["defensive"]["pressing_triggers"] = "aggressive"
+        t["defensive"]["counterpressing"] = True
+    if has_re(r"\bmedium press\b", r"\bbalanced press\b", r"\bmid press\b"):
+        t["defensive"]["pressing_intensity"] = "medium"
+        t["defensive"]["pressing_triggers"] = "balanced"
+    if has_re(r"\blow press\b", r"\bdrop off\b", r"\bstand off\b", r"\bsit off\b", r"\bdon\'?t press\b", r"\bdo not press\b", r"\bno press\b"):
+        t["defensive"]["pressing_intensity"] = "low"
+        t["defensive"]["pressing_triggers"] = "conservative"
+        t["defensive"]["counterpressing"] = False
 
     # Defensive line / block
-    line = pick([
-        (r"\bvery high line\b|\bextremely high line\b", "very_high"),
-        (r"\bhigh line\b|\bpush up\b|\bhold a high line\b", "high"),
-        (r"\bdeep line\b|\blow block\b|\bdrop deep\b|\bsit deep\b|\bpark the bus\b|\bdefend deep\b|\blow defensive line\b", "deep"),
-        (r"\bstandard line\b|\bnormal line\b|\bmid line\b", "standard"),
-    ])
-    if line:
-        t["defensive"]["defensive_line"] = line
-        if line == "deep":
-            t["defensive"]["defensive_block"] = "low"
-        elif line in ("high", "very_high"):
-            t["defensive"]["defensive_block"] = "high"
-
-    block = pick([
-        (r"\blow block\b|\bpark the bus\b|\bsit deep\b|\bdeep block\b", "low"),
-        (r"\bmid block\b|\bmiddle block\b", "mid"),
-        (r"\bhigh block\b", "high"),
-    ])
-    if block:
-        t["defensive"]["defensive_block"] = block
-
-    # Compactness
-    compactness = pick([
-        (r"\bvery compact\b|\bstay compact\b|\bcompact\b|\bkeep it tight\b|\btight shape\b", "high"),
-        (r"\bnot compact\b|\bloose shape\b|\bstretch defense\b|\bspread out\b", "low"),
-    ])
-    if compactness:
-        t["defensive"]["compactness"] = compactness
-
-    # Counterpress
-    if has_re(r"\bcounterpress\b", r"\bcounter press\b", r"\bpress after loss\b", r"\bwin it back quickly\b"):
-        t["defensive"]["counterpressing"] = True
-    if has_re(r"\bno counterpress\b", r"\bdon t counterpress\b"):
-        t["defensive"]["counterpressing"] = False
+    if has_re(r"\bvery high line\b", r"\bextremely high line\b"):
+        t["defensive"]["defensive_line"] = "very_high"
+        t["defensive"]["defensive_block"] = "high"
+    if has_re(r"\bhigh line\b", r"\bkeep the defensive line high\b", r"\bhold a high line\b", r"\bpush up\b"):
+        # "push up" can mean attack, but in defensive context it's line; treat as high line
+        t["defensive"]["defensive_line"] = "high"
+        t["defensive"]["defensive_block"] = "high"
+    if has_re(r"\bdeep line\b", r"\bdrop the line\b", r"\bdrop deep\b", r"\bsit deep\b", r"\bdefend deep\b", r"\blow defensive line\b", r"\bdeeper line\b", r"\bthey have pace\b"):
+        t["defensive"]["defensive_line"] = "deep"
+        t["defensive"]["defensive_block"] = "low"
+    if has_re(r"\blow block\b", r"\bpark the bus\b", r"\bdeep block\b"):
+        t["defensive"]["defensive_block"] = "low"
+        t["defensive"]["defensive_line"] = "deep"
+        t["attacking"]["mentality"] = "cautious"
+        t["attacking"]["counterattacking"] = True
+    if has_re(r"\bmid block\b", r"\bmiddle block\b"):
+        t["defensive"]["defensive_block"] = "mid"
+    if has_re(r"\bhigh block\b"):
+        t["defensive"]["defensive_block"] = "high"
 
     # Marking / traps
     if has_re(r"\boffside trap\b"):
         t["defensive"]["offside_trap"] = True
+    if has_neg_re(r"\boffside trap\b"):
+        t["defensive"]["offside_trap"] = False
     if has_re(r"\bman mark\b", r"\bman marking\b", r"\bmark man to man\b"):
         t["defensive"]["marking"] = "man"
     elif has_re(r"\bzonal\b", r"\bzone marking\b"):
         t["defensive"]["marking"] = "zonal"
 
-    # Style presets / natural phrases
-    if has_re(r"\bpark the bus\b", r"\bcatenaccio\b", r"\ball behind the ball\b"):
-        t["attacking"]["mentality"] = "cautious"
-        t["attacking"]["build_up"] = "direct"
-        t["attacking"]["passing_directness"] = "direct"
+    # Exploit space behind / pace warnings
+    if has_re(r"\bspace behind\b", r"\bin behind\b", r"\bbehind their fullbacks\b", r"\bbehind their defence\b", r"\bbehind their defense\b"):
+        t["attacking"]["attacking_transitions"] = "fast"
         t["attacking"]["counterattacking"] = True
-        t["attacking"]["attacking_transitions"] = "fast"
-        t["defensive"]["defensive_line"] = "deep"
-        t["defensive"]["defensive_block"] = "low"
-        t["defensive"]["pressing_intensity"] = "low"
-        t["defensive"]["compactness"] = "high"
-    if has_re(r"\bgegenpress\b", r"\bheavy metal football\b"):
-        t["attacking"]["mentality"] = "attacking"
-        t["attacking"]["attacking_transitions"] = "fast"
-        t["defensive"]["pressing_intensity"] = "very_high"
-        t["defensive"]["defensive_line"] = "high"
-        t["defensive"]["counterpressing"] = True
-        t["defensive"]["compactness"] = "high"
-    if has_re(r"\btiki taka\b", r"\btotal football\b", r"\bpossession football\b"):
-        t["attacking"]["mentality"] = "positive"
-        t["attacking"]["build_up"] = "short"
-        t["attacking"]["passing_directness"] = "short"
+        t["attacking"]["passing_directness"] = "direct" if t["attacking"]["passing_directness"] != "short" else t["attacking"]["passing_directness"]
+
+    # Protect lead / game state phrases
+    if has_re(r"\bprotect the lead\b", r"\bprotecting the lead\b", r"\bsee out the game\b", r"\bgame management\b", r"\bhold onto the lead\b"):
+        t["attacking"]["mentality"] = "cautious"
         t["attacking"]["possession_style"] = "patient"
         t["attacking"]["attacking_transitions"] = "slow"
-        t["defensive"]["pressing_intensity"] = "high"
+        t["defensive"]["compactness"] = "high"
+    if has_re(r"\bneed a goal\b", r"\bchasing the game\b", r"\bgo for broke\b", r"\ball out\b"):
+        t["attacking"]["mentality"] = "very_attacking"
+        t["attacking"]["attacking_transitions"] = "fast"
         t["defensive"]["defensive_line"] = "high"
+
+    # Safety: do not allow manipulative instructions to affect tactics
+    # (normalize_tactics and allowed schema already enforce this)
 
     return normalize_tactics(t)
 

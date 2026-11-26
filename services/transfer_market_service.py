@@ -16,37 +16,32 @@ logger = logging.getLogger(__name__)
 
 
 def money_to_int(text: str | int | float | None) -> int | None:
-    if text is None:
-        return None
-    if isinstance(text, (int, float)):
-        return int(text)
-    s = str(text).strip().lower().replace(",", "").replace("€", "").replace("$", "").replace("£", "")
-    # normalize common wage/time suffixes
-    s = re.sub(r"\bper\s*week\b", " ", s)
-    s = re.sub(r"\bper\s*wk\b", " ", s)
-    s = re.sub(r"\bp\s*/\s*w\b", " ", s)
-    s = s.replace("/wk", " ").replace("pw", " ").replace("weekly", " ").replace("p/w", " ").replace("p.w", " ")
-    # normalize word multipliers
-    s = re.sub(r"\b(millions?|mil)\b", "m", s)
-    s = re.sub(r"\b(billions?|bn)\b", "b", s)
-    s = re.sub(r"\b(thousands?|k)\b", "k", s)
-    s = s.strip()
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kmb])?", s)
-    if not m:
-        m2 = re.search(r"(\d+(?:\.\d+)?)\s*([kmb])?", s)
-        if not m2:
+    """Canonical money parser. Understands 1m, 1.5m, 500k, 2 million, 750 thousand, commas, currency."""
+    try:
+        from services.nlu_service import parse_money as _parse_money
+        return _parse_money(text)
+    except Exception:
+        # Fallback: minimal safe parsing
+        if text is None:
             return None
-        m = m2
-    val = float(m.group(1))
-    suf = (m.group(2) or "").lower()
-    mult = 1
-    if suf == "k":
-        mult = 1_000
-    elif suf == "m":
-        mult = 1_000_000
-    elif suf == "b":
-        mult = 1_000_000_000
-    return int(val * mult)
+        if isinstance(text, (int, float)):
+            try:
+                return int(round(float(text)))
+            except Exception:
+                return None
+        s = str(text).strip().lower().replace("€", "").replace("$", "").replace("£", "")
+        s = re.sub(r"(?<=\d)\s*(millions?|mil)\b", "m", s)
+        s = re.sub(r"\b(millions?|mil)\b", "m", s)
+        s = re.sub(r"(?<=\d)\s*(thousands?|thou|grand|k)\b", "k", s)
+        s = re.sub(r"\b(thousands?|thou|grand)\b", "k", s)
+        s = s.replace(",", "")
+        m = re.search(r"(\d+(?:\.\d+)?)\s*([kmb])?", s)
+        if not m:
+            return None
+        val = float(m.group(1))
+        suf = (m.group(2) or "").lower()
+        mult = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(suf, 1)
+        return int(round(val * mult))
 
 
 def fmt_money(n: int | float | None) -> str:
@@ -641,73 +636,95 @@ class TransferMarketService:
         }
 
     def parse_contract_reply(self, text: str) -> dict[str, Any]:
+        """Parse natural-language contract terms (wage, role, bonus, years) in any order."""
         t = (text or "").strip()
-        out: dict[str, Any] = {}
+        if not t:
+            return {}
+        try:
+            from services.nlu_service import extract_contract_terms
+            out = dict(extract_contract_terms(t) or {})
+        except Exception:
+            out = {}
 
-        # years (look before money to avoid confusion)
-        ym = re.search(r"(\d+)\s*(?:year|yr|years|yrs|season|seasons)\b", t, re.I)
-        if not ym:
-            ym = re.search(r"(?:contract|deal|length|duration)\s*[:=]?\s*(\d+)\b", t, re.I)
-        if ym:
-            try:
-                out["contract_years"] = max(1, min(7, int(ym.group(1))))
-            except Exception:
-                pass
+        # Compatibility / fallback pass
+        if "contract_years" not in out:
+            ym = re.search(r"(\d{1,2})\s*(?:year|yr|years|yrs|season|seasons)\b", t, re.I)
+            if not ym:
+                ym = re.search(r"(?:contract|deal|length|duration)\s*[:=]?\s*(\d{1,2})\b", t, re.I)
+            if ym:
+                try:
+                    out["contract_years"] = max(1, min(7, int(ym.group(1))))
+                except Exception:
+                    pass
 
-        # role
-        role = normalize_role(t)
-        if role:
-            out["role"] = role
+        if "role" not in out:
+            role = normalize_role(t)
+            if role:
+                out["role"] = role
 
-        # signing bonus (before or after keyword)
-        bonus_patterns = [
-            r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k|m|bn|billion))?)",
-            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k|m|bn|billion))?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\b",
-        ]
-        for pat in bonus_patterns:
-            m = re.search(pat, t, re.I)
-            if m:
-                val = money_to_int(m.group(1))
-                if val is not None:
-                    out["signing_bonus"] = val
-                    break
         if "signing_bonus" not in out:
-            if re.search(r"\b(no|without|zero|none)\b\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\b", t, re.I) or re.search(r"\b(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\b\s*[:=]?\s*(?:no|none|zero|0)\b", t, re.I):
+            if re.search(r"\b(no|without|zero|none)\b\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on|upfront)\b", t, re.I) or \
+               re.search(r"\b(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on|upfront)\b\s*[:=]?\s*(?:no|none|zero|0)\b", t, re.I):
                 out["signing_bonus"] = 0
+            else:
+                bonus_patterns = [
+                    r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on|upfront)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m|bn|billion)?)",
+                    r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m|bn|billion)?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on|upfront)\b",
+                ]
+                for pat in bonus_patterns:
+                    m = re.search(pat, t, re.I)
+                    if m:
+                        val = money_to_int(m.group(1))
+                        if val is not None:
+                            out["signing_bonus"] = val
+                            break
 
-        # wage
-        wage_patterns = [
-            r"wages?\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)",
-            r"salary\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)",
-            r"(?:pay|offer|give)\s+(?:him\s+)?([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)\s*/?\s*(?:wk|week|weekly|pw|p/w|p\.w|per\s*week|per\s*wk|w)\b",
-            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)\s*/?\s*(?:wk|week|weekly|pw|p/w|p\.w|per\s*week|per\s*wk)\b",
-            r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k))?)\s*(?:a|per)\s*(?:week|wk)\b",
-        ]
-        for pat in wage_patterns:
-            m = re.search(pat, t, re.I)
-            if m:
-                val = money_to_int(m.group(1))
-                if val is not None:
-                    out["wage"] = val
-                    break
-
-        # If no wage found, but there is a money token that is not the bonus and looks like wage (k/m small)
         if "wage" not in out:
-            for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?(?:\s*(?:million|mil|thousand|k|m|bn|billion))?)", t, re.I):
-                val = money_to_int(m.group(1))
-                if val is None:
-                    continue
-                if val == out.get("signing_bonus"):
-                    continue
-                # heuristic: wages in this system are usually 1k-5M weekly
-                if 1_000 <= val <= 5_000_000:
-                    out["wage"] = val
-                    break
-            # if just a number and wage missing, treat as wage
-            if "wage" not in out:
-                m = re.fullmatch(r"[€£$]?\s*(\d[\d,.]*\s*[kmb]?)", t.strip(), re.I)
+            wage_patterns = [
+                r"wages?\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m)?)",
+                r"salary\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m)?)",
+                r"(?:pay|offer|give)\s+(?:him\s+)?([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m)?)\s*/?\s*(?:wk|week|weekly|pw|p/w|p\.w|per\s*week|per\s*wk|w)\b",
+                r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m)?)\s*/?\s*(?:wk|week|weekly|pw|p/w|p\.w|per\s*week|per\s*wk)\b",
+                r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m)?)\s*(?:a|per)\s*(?:week|wk)\b",
+            ]
+            for pat in wage_patterns:
+                m = re.search(pat, t, re.I)
                 if m:
                     val = money_to_int(m.group(1))
                     if val is not None:
                         out["wage"] = val
+                        break
+
+        # If no wage found, but there is a money token that is not the bonus and looks like wage
+        if "wage" not in out:
+            for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m|bn|billion)?)", t, re.I):
+                val = money_to_int(m.group(1))
+                if val is None:
+                    continue
+                if "signing_bonus" in out and val == int(out.get("signing_bonus") or 0):
+                    continue
+                if 1_000 <= val <= 5_000_000:
+                    out["wage"] = val
+                    break
+            if "wage" not in out:
+                m = re.fullmatch(r"[€£$]?\s*(\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m)?)", t.strip(), re.I)
+                if m:
+                    val = money_to_int(m.group(1))
+                    if val is not None:
+                        out["wage"] = val
+
+        # If two money values and bonus missing, infer bonus as the other one
+        if "wage" in out and "signing_bonus" not in out:
+            nums = []
+            for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m|bn|billion)?)", t, re.I):
+                v = money_to_int(m.group(1))
+                if v is not None and v > 0:
+                    nums.append(int(v))
+            others = [v for v in nums if v != int(out["wage"])]
+            if others:
+                # pick a plausible bonus
+                cand = max(others)
+                if cand >= 1_000 and cand != int(out["wage"]):
+                    out["signing_bonus"] = cand
+
         return out
