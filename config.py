@@ -68,6 +68,6 @@ def load_settings() -> Settings:
         api_max_retries=int(os.getenv("API_MAX_RETRIES", "3")),
         llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
         llm_base_url=os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai").strip().rstrip("/"),
-        llm_model=os.getenv("LLM_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash",
+        llm_model=os.getenv("LLM_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
         llm_timeout=int(os.getenv("LLM_TIMEOUT", "20")),
     )

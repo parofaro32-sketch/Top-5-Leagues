@@ -51,6 +51,40 @@ class LLMService:
             return base
         return f"{base}/chat/completions"
 
+    def _candidate_models(self, model: str | None) -> list[str]:
+        primary = str(model or self.settings.llm_model or "").strip()
+        # Fallbacks for common Gemini OpenAI-compatible model IDs.
+        fallbacks = [
+            "gemini-3.8-flash",
+            "gemini-3.8-flash-preview",
+            "gemini-3-flash-preview",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+        ]
+        out: list[str] = []
+        for m in [primary, *fallbacks]:
+            m = str(m or "").strip()
+            if m and m not in out:
+                out.append(m)
+        return out
+
+    @staticmethod
+    def _is_model_error(status: int, body: str) -> bool:
+        if status == 404:
+            return True
+        if status != 400:
+            return False
+        b = (body or "").lower()
+        return any(k in b for k in ["model", "not found", "unsupported", "does not exist", "invalid model", "unknown model"])
+
+    @staticmethod
+    def _is_response_format_error(status: int, body: str) -> bool:
+        if status not in {400, 422}:
+            return False
+        b = (body or "").lower()
+        return any(k in b for k in ["response_format", "json_object", "json schema", "unsupported"])
+
     async def chat(
         self,
         messages: list[dict[str, str]],
@@ -62,26 +96,80 @@ class LLMService:
     ) -> str | None:
         if not self.enabled:
             return None
-        payload: dict[str, Any] = {
-            "model": model or self.settings.llm_model,
-            "messages": messages,
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
-        }
-        if response_format is not None:
-            payload["response_format"] = response_format
-        try:
-            session = await self._get_session()
-            async with session.post(self._chat_url(), headers=self._headers(), json=payload) as resp:
-                raw = await resp.text()
-                if resp.status >= 400:
-                    logger.warning("LLM chat failed status=%s body=%s", resp.status, raw[:500])
-                    return None
-                data = json.loads(raw)
-        except Exception:
-            logger.exception("LLM chat request failed")
-            return None
 
+        session = await self._get_session()
+        url = self._chat_url()
+        headers = self._headers()
+        models = self._candidate_models(model)
+        last_error = None
+
+        for idx, m in enumerate(models):
+            payload: dict[str, Any] = {
+                "model": m,
+                "messages": messages,
+                "temperature": float(temperature),
+                "max_tokens": int(max_tokens),
+            }
+            if response_format is not None:
+                payload["response_format"] = response_format
+
+            try:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    raw = await resp.text()
+                    if resp.status >= 400:
+                        last_error = f"status={resp.status} body={raw[:500]}"
+                        # Retry without response_format if provider rejects it
+                        if response_format is not None and self._is_response_format_error(resp.status, raw):
+                            payload2 = dict(payload)
+                            payload2.pop("response_format", None)
+                            try:
+                                async with session.post(url, headers=headers, json=payload2) as resp2:
+                                    raw2 = await resp2.text()
+                                    if resp2.status < 400:
+                                        data = json.loads(raw2)
+                                        text = self._extract_chat_text(data)
+                                        if text:
+                                            if m != (model or self.settings.llm_model):
+                                                logger.info("LLM chat succeeded with fallback model=%s (response_format removed)", m)
+                                            return text
+                                    raw = raw2
+                                    resp_status = resp2.status
+                            except Exception:
+                                resp_status = resp.status
+                        else:
+                            resp_status = resp.status
+
+                        if self._is_model_error(resp_status, raw) and idx < len(models) - 1:
+                            logger.warning("LLM model failed (%s), trying fallback model; model=%s body=%s", resp_status, m, raw[:300])
+                            continue
+
+                        logger.warning("LLM chat failed status=%s model=%s body=%s", resp_status, m, raw[:500])
+                        # For auth/rate/other non-model errors, don't spam fallbacks
+                        if resp_status in {401, 403, 429}:
+                            return None
+                        # For other errors, try next model only if it might be model related; otherwise stop
+                        if not self._is_model_error(resp_status, raw):
+                            return None
+                        continue
+                    data = json.loads(raw)
+            except Exception as e:
+                last_error = str(e)
+                logger.exception("LLM chat request failed model=%s", m)
+                continue
+
+            text = self._extract_chat_text(data)
+            if text:
+                if idx > 0:
+                    logger.info("LLM chat succeeded with fallback model=%s", m)
+                return text
+            logger.warning("LLM chat returned no text model=%s", m)
+
+        if last_error:
+            logger.warning("LLM chat exhausted candidates; last_error=%s", last_error)
+        return None
+
+    @staticmethod
+    def _extract_chat_text(data: dict[str, Any]) -> str | None:
         try:
             choices = data.get("choices") or []
             if not choices:
@@ -91,7 +179,6 @@ class LLMService:
             if isinstance(content, str):
                 text = content.strip()
                 return text or None
-            # Some providers return content parts
             if isinstance(content, list):
                 parts = []
                 for p in content:
