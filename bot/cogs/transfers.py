@@ -337,26 +337,66 @@ class TransfersCog(commands.Cog):
                 return
 
             val = self.market.value_player(player)
-            decision = self.market.evaluate_bot_offer(val, offer_fee, player)
 
-            # Fee negotiation pressure (single-shot fee decision, but pressure bar is always shown)
+            decision = None
+            llm = getattr(self.bot, "llm_service", None)
+            if llm and getattr(llm, "enabled", False):
+                try:
+                    llm_decision = await llm.negotiate_fee(
+                        player=player,
+                        valuation=val.__dict__,
+                        offer_fee=int(offer_fee),
+                        buying_team_name=str(buying_team_name),
+                        selling_team_name=str(selling_team_name),
+                        round_no=1,
+                        previous_pressure=0,
+                        max_pressure=10,
+                    )
+                    if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
+                        decision = {
+                            "accept": bool(llm_decision.get("accepted")),
+                            "walked_away": bool(llm_decision.get("walked_away")),
+                            "reason": str(llm_decision.get("message") or "").strip(),
+                            "pressure": int(llm_decision.get("pressure") or 0),
+                            "llm": True,
+                        }
+                        if decision["pressure"] >= 10:
+                            decision["walked_away"] = True
+                            decision["accept"] = False
+                        if decision["walked_away"]:
+                            decision["accept"] = False
+                except Exception:
+                    logger.exception("LLM fee negotiation decision failed (botoffer)")
+
+            if not isinstance(decision, dict):
+                # Safety fallback when LLM is unavailable/invalid
+                decision = self.market.evaluate_bot_offer(val, offer_fee, player)
+                decision = dict(decision)
+                decision["llm"] = False
+                logger.warning("Fee negotiation used deterministic fallback (LLM unavailable/invalid) botoffer player=%s", player.get("name"))
+
             _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
-            if decision.get("accept"):
-                _fee_pressure = 0 if _fee_ratio >= 1.15 else 1
-            elif _fee_ratio < 0.50:
-                _fee_pressure = 10
-            elif _fee_ratio < 0.70:
-                _fee_pressure = 8
-            elif _fee_ratio < 0.85:
-                _fee_pressure = 6
-            elif _fee_ratio < 1.00:
-                _fee_pressure = 4
+            if "pressure" in decision:
+                _fee_pressure = max(0, min(10, int(decision.get("pressure") or 0)))
             else:
-                _fee_pressure = 2
+                if decision.get("accept"):
+                    _fee_pressure = 0 if _fee_ratio >= 1.15 else 1
+                elif _fee_ratio < 0.50:
+                    _fee_pressure = 10
+                elif _fee_ratio < 0.70:
+                    _fee_pressure = 8
+                elif _fee_ratio < 0.85:
+                    _fee_pressure = 6
+                elif _fee_ratio < 1.00:
+                    _fee_pressure = 4
+                else:
+                    _fee_pressure = 2
             _fee_bar = negotiation_pressure_bar(_fee_pressure, 10)
+            decision["pressure"] = _fee_pressure
+            decision["pressure_bar"] = _fee_bar
 
             now = utc_now_iso()
-            status = "negotiating" if decision["accept"] else "rejected"
+            status = "negotiating" if decision.get("accept") else "rejected"
             cur = await self.bot.db.execute(
                 """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?, 'club_offer',0,0,?, ?,?)""",
@@ -364,24 +404,7 @@ class TransfersCog(commands.Cog):
             )
             offer_id = cur.lastrowid
 
-            llm_fee_msg = None
-            try:
-                llm = getattr(self.bot, "llm_service", None)
-                if llm and getattr(llm, "enabled", False):
-                    llm_fee_msg = await llm.generate_fee_negotiation_message(
-                        player=player,
-                        valuation=val.__dict__,
-                        offer_fee=int(offer_fee),
-                        accepted=bool(decision.get("accept")),
-                        buying_team_name=str(buying_team_name),
-                        selling_team_name=str(selling_team_name),
-                        round_no=1,
-                        pressure=int(_fee_pressure),
-                        max_pressure=10,
-                        deterministic_reason=str(decision.get("reason") or ""),
-                    )
-            except Exception:
-                logger.exception("LLM fee negotiation message failed (botoffer)")
+            llm_fee_msg = str(decision.get("reason") or "").strip() or None
 
             if not decision["accept"]:
                 reason_text = llm_fee_msg or (
@@ -644,29 +667,8 @@ class TransfersCog(commands.Cog):
             years = max(1, min(5, years))
 
             round_no = int(meta.get("contract_round") or 0) + 1
-            pressure = int(meta.get("pressure") or 0)
+            previous_pressure = max(0, min(10, int(meta.get("pressure") or 0)))
             is_free_agent = bool(meta.get("is_free_agent")) or str(offer.get("kind") or "") == "free_agent_contract" or int(offer.get("selling_team_api_id") or 0) == 9000001
-
-            # Pressure increases on lowball / disrespectful offers, stalling, and repeated rounds.
-            demand_wage = int(demand.get("wage") or 0)
-            wage_ratio = (wage / max(1, demand_wage)) if demand_wage else 1.0
-            if wage_ratio < 0.75:
-                pressure += 3
-            elif wage_ratio < 0.85:
-                pressure += 2
-            elif wage_ratio < 0.93:
-                pressure += 1
-            role_rank = {"Crucial": 0, "Important": 1, "Rotation": 2, "Sporadic": 3, "Prospect": 4}
-            offered_role = normalize_role(role) or "Rotation"
-            demand_role = str(demand.get("role") or "Rotation")
-            role_gap = role_rank.get(offered_role, 2) - role_rank.get(demand_role, 2)
-            if role_gap > 0:
-                pressure += 1
-            if round_no >= 3:
-                pressure += 1
-            if round_no >= 5:
-                pressure += 1
-            pressure = max(0, min(10, int(pressure)))
 
             season_year = int((await self.bot.season_service.get_season(str(offer.get("season_id")) or "") or {}).get("season_year") or 2026)
             player = await self.market.get_player(int(offer.get("player_api_id") or 0), season_year) or {"name": offer.get("player_name"), "overall": valuation.get("market_value", 0) and 75, "potential": 75}
@@ -678,31 +680,67 @@ class TransfersCog(commands.Cog):
                     player = {**d2, **{k: v for k, v in player.items() if v is not None}}
 
             offered = {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years}
-            result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure, is_free_agent=is_free_agent)
-            try:
-                llm = getattr(self.bot, "llm_service", None)
-                if llm and getattr(llm, "enabled", False):
-                    llm_msg = await llm.generate_negotiation_message(
+
+            result = None
+            llm = getattr(self.bot, "llm_service", None)
+            if llm and getattr(llm, "enabled", False):
+                try:
+                    llm_decision = await llm.negotiate_contract(
                         player=player,
                         demand=demand,
                         offered=offered,
-                        counter=result.get("counter"),
-                        accepted=bool(result.get("accepted")),
-                        walked_away=bool(result.get("walked_away")),
-                        pressure=int(pressure),
+                        previous_pressure=previous_pressure,
                         max_pressure=10,
                         round_no=int(round_no),
                         is_free_agent=bool(is_free_agent),
-                        deterministic_message=str(result.get("message") or ""),
                         buying_team_name=str(offer.get("buying_team_name") or ""),
                         selling_team_name=str(offer.get("selling_team_name") or ""),
                         valuation=valuation if isinstance(valuation, dict) else None,
                         scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
                     )
-                    if llm_msg:
-                        result["message"] = llm_msg
-            except Exception:
-                logger.exception("LLM negotiation message enhancement failed")
+                    if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
+                        result = dict(llm_decision)
+                except Exception:
+                    logger.exception("LLM contract negotiation decision failed")
+
+            if not isinstance(result, dict):
+                # Safety fallback when LLM is unavailable/invalid
+                pressure = int(previous_pressure)
+                demand_wage = int(demand.get("wage") or 0)
+                wage_ratio = (wage / max(1, demand_wage)) if demand_wage else 1.0
+                if wage_ratio < 0.75:
+                    pressure += 3
+                elif wage_ratio < 0.85:
+                    pressure += 2
+                elif wage_ratio < 0.93:
+                    pressure += 1
+                role_rank = {"Crucial": 0, "Important": 1, "Rotation": 2, "Sporadic": 3, "Prospect": 4}
+                offered_role = normalize_role(role) or "Rotation"
+                demand_role = str(demand.get("role") or "Rotation")
+                role_gap = role_rank.get(offered_role, 2) - role_rank.get(demand_role, 2)
+                if role_gap > 0:
+                    pressure += 1
+                if round_no >= 3:
+                    pressure += 1
+                if round_no >= 5:
+                    pressure += 1
+                pressure = max(0, min(10, int(pressure)))
+                result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure, is_free_agent=is_free_agent)
+                logger.warning("Contract negotiation used deterministic fallback (LLM unavailable/invalid) offer_id=%s", offer.get("id"))
+
+            pressure = max(0, min(10, int(result.get("pressure", previous_pressure) or 0)))
+            if bool(result.get("walked_away")) or pressure >= 10:
+                result["walked_away"] = True
+                result["accepted"] = False
+                result["counter"] = None
+                pressure = 10 if pressure >= 10 else pressure
+            if bool(result.get("accepted")):
+                result["walked_away"] = False
+                result["counter"] = None
+            result["pressure"] = pressure
+            result["pressure_bar"] = negotiation_pressure_bar(pressure, 10)
+            if not str(result.get("message") or "").strip():
+                result["message"] = negotiation_pressure_bar(pressure, 10) + "\nNegotiation response unavailable."
 
             meta["contract_round"] = round_no
             meta["pressure"] = pressure
@@ -1201,32 +1239,76 @@ class TransfersCog(commands.Cog):
                     await interaction.followup.send(embed=error_embed("Bot Transfer Limit Reached", f"**{buying_team_name}** has used {used}/2 bot transfers this season. You hit max bot transfers available."), ephemeral=True)
                     return
             val = self.market.value_player(player)
-            decision = self.market.evaluate_bot_offer(val, offer_fee, player)
+
+            decision = None
             if not is_bot:
                 # Manager-to-manager: fee is already agreed, no bot valuation refusal.
                 decision = {
                     "accept": True,
                     "reason": f"Manager-to-manager agreement confirmed. The fee of {fmt_money(offer_fee)} for {player.get('name')} ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT) has been accepted by the clubs. Moving straight to contract negotiation.",
                     "manager_agreed": True,
+                    "llm": False,
+                    "pressure": 0,
                 }
+            else:
+                llm = getattr(self.bot, "llm_service", None)
+                if llm and getattr(llm, "enabled", False):
+                    try:
+                        llm_decision = await llm.negotiate_fee(
+                            player=player,
+                            valuation=val.__dict__,
+                            offer_fee=int(offer_fee),
+                            buying_team_name=str(buying_team_name),
+                            selling_team_name=str(selling_team_name),
+                            round_no=1,
+                            previous_pressure=0,
+                            max_pressure=10,
+                        )
+                        if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
+                            decision = {
+                                "accept": bool(llm_decision.get("accepted")),
+                                "walked_away": bool(llm_decision.get("walked_away")),
+                                "reason": str(llm_decision.get("message") or "").strip(),
+                                "pressure": int(llm_decision.get("pressure") or 0),
+                                "llm": True,
+                            }
+                            if decision["pressure"] >= 10:
+                                decision["walked_away"] = True
+                                decision["accept"] = False
+                            if decision["walked_away"]:
+                                decision["accept"] = False
+                    except Exception:
+                        logger.exception("LLM fee negotiation decision failed (contractnego)")
+
+                if not isinstance(decision, dict):
+                    # Safety fallback when LLM is unavailable/invalid
+                    decision = self.market.evaluate_bot_offer(val, offer_fee, player)
+                    decision = dict(decision)
+                    decision["llm"] = False
+                    logger.warning("Fee negotiation used deterministic fallback (LLM unavailable/invalid) contractnego player=%s", player.get("name"))
 
             _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
-            if decision.get("accept"):
-                _fee_pressure = 0 if _fee_ratio >= 1.15 else 1
-            elif _fee_ratio < 0.50:
-                _fee_pressure = 10
-            elif _fee_ratio < 0.70:
-                _fee_pressure = 8
-            elif _fee_ratio < 0.85:
-                _fee_pressure = 6
-            elif _fee_ratio < 1.00:
-                _fee_pressure = 4
+            if "pressure" in decision:
+                _fee_pressure = max(0, min(10, int(decision.get("pressure") or 0)))
             else:
-                _fee_pressure = 2
+                if decision.get("accept"):
+                    _fee_pressure = 0 if _fee_ratio >= 1.15 else 1
+                elif _fee_ratio < 0.50:
+                    _fee_pressure = 10
+                elif _fee_ratio < 0.70:
+                    _fee_pressure = 8
+                elif _fee_ratio < 0.85:
+                    _fee_pressure = 6
+                elif _fee_ratio < 1.00:
+                    _fee_pressure = 4
+                else:
+                    _fee_pressure = 2
             _fee_bar = negotiation_pressure_bar(_fee_pressure, 10)
+            decision["pressure"] = _fee_pressure
+            decision["pressure_bar"] = _fee_bar
 
             now = utc_now_iso()
-            status = "negotiating" if decision["accept"] else "rejected"
+            status = "negotiating" if decision.get("accept") else "rejected"
             cur = await self.bot.db.execute(
                 """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'club_offer',0,0,?,?,?)""",
@@ -1234,25 +1316,7 @@ class TransfersCog(commands.Cog):
             )
             offer_id = cur.lastrowid
 
-            llm_fee_msg = None
-            if is_bot:
-                try:
-                    llm = getattr(self.bot, "llm_service", None)
-                    if llm and getattr(llm, "enabled", False):
-                        llm_fee_msg = await llm.generate_fee_negotiation_message(
-                            player=player,
-                            valuation=val.__dict__,
-                            offer_fee=int(offer_fee),
-                            accepted=bool(decision.get("accept")),
-                            buying_team_name=str(buying_team_name),
-                            selling_team_name=str(selling_team_name),
-                            round_no=1,
-                            pressure=int(_fee_pressure),
-                            max_pressure=10,
-                            deterministic_reason=str(decision.get("reason") or ""),
-                        )
-                except Exception:
-                    logger.exception("LLM fee negotiation message failed (contractnego)")
+            llm_fee_msg = str(decision.get("reason") or "").strip() or None
 
             if not decision["accept"]:
                 reason_text = llm_fee_msg or (
