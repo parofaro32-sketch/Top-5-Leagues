@@ -494,12 +494,26 @@ class ClubCog(commands.Cog):
     @app_commands.command(name="requestfunds", description="Request transfer funds from the board (reply to the board's message)")
     async def requestfunds(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
-        await self._start_board_request(interaction, kind="funds")
+        try:
+            await self._start_board_request(interaction, kind="funds")
+        except Exception:
+            logger.exception("requestfunds command failed")
+            try:
+                await interaction.followup.send(embed=error_embed("Request Failed", "I couldn't start your transfer funds request. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
     @app_commands.command(name="requestwage", description="Request a wage budget increase from the board (reply to the board's message)")
     async def requestwage(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
-        await self._start_board_request(interaction, kind="wage")
+        try:
+            await self._start_board_request(interaction, kind="wage")
+        except Exception:
+            logger.exception("requestwage command failed")
+            try:
+                await interaction.followup.send(embed=error_embed("Request Failed", "I couldn't start your wage budget request. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
     async def _start_board_request(self, interaction: discord.Interaction, *, kind: str):
         team = await self._get_manager_team(interaction, league_key=None)
@@ -587,7 +601,7 @@ class ClubCog(commands.Cog):
 
         await self.bot.db.execute(
             """INSERT INTO board_requests(season_id,guild_id,channel_id,message_id,user_id,team_api_id,team_name,kind,amount,reason,status,meta_json,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?, ?,?,?)""",
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (season_id, interaction.guild_id, interaction.channel_id, int(msg_id) if msg_id else None, interaction.user.id, team_id, team_name, kind, None, None, "awaiting_reply", json.dumps({"request_count_before": used_requests, "request_limit": limit}), utc_now_iso(), utc_now_iso()),
         )
 

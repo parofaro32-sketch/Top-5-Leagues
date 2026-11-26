@@ -599,22 +599,41 @@ class TransfersCog(commands.Cog):
 
             if result.get("accepted"):
                 meta["agreed_contract"] = offered
-                await self.bot.db.execute(
-                    "UPDATE transfer_offers SET status='agreed', stage='agreed', meta_json=?, updated_at=? WHERE id=?",
-                    (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
-                )
-                # finalize transfer
+                # finalize transfer before marking completed
                 fin = await self._finalize_agreed_offer(offer, offered)
                 if fin.get("ok"):
+                    meta["finalized_transfer"] = fin.get("transfer")
+                    await self.bot.db.execute(
+                        "UPDATE transfer_offers SET status='agreed', stage='completed', meta_json=?, updated_at=? WHERE id=?",
+                        (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
+                    )
                     extra = fin.get("message", "")
                     await interaction.followup.send(embed=success_embed(
                         "Contract Agreed — Transfer Completed",
                         result["message"] + "\n\n" + extra
                     ), ephemeral=True)
+                elif fin.get("pending_match"):
+                    meta["pending_transfer_id"] = fin.get("transfer_id")
+                    meta["finalization_blocked_reason"] = fin.get("reason")
+                    await self.bot.db.execute(
+                        "UPDATE transfer_offers SET status='agreed_pending_finalization', stage='agreed_pending_finalization', meta_json=?, updated_at=? WHERE id=?",
+                        (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
+                    )
+                    await interaction.followup.send(embed=info_embed(
+                        "Contract Agreed — Finalization Pending",
+                        result["message"] + "\n\n" + str(fin.get("message") or fin.get("reason") or "Finalization pending due to an active match.")
+                        + "\n\nThe contract is agreed, but the transfer has **not** been completed yet. It will need to be confirmed once the active match ends."
+                    ), ephemeral=True)
                 else:
+                    meta["finalization_error"] = fin.get("reason")
+                    await self.bot.db.execute(
+                        "UPDATE transfer_offers SET status='agreed_pending_finalization', stage='agreed_pending_finalization', meta_json=?, updated_at=? WHERE id=?",
+                        (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
+                    )
                     await interaction.followup.send(embed=error_embed(
-                        "Contract Agreed But Finalization Failed",
-                        result["message"] + f"\n\nTransfer finalization failed: {fin.get('reason','unknown')}. The agreement was recorded but could not be auto-finalized; check budgets/team state."
+                        "Contract Agreed — Finalization Pending",
+                        result["message"] + f"\n\nThe contract is agreed, but the transfer could not be finalized automatically: {fin.get('reason','unknown')}."
+                        + "\n\nNo player move or budget change was completed by this failed finalization step. Please resolve the issue and retry confirmation."
                     ), ephemeral=True)
                 return
 
@@ -676,8 +695,9 @@ class TransfersCog(commands.Cog):
                         wb = int(_d.get("wage_budget") or 0)
                     except Exception:
                         pass
-                if fee > tb:
-                    return {"ok": False, "reason": f"Insufficient transfer budget ({fmt_money(tb)} available, {fmt_money(fee)} needed)."}
+                total_transfer_cost = int(fee) + int(bonus)
+                if total_transfer_cost > tb:
+                    return {"ok": False, "reason": f"Insufficient transfer budget ({fmt_money(tb)} available, {fmt_money(total_transfer_cost)} needed for fee+signing bonus)."}
                 if wage > wb:
                     return {"ok": False, "reason": f"Insufficient wage budget ({fmt_money(wb)}/wk available, {fmt_money(wage)}/wk needed)."}
 
@@ -721,9 +741,45 @@ class TransfersCog(commands.Cog):
             return {"ok": False, "reason": str(res.get("reason") or "create_failed")}
         tr = res.get("transfer") or {}
         tid = tr.get("id")
-        conf = await self.bot.season_service.confirm_transfer(int(tid), confirmed_by=offer.get("buying_user_id"))
+        try:
+            conf = await self.bot.season_service.confirm_transfer(int(tid), confirmed_by=offer.get("buying_user_id"))
+        except Exception as e:
+            logger.exception("confirm_transfer raised for transfer_id=%s", tid)
+            raw = str(e) if isinstance(e, RuntimeError) and str(e) else f"confirm_exception:{e.__class__.__name__}"
+            reason = raw
+            if raw.startswith("insufficient_transfer_budget:"):
+                parts = raw.split(":")
+                if len(parts) == 3:
+                    reason = f"Insufficient transfer budget ({fmt_money(int(parts[1]))} available, {fmt_money(int(parts[2]))} needed)."
+            elif raw.startswith("insufficient_wage_budget:"):
+                parts = raw.split(":")
+                if len(parts) == 3:
+                    reason = f"Insufficient wage budget ({fmt_money(int(parts[1]))}/wk available, {fmt_money(int(parts[2]))}/wk needed)."
+            elif raw == "buying_team_not_in_season":
+                reason = "Buying team is not registered in this season."
+            try:
+                await self.bot.db.execute("UPDATE season_transfers SET status='failed', updated_at=? WHERE id=? AND status='pending'", (utc_now_iso(), int(tid)))
+            except Exception:
+                pass
+            return {"ok": False, "reason": reason, "transfer_id": tid}
         if not conf.get("ok"):
-            return {"ok": False, "reason": str(conf.get("reason") or "confirm_failed")}
+            reason = str(conf.get("reason") or "confirm_failed")
+            if reason.startswith("active_match_blocks_transfer"):
+                return {
+                    "ok": False,
+                    "pending_match": True,
+                    "transfer_id": tid,
+                    "reason": reason,
+                    "message": (
+                        f"Contract agreed and transfer recorded (ID `{tid}`), but finalization is pending because an active match is blocking it ({reason.split(':',1)[1] if ':' in reason else 'active match'}). "
+                        f"The transfer will need to be confirmed once the match is no longer active."
+                    ),
+                }
+            try:
+                await self.bot.db.execute("UPDATE season_transfers SET status='failed', updated_at=? WHERE id=? AND status='pending'", (utc_now_iso(), int(tid)))
+            except Exception:
+                pass
+            return {"ok": False, "reason": reason, "transfer_id": tid}
 
         # increment bot transfer usage
         is_free_agent_transfer = int(offer.get("selling_team_api_id") or 0) == 9000001 or str(offer.get("kind") or "") == "free_agent_contract"

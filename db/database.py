@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -481,6 +482,7 @@ class Database:
     def __init__(self, path: str):
         self.path = path
         self._conn: aiosqlite.Connection | None = None
+        self._tx_depth = 0
 
     async def connect(self) -> None:
         parent = Path(self.path).parent
@@ -576,14 +578,36 @@ class Database:
             await self._conn.close()
             self._conn = None
 
+    @asynccontextmanager
+    async def transaction(self):
+        conn = self.require_conn()
+        if self._tx_depth == 0:
+            await conn.execute("BEGIN IMMEDIATE")
+        self._tx_depth += 1
+        try:
+            yield conn
+            self._tx_depth -= 1
+            if self._tx_depth == 0:
+                await conn.commit()
+        except Exception:
+            self._tx_depth -= 1
+            if self._tx_depth == 0:
+                try:
+                    await conn.rollback()
+                except Exception:
+                    pass
+            raise
+
     async def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> aiosqlite.Cursor:
         cur = await self.require_conn().execute(sql, params)
-        await self.require_conn().commit()
+        if self._tx_depth == 0:
+            await self.require_conn().commit()
         return cur
 
     async def executemany(self, sql: str, seq: list[tuple[Any, ...]] | list[list[Any]]) -> None:
         await self.require_conn().executemany(sql, seq)
-        await self.require_conn().commit()
+        if self._tx_depth == 0:
+            await self.require_conn().commit()
 
     async def fetchone(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> aiosqlite.Row | None:
         cur = await self.require_conn().execute(sql, params)

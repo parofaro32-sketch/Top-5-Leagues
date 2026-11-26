@@ -994,9 +994,12 @@ class SeasonService:
         if from_team_api_id is not None:
             from_team_api_id = int(from_team_api_id)
 
+        fee = int(tr.get("fee") or 0)
+        wage = int(tr.get("wage") or 0)
+        signing_bonus = int(tr.get("signing_bonus") or 0)
+
         already_confirmed = str(tr.get("status") or "") == "confirmed"
         if already_confirmed:
-            # Reconcile: if player is already at destination, it's done; otherwise fall through to repair.
             dest = await self.db.fetchone(
                 "SELECT 1 FROM players WHERE api_id=? AND team_api_id=? AND season=? LIMIT 1",
                 (player_api_id, to_team_api_id, season_year),
@@ -1018,119 +1021,163 @@ class SeasonService:
             if from_team_api_id in (hid, aid) or to_team_api_id in (hid, aid):
                 return {"ok": False, "reason": f"active_match_blocks_transfer:{md.get('id')}"}
 
-        # Move player in players table (PK includes team_api_id)
-        player_rows = await self.db.fetchall(
-            "SELECT * FROM players WHERE api_id=? AND season=?",
-            (player_api_id, season_year),
-        )
+        season_id = tr.get("season_id")
+        now = utc_now_iso()
         moved_any = False
-        for pr in player_rows:
-            pd = dict(pr)
-            old_team = int(pd.get("team_api_id") or -1)
-            if from_team_api_id is not None and old_team != from_team_api_id:
-                continue
-            # remove old row
-            await self.db.execute("DELETE FROM players WHERE api_id=? AND team_api_id=? AND season=?", (player_api_id, old_team, season_year))
-            # insert at destination (preserve data)
-            pd["team_api_id"] = to_team_api_id
-            await self.db.upsert_players([pd], to_team_api_id, season_year)
-            moved_any = True
-            if from_team_api_id is None:
-                from_team_api_id = old_team
-        if not moved_any:
-            # try to create minimal record at destination if player exists in any season
-            any_player = await self.db.fetchone("SELECT * FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1", (player_api_id,))
-            if any_player:
-                pd = dict(any_player)
+        budget_applied = False
+
+        async with self.db.transaction():
+            # Re-read transfer status inside transaction
+            row2 = await self.db.fetchone("SELECT * FROM season_transfers WHERE id=?", (int(transfer_id),))
+            if not row2:
+                return {"ok": False, "reason": "transfer_not_found"}
+            tr2_cur = dict(row2)
+            if str(tr2_cur.get("status") or "") == "confirmed":
+                dest = await self.db.fetchone(
+                    "SELECT 1 FROM players WHERE api_id=? AND team_api_id=? AND season=? LIMIT 1",
+                    (player_api_id, to_team_api_id, season_year),
+                )
+                if dest:
+                    return {"ok": True, "already_confirmed": True, **tr2_cur}
+            elif str(tr2_cur.get("status") or "") not in ("pending", "failed"):
+                return {"ok": False, "reason": f"transfer_status_{tr2_cur.get('status')}"}
+
+            # Re-check active match inside transaction
+            active2 = await self.db.fetchall(
+                "SELECT id, home_team_api_id, away_team_api_id, status FROM matches WHERE status IN ('running','break','halftime','setup','pending_break')",
+            )
+            for m in active2:
+                md = dict(m)
+                hid = int(md.get("home_team_api_id") or -1)
+                aid = int(md.get("away_team_api_id") or -1)
+                if from_team_api_id in (hid, aid) or to_team_api_id in (hid, aid):
+                    return {"ok": False, "reason": f"active_match_blocks_transfer:{md.get('id')}"}
+
+            # Move player in players table (PK includes team_api_id)
+            player_rows = await self.db.fetchall(
+                "SELECT * FROM players WHERE api_id=? AND season=?",
+                (player_api_id, season_year),
+            )
+            for pr in player_rows:
+                pd = dict(pr)
+                old_team = int(pd.get("team_api_id") or -1)
+                if from_team_api_id is not None and old_team != from_team_api_id:
+                    continue
+                await self.db.execute("DELETE FROM players WHERE api_id=? AND team_api_id=? AND season=?", (player_api_id, old_team, season_year))
                 pd["team_api_id"] = to_team_api_id
+                if wage > 0:
+                    pd["wage"] = wage
                 await self.db.upsert_players([pd], to_team_api_id, season_year)
                 moved_any = True
+                if from_team_api_id is None:
+                    from_team_api_id = old_team
 
-        # career stats current team
-        try:
-            await self.db.execute(
-                "UPDATE player_career_stats SET current_team_api_id=?, updated_at=? WHERE player_api_id=?",
-                (to_team_api_id, utc_now_iso(), player_api_id),
-            )
-        except Exception:
-            pass
+            if not moved_any:
+                any_player = await self.db.fetchone("SELECT * FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1", (player_api_id,))
+                if any_player:
+                    pd = dict(any_player)
+                    pd["team_api_id"] = to_team_api_id
+                    if wage > 0:
+                        pd["wage"] = wage
+                    await self.db.upsert_players([pd], to_team_api_id, season_year)
+                    moved_any = True
 
-        # season_player_stats - move rows for this season across team pk
-        season_id = tr.get("season_id")
-        if season_id:
-            sps_rows = await self.db.fetchall(
-                "SELECT * FROM season_player_stats WHERE season_id=? AND player_api_id=?",
-                (str(season_id), player_api_id),
-            )
-            for sr in sps_rows:
-                sd = dict(sr)
-                old_tid = int(sd.get("team_api_id") or -1)
-                if from_team_api_id is not None and old_tid != from_team_api_id:
-                    continue
-                await self.db.execute(
-                    "DELETE FROM season_player_stats WHERE season_id=? AND team_api_id=? AND player_api_id=?",
-                    (str(season_id), old_tid, player_api_id),
-                )
-                sd["team_api_id"] = to_team_api_id
-                await self.db.execute(
-                    """INSERT INTO season_player_stats(season_id,team_api_id,player_api_id,player_name,appearances,starts,minutes_played,goals,assists,yellow_cards,red_cards,clean_sheets,saves,rating_sum,rating_count,avg_rating,motm,updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                       ON CONFLICT(season_id,team_api_id,player_api_id) DO UPDATE SET
-                       player_name=excluded.player_name,appearances=excluded.appearances,starts=excluded.starts,minutes_played=excluded.minutes_played,
-                       goals=excluded.goals,assists=excluded.assists,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,
-                       clean_sheets=excluded.clean_sheets,saves=excluded.saves,rating_sum=excluded.rating_sum,rating_count=excluded.rating_count,
-                       avg_rating=excluded.avg_rating,motm=excluded.motm,updated_at=excluded.updated_at""",
-                    (str(season_id), to_team_api_id, player_api_id, sd.get("player_name"), int(sd.get("appearances") or 0), int(sd.get("starts") or 0), int(sd.get("minutes_played") or 0),
-                     int(sd.get("goals") or 0), int(sd.get("assists") or 0), int(sd.get("yellow_cards") or 0), int(sd.get("red_cards") or 0),
-                     int(sd.get("clean_sheets") or 0), int(sd.get("saves") or 0), float(sd.get("rating_sum") or 0.0), int(sd.get("rating_count") or 0), float(sd.get("avg_rating") or 0.0),
-                     int(sd.get("motm") or 0), utc_now_iso()),
-                )
-
-        # record in player_transfers (skip on reconciliation to avoid duplicates)
-        if not already_confirmed:
+            # career stats current team
             try:
                 await self.db.execute(
-                    """INSERT INTO player_transfers(player_api_id,from_team_api_id,to_team_api_id,season,transfer_date,transfer_type,note,created_at)
-                       VALUES(?,?,?,?,?,?,?,?)""",
-                    (player_api_id, from_team_api_id, to_team_api_id, season_year, utc_now_iso()[:10], tr.get("transfer_type") or "manual", tr.get("note"), utc_now_iso()),
+                    "UPDATE player_career_stats SET current_team_api_id=?, updated_at=? WHERE player_api_id=?",
+                    (to_team_api_id, now, player_api_id),
                 )
             except Exception:
                 pass
 
-        # Auto-deduct budgets (buying club) when fee/wage are present.
-        fee = int(tr.get("fee") or 0)
-        wage = int(tr.get("wage") or 0)
-        budget_applied = False
-        if season_id and (fee > 0 or wage > 0) and not already_confirmed:
-            try:
-                now_b = utc_now_iso()
-                # deduct from buying team
+            # season_player_stats - move rows for this season across team pk
+            if season_id:
+                sps_rows = await self.db.fetchall(
+                    "SELECT * FROM season_player_stats WHERE season_id=? AND player_api_id=?",
+                    (str(season_id), player_api_id),
+                )
+                for sr in sps_rows:
+                    sd = dict(sr)
+                    old_tid = int(sd.get("team_api_id") or -1)
+                    if from_team_api_id is not None and old_tid != from_team_api_id:
+                        continue
+                    await self.db.execute(
+                        "DELETE FROM season_player_stats WHERE season_id=? AND team_api_id=? AND player_api_id=?",
+                        (str(season_id), old_tid, player_api_id),
+                    )
+                    sd["team_api_id"] = to_team_api_id
+                    await self.db.execute(
+                        """INSERT INTO season_player_stats(season_id,team_api_id,player_api_id,player_name,appearances,starts,minutes_played,goals,assists,yellow_cards,red_cards,clean_sheets,saves,rating_sum,rating_count,avg_rating,motm,updated_at)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                           ON CONFLICT(season_id,team_api_id,player_api_id) DO UPDATE SET
+                           player_name=excluded.player_name,appearances=excluded.appearances,starts=excluded.starts,minutes_played=excluded.minutes_played,
+                           goals=excluded.goals,assists=excluded.assists,yellow_cards=excluded.yellow_cards,red_cards=excluded.red_cards,
+                           clean_sheets=excluded.clean_sheets,saves=excluded.saves,rating_sum=excluded.rating_sum,rating_count=excluded.rating_count,
+                           avg_rating=excluded.avg_rating,motm=excluded.motm,updated_at=excluded.updated_at""",
+                        (str(season_id), to_team_api_id, player_api_id, sd.get("player_name"), int(sd.get("appearances") or 0), int(sd.get("starts") or 0), int(sd.get("minutes_played") or 0),
+                         int(sd.get("goals") or 0), int(sd.get("assists") or 0), int(sd.get("yellow_cards") or 0), int(sd.get("red_cards") or 0),
+                         int(sd.get("clean_sheets") or 0), int(sd.get("saves") or 0), float(sd.get("rating_sum") or 0.0), int(sd.get("rating_count") or 0), float(sd.get("avg_rating") or 0.0),
+                         int(sd.get("motm") or 0), now),
+                    )
+
+            # record in player_transfers (skip on reconciliation to avoid duplicates)
+            if not already_confirmed:
+                try:
+                    await self.db.execute(
+                        """INSERT INTO player_transfers(player_api_id,from_team_api_id,to_team_api_id,season,transfer_date,transfer_type,note,created_at)
+                           VALUES(?,?,?,?,?,?,?,?)""",
+                        (player_api_id, from_team_api_id, to_team_api_id, season_year, now[:10], tr.get("transfer_type") or "manual", tr.get("note"), now),
+                    )
+                except Exception:
+                    pass
+
+            # Apply budgets (fee+signing bonus from buying transfer budget, wage from wage budget; credit selling transfer budget)
+            if season_id and not already_confirmed:
+                total_transfer_cost = max(0, fee) + max(0, signing_bonus)
+                wage_cost = max(0, wage)
+                try:
+                    await self.ensure_season_budgets(str(season_id))
+                except Exception:
+                    pass
+                bt_row = await self.db.fetchone(
+                    "SELECT transfer_budget, wage_budget, team_name FROM season_teams WHERE season_id=? AND team_api_id=?",
+                    (str(season_id), int(to_team_api_id)),
+                )
+                bt = dict(bt_row) if bt_row else {}
+                tb = int(bt.get("transfer_budget") or 0)
+                wb = int(bt.get("wage_budget") or 0)
+                if not bt:
+                    # No season team row - cannot safely deduct
+                    if total_transfer_cost > 0 or wage_cost > 0:
+                        raise RuntimeError("buying_team_not_in_season")
+                if total_transfer_cost > tb:
+                    raise RuntimeError(f"insufficient_transfer_budget:{tb}:{total_transfer_cost}")
+                if wage_cost > wb:
+                    raise RuntimeError(f"insufficient_wage_budget:{wb}:{wage_cost}")
                 await self.db.execute(
                     """UPDATE season_teams
                        SET transfer_budget = MAX(0, COALESCE(transfer_budget,0) - ?),
                            wage_budget = MAX(0, COALESCE(wage_budget,0) - ?),
                            updated_at=?
                        WHERE season_id=? AND team_api_id=?""",
-                    (max(0, fee), max(0, wage), now_b, str(season_id), int(to_team_api_id)),
+                    (total_transfer_cost, wage_cost, now, str(season_id), int(to_team_api_id)),
                 )
-                # credit selling team transfer budget with fee
                 if from_team_api_id is not None and fee > 0:
                     await self.db.execute(
                         """UPDATE season_teams
                            SET transfer_budget = COALESCE(transfer_budget,0) + ?,
                                updated_at=?
                            WHERE season_id=? AND team_api_id=?""",
-                        (max(0, fee), now_b, str(season_id), int(from_team_api_id)),
+                        (max(0, fee), now, str(season_id), int(from_team_api_id)),
                     )
-                budget_applied = True
-            except Exception:
-                logger.exception("Failed to apply transfer budget deductions transfer_id=%s", transfer_id)
+                budget_applied = bool(total_transfer_cost > 0 or wage_cost > 0 or (from_team_api_id is not None and fee > 0))
 
-        now = utc_now_iso()
-        await self.db.execute(
-            "UPDATE season_transfers SET status='confirmed', confirmed_by=?, confirmed_at=?, updated_at=?, from_team_api_id=? WHERE id=?",
-            (confirmed_by, now, now, from_team_api_id, int(transfer_id)),
-        )
+            await self.db.execute(
+                "UPDATE season_transfers SET status='confirmed', confirmed_by=?, confirmed_at=?, updated_at=?, from_team_api_id=? WHERE id=?",
+                (confirmed_by, now, now, from_team_api_id, int(transfer_id)),
+            )
+
         tr2 = await self.db.fetchone("SELECT * FROM season_transfers WHERE id=?", (int(transfer_id),))
         out = dict(tr2) if tr2 else tr
         out["ok"] = True
@@ -1138,7 +1185,33 @@ class SeasonService:
         out["budget_applied"] = budget_applied
         out["fee"] = fee
         out["wage"] = wage
+        out["signing_bonus"] = signing_bonus
         return out
+
+    async def retry_pending_transfers_for_teams(self, team_api_ids: list[int]) -> list[dict[str, Any]]:
+        """Try to confirm pending transfers involving the given teams when no active match blocks them."""
+        ids = {int(x) for x in (team_api_ids or []) if x is not None}
+        if not ids:
+            return []
+        rows = await self.db.fetchall(
+            "SELECT id, from_team_api_id, to_team_api_id FROM season_transfers WHERE status='pending' ORDER BY id ASC LIMIT 50"
+        )
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            from_id = int(d.get("from_team_api_id") or 0)
+            to_id = int(d.get("to_team_api_id") or 0)
+            if from_id not in ids and to_id not in ids:
+                continue
+            tid = int(d.get("id"))
+            try:
+                conf = await self.confirm_transfer(tid)
+            except Exception as e:
+                logger.exception("retry_pending_transfers_for_teams failed transfer_id=%s", tid)
+                results.append({"id": tid, "ok": False, "reason": f"exception:{e.__class__.__name__}"})
+                continue
+            results.append({"id": tid, **conf})
+        return results
 
     async def get_season_team(self, season_id: str, team_api_id: int) -> dict[str, Any] | None:
         row = await self.db.fetchone(
