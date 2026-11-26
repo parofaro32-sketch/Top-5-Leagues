@@ -210,6 +210,9 @@ class MatchEngine:
                 logger.exception("ENGINE commentary generation failed et=%s match_id=%s", et, getattr(self.state, "id", None))
                 commentary = payload.get("detail") or payload.get("summary") or ""
         text = str(commentary or "").strip()
+        minute_txt = f"{self.state.minute}+{self.state.extra_minute}" if self.state.extra_minute else str(self.state.minute)
+        short_score = f"{self.state.home.score}-{self.state.away.score}"
+
         if self._is_recent_commentary(text):
             # try regeneration once more for explicit commentary too
             try:
@@ -221,28 +224,34 @@ class MatchEngine:
                         break
             except Exception:
                 pass
+
         if self._is_recent_commentary(text):
             suffix = self._context_suffix(et, side)
-            if suffix and suffix.strip().lower() not in text.lower():
-                cand = text.rstrip() + suffix
-                if not self._is_recent_commentary(cand):
-                    text = cand
+            if suffix:
+                suffix_clean = suffix.strip()
+                # Avoid stacking the full scoreline repeatedly
+                if short_score in text and short_score in suffix_clean:
+                    suffix_clean = ""
+                if suffix_clean and suffix_clean.lower() not in text.lower():
+                    cand = text.rstrip() + " " + suffix_clean
+                    if not self._is_recent_commentary(cand):
+                        text = cand
+
         if self._is_recent_commentary(text):
-            minute = f"{self.state.minute}+{self.state.extra_minute}" if self.state.extra_minute else str(self.state.minute)
-            score = self.state.scoreline()
-            for extra in [
-                f" At {minute}', the score is {score}.",
-                f" The {minute}' mark sees it {score}.",
-                f" With {score} on the board, this moment matters.",
-                f" Another key detail at {minute}' ({score}).",
-            ]:
+            # Add a short, non-repetitive marker (avoid repeating full scoreline multiple times)
+            extras = [
+                f" ({minute_txt}')",
+                f" [min {minute_txt}]",
+                f" — {minute_txt}'.",
+            ]
+            for extra in extras:
                 cand = text.rstrip() + extra
                 if not self._is_recent_commentary(cand):
                     text = cand
                     break
+
         if self._is_recent_commentary(text):
-            minute = f"{self.state.minute}+{self.state.extra_minute}" if self.state.extra_minute else str(self.state.minute)
-            text = text.rstrip() + f" [{minute}' | {self.state.scoreline()} | #{self.state.next_event_seq}]"
+            text = text.rstrip() + f" [seq {self.state.next_event_seq}]"
         if text:
             self._recent_lines.append(text)
         ev["commentary"] = text
@@ -1107,7 +1116,8 @@ class MatchEngine:
         stat_goal(self.state, att, scorer.player_api_id, assist.player_api_id if assist else None)
         rating_goal(self.state, att, scorer.player_api_id, assist.player_api_id if assist else None)
         detail = narrative or self._goal_detail(att, scorer, assist, is_counter, is_penalty)
-        evs.append(self._emit(E.GOAL, att, scorer.player_api_id, {"assist_name": assist.name if assist else None, "assist_player_id": assist.player_api_id if assist else None, "xg": round(xg, 3), "detail": detail, "score": {"home": self.state.home.score, "away": self.state.away.score}}))
+        ev_type = E.PENALTY_SCORED if is_penalty else E.GOAL
+        evs.append(self._emit(ev_type, att, scorer.player_api_id, {"assist_name": assist.name if assist else None, "assist_player_id": assist.player_api_id if assist else None, "xg": round(xg, 3), "detail": detail, "score": {"home": self.state.home.score, "away": self.state.away.score}, "is_penalty": bool(is_penalty)}))
         return evs
 
     def _goal_detail(self, att, scorer, assist, is_counter, is_penalty):
@@ -1234,11 +1244,6 @@ class MatchEngine:
         if r < score_p:
             stat_shot(self.state,att,taker.player_api_id,True,0.79); rating_shot(self.state,att,taker.player_api_id,True,big_chance=True)
             evs.extend(self._score_goal(att,deff,taker,None,0.79,is_penalty=True))
-            evs.append(self._emit(E.PENALTY_SCORED, att, taker.player_api_id, {"detail": self.rng.choice([
-                f"Penalty converted by {taker.name}, who keeps his nerve under pressure.",
-                f"{taker.name} dispatches the penalty confidently into the net.",
-                f"Cool finish from the spot as {taker.name} beats the goalkeeper.",
-            ]), "score": {"home": self.state.home.score, "away": self.state.away.score}}))
         elif r < score_p + save_p and gk:
             stat_shot(self.state, att, taker.player_api_id, True, 0.79)
             rating_shot(self.state, att, taker.player_api_id, True, big_chance=True)

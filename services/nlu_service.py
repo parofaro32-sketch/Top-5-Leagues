@@ -421,7 +421,7 @@ def extract_contract_terms(text: str | None) -> dict[str, Any]:
                         out["signing_bonus"] = int(mx["value"])
                         used_idxs.add(mx["i"])
 
-    # Final sanity: don't let year value leak as wage/bonus
+    # Final sanity: don't let year/duration value leak as wage/bonus
     if years is not None:
         if int(out.get("wage") or 0) == int(years) and int(years) <= 7:
             out.pop("wage", None)
@@ -429,11 +429,14 @@ def extract_contract_terms(text: str | None) -> dict[str, Any]:
             if not explicit_no_bonus:
                 out.pop("signing_bonus", None)
 
+    # Never allow tiny duration-like values to survive as wage/bonus
+    if out.get("wage") is not None and 1 <= int(out.get("wage") or 0) <= 7:
+        out.pop("wage", None)
+    if out.get("signing_bonus") is not None and not explicit_no_bonus and 1 <= int(out.get("signing_bonus") or 0) <= 7:
+        out.pop("signing_bonus", None)
+
     # If wage and bonus ended up identical with no clear bonus cue, drop bonus
     if out.get("wage") and out.get("signing_bonus") and out["wage"] == out["signing_bonus"] and not explicit_no_bonus:
-        bonus_dist_any = None
-        wage_dist_any = None
-        # check if any cue exists in whole string
         if not re.search(r"\b(signing\s*bonus|sign[- ]?on|upfront|bonus)\b", s):
             out.pop("signing_bonus", None)
 

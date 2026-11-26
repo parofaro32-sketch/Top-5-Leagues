@@ -1803,7 +1803,7 @@ class SimCog(commands.Cog):
                             narrative = narrative + f" **({scoreline})**"
                     msg = f"- **{mtxt}** — {narrative}\n  * *(Goal: {scorer} | Assist: {assist_txt})*"
                     await channel.send(_clamp(msg, 1900))
-                    if et == "goal":
+                    if et in {"goal", "penalty_scored"}:
                         banner = f"# ⚽ {home_name.upper()} {hs}-{as_} {away_name.upper()}"
                         await channel.send(_clamp(banner, 1900))
                     sent += 1

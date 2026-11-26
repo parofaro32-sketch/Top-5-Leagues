@@ -456,12 +456,25 @@ class TransfersCog(commands.Cog):
                         r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|upfront|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)",
                         r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|upfront|bonus)\b",
                     ):
-                        _m = re.search(pat, raw_msg, re.I)
-                        if _m:
-                            _v = money_to_int(_m.group(1))
-                            if _v is not None:
-                                _b2 = int(_v)
-                                break
+                        for _m in re.finditer(pat, raw_msg, re.I):
+                            _raw_tok = str(_m.group(1) or "").strip()
+                            _v = money_to_int(_raw_tok)
+                            if _v is None:
+                                continue
+                            # Guard: never let duration-like plain small ints (e.g. "3 years") become bonus
+                            if not re.search(r"[€£$kmb]|million|mil|thousand|billion|bn", _raw_tok, re.I):
+                                if 1 <= int(_v) <= 7:
+                                    continue
+                                if years is not None and int(_v) == int(years):
+                                    continue
+                                if 1900 <= int(_v) <= 2100:
+                                    continue
+                            if years is not None and int(_v) == int(years) and int(_v) <= 7:
+                                continue
+                            _b2 = int(_v)
+                            break
+                        if _b2 is not None:
+                            break
                     if _b2 is not None:
                         bonus = _b2
                     else:
@@ -474,17 +487,31 @@ class TransfersCog(commands.Cog):
             if wage is None or int(wage) <= 0:
                 _nums: list[int] = []
                 for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)", raw_msg, re.I):
-                    _v = money_to_int(_m.group(1))
-                    if _v is not None and _v > 0:
-                        _nums.append(int(_v))
-                _nums = [v for v in _nums if not (years is not None and int(v) == int(years) and v <= 10)]
+                    _raw_tok = str(_m.group(1) or "").strip()
+                    _v = money_to_int(_raw_tok)
+                    if _v is None or _v <= 0:
+                        continue
+                    # Skip duration-like plain small ints and year-like plain numbers
+                    if not re.search(r"[€£$kmb]|million|mil|thousand|billion|bn", _raw_tok, re.I):
+                        if 1 <= int(_v) <= 7:
+                            continue
+                        if years is not None and int(_v) == int(years):
+                            continue
+                        if 1900 <= int(_v) <= 2100:
+                            continue
+                    if years is not None and int(_v) == int(years) and int(_v) <= 7:
+                        continue
+                    _nums.append(int(_v))
                 if bonus is not None:
                     _nums = [v for v in _nums if int(v) != int(bonus)]
                 wage_cands = [v for v in _nums if 1_000 <= v <= 5_000_000]
                 if wage_cands:
                     wage = int(min(wage_cands))
                 elif _nums:
-                    wage = int(_nums[0])
+                    # Prefer plausible wage-like value, never a small duration-like number
+                    _fallback = [v for v in _nums if v >= 1_000]
+                    if _fallback:
+                        wage = int(min(_fallback))
             if wage is None or int(wage) <= 0:
                 missing.append("weekly wage (e.g. 200k/wk, 300k per week)")
 
@@ -604,18 +631,6 @@ class TransfersCog(commands.Cog):
                     await interaction.followup.send(embed=success_embed(
                         "Contract Agreed — Transfer Completed",
                         result["message"] + "\n\n" + extra
-                    ), ephemeral=True)
-                elif fin.get("pending_match"):
-                    meta["pending_transfer_id"] = fin.get("transfer_id")
-                    meta["finalization_blocked_reason"] = fin.get("reason")
-                    await self.bot.db.execute(
-                        "UPDATE transfer_offers SET status='agreed_pending_finalization', stage='agreed_pending_finalization', meta_json=?, updated_at=? WHERE id=?",
-                        (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
-                    )
-                    await interaction.followup.send(embed=info_embed(
-                        "Contract Agreed — Finalization Pending",
-                        result["message"] + "\n\n" + str(fin.get("message") or fin.get("reason") or "Finalization pending due to an active match.")
-                        + "\n\nThe contract is agreed, but the transfer has **not** been completed yet. It will need to be confirmed once the active match ends."
                     ), ephemeral=True)
                 else:
                     meta["finalization_error"] = fin.get("reason")
@@ -757,17 +772,6 @@ class TransfersCog(commands.Cog):
             return {"ok": False, "reason": reason, "transfer_id": tid}
         if not conf.get("ok"):
             reason = str(conf.get("reason") or "confirm_failed")
-            if reason.startswith("active_match_blocks_transfer"):
-                return {
-                    "ok": False,
-                    "pending_match": True,
-                    "transfer_id": tid,
-                    "reason": reason,
-                    "message": (
-                        f"Contract agreed and transfer recorded (ID `{tid}`), but finalization is pending because an active match is blocking it ({reason.split(':',1)[1] if ':' in reason else 'active match'}). "
-                        f"The transfer will need to be confirmed once the match is no longer active."
-                    ),
-                }
             try:
                 await self.bot.db.execute("UPDATE season_transfers SET status='failed', updated_at=? WHERE id=? AND status='pending'", (utc_now_iso(), int(tid)))
             except Exception:

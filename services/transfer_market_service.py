@@ -686,12 +686,24 @@ class TransferMarketService:
                     r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m|bn|billion)?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on|upfront)\b",
                 ]
                 for pat in bonus_patterns:
-                    m = re.search(pat, t, re.I)
-                    if m:
-                        val = money_to_int(m.group(1))
-                        if val is not None:
-                            out["signing_bonus"] = val
-                            break
+                    for m in re.finditer(pat, t, re.I):
+                        raw_tok = str(m.group(1) or "").strip()
+                        val = money_to_int(raw_tok)
+                        if val is None:
+                            continue
+                        if not re.search(r"[€£$kmb]|million|mil|thousand|billion|bn", raw_tok, re.I):
+                            if 1 <= int(val) <= 7:
+                                continue
+                            if out.get("contract_years") is not None and int(val) == int(out.get("contract_years")):
+                                continue
+                            if 1900 <= int(val) <= 2100:
+                                continue
+                        if out.get("contract_years") is not None and int(val) == int(out.get("contract_years")) and int(val) <= 7:
+                            continue
+                        out["signing_bonus"] = int(val)
+                        break
+                    if "signing_bonus" in out:
+                        break
 
         if "wage" not in out:
             wage_patterns = [

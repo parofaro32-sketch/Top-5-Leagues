@@ -1067,16 +1067,7 @@ class SeasonService:
         elif tr.get("status") not in ("pending", "failed"):
             return {"ok": False, "reason": f"transfer_status_{tr.get('status')}"}
 
-        # Conservative safety: block if active match involves from/to team
-        active = await self.db.fetchall(
-            "SELECT id, home_team_api_id, away_team_api_id, status FROM matches WHERE status IN ('running','break','halftime','setup','pending_break')",
-        )
-        for m in active:
-            md = dict(m)
-            hid = int(md.get("home_team_api_id") or -1)
-            aid = int(md.get("away_team_api_id") or -1)
-            if from_team_api_id in (hid, aid) or to_team_api_id in (hid, aid):
-                return {"ok": False, "reason": f"active_match_blocks_transfer:{md.get('id')}"}
+        # Active matches must not block agreed transfers/finalization. Financial + roster updates are atomic below.
 
         season_id = tr.get("season_id")
         now = utc_now_iso()
@@ -1099,16 +1090,7 @@ class SeasonService:
             elif str(tr2_cur.get("status") or "") not in ("pending", "failed"):
                 return {"ok": False, "reason": f"transfer_status_{tr2_cur.get('status')}"}
 
-            # Re-check active match inside transaction
-            active2 = await self.db.fetchall(
-                "SELECT id, home_team_api_id, away_team_api_id, status FROM matches WHERE status IN ('running','break','halftime','setup','pending_break')",
-            )
-            for m in active2:
-                md = dict(m)
-                hid = int(md.get("home_team_api_id") or -1)
-                aid = int(md.get("away_team_api_id") or -1)
-                if from_team_api_id in (hid, aid) or to_team_api_id in (hid, aid):
-                    return {"ok": False, "reason": f"active_match_blocks_transfer:{md.get('id')}"}
+            # Do not block finalization due to active matches.
 
             # Move player in players table (PK includes team_api_id)
             player_rows = await self.db.fetchall(
@@ -1956,115 +1938,169 @@ class SeasonService:
         *,
         season_year: int = 2026,
         guild_id: int | None = None,
-        max_per_league: int = 7,
+        max_per_league: int = 20,
     ) -> list[dict[str, Any]]:
+        """Return eligible European participants from Top 5 league teams in the DB.
+        Robust matching: tries requested season_year, then falls back to other seasons and bundled data.
+        max_per_league is a soft spread preference, not a hard blocker when it would cause insufficient teams.
+        """
         cfg = self.get_european_competition_config(competition_key)
         team_count = int(cfg["team_count"])
 
-        # gather teams from all 5 domestic leagues
-        league_to_teams: dict[str, list[dict[str, Any]]] = {k: [] for k in LEAGUE_KEYS}
-        for lk in LEAGUE_KEYS:
-            rows = await self.db.fetchall(
-                "SELECT api_id, name, short_name, code, logo, league_name FROM teams WHERE season=? AND lower(league_name)=lower(?)",
-                (int(season_year), str(LEAGUE_DISPLAY.get(lk, lk))),
+        def _league_key_from_name(league_name: str | None) -> str | None:
+            return self._norm_league_to_key(str(league_name or ""))
+
+        def _add_team(pool: dict[str, dict[str, Any]], row: dict[str, Any], lk: str) -> None:
+            tid = int(row.get("api_id") or row.get("team_api_id") or 0)
+            if not tid or lk not in LEAGUE_KEYS:
+                return
+            cur = pool.get(str(tid))
+            cand = {
+                "team_api_id": tid,
+                "team_name": str(row.get("name") or row.get("team_name") or tid),
+                "short_name": row.get("short_name") or row.get("code"),
+                "logo": row.get("logo"),
+                "domestic_league_key": lk,
+                "_season": int(row.get("season") or 0),
+            }
+            if cur is None:
+                pool[str(tid)] = cand
+                return
+            # Prefer exact season_year, then most recent season
+            cur_season = int(cur.get("_season") or 0)
+            cand_season = int(cand.get("_season") or 0)
+            cur_is_exact = cur_season == int(season_year)
+            cand_is_exact = cand_season == int(season_year)
+            if cand_is_exact and not cur_is_exact:
+                pool[str(tid)] = cand
+            elif cand_is_exact == cur_is_exact and cand_season > cur_season:
+                pool[str(tid)] = cand
+
+        # 1) Gather from DB (prefer requested season, but include all top-5-league teams)
+        team_pool: dict[str, dict[str, Any]] = {}
+        try:
+            rows_exact = await self.db.fetchall(
+                "SELECT api_id, name, short_name, code, logo, league_name, season FROM teams WHERE season=?",
+                (int(season_year),),
             )
-            if not rows:
-                # fallback by matching league_name variants
-                all_rows = await self.db.fetchall("SELECT api_id, name, short_name, code, logo, league_name FROM teams WHERE season=?", (int(season_year),))
-                for rr in all_rows or []:
-                    d = dict(rr)
-                    if self._norm_league_to_key(str(d.get("league_name") or "")) == lk:
-                        rows = (rows or []) + [rr]
-            seen = set()
-            for rr in rows or []:
+        except Exception:
+            rows_exact = []
+        try:
+            rows_all = await self.db.fetchall(
+                "SELECT api_id, name, short_name, code, logo, league_name, season FROM teams WHERE league_name IS NOT NULL AND league_name != ''",
+            )
+        except Exception:
+            rows_all = []
+
+        for rr in (rows_exact or []):
+            d = dict(rr)
+            lk = _league_key_from_name(d.get("league_name"))
+            if lk:
+                _add_team(team_pool, d, lk)
+        # Fill from all seasons if needed or to be robust
+        if len(team_pool) < team_count or not any(True for _ in team_pool.values()):
+            for rr in (rows_all or []):
                 d = dict(rr)
-                tid = int(d.get("api_id") or 0)
-                if not tid or tid in seen:
-                    continue
-                seen.add(tid)
-                league_to_teams[lk].append({
-                    "team_api_id": tid,
-                    "team_name": str(d.get("name") or tid),
-                    "short_name": d.get("short_name") or d.get("code"),
-                    "logo": d.get("logo"),
-                    "domestic_league_key": lk,
-                })
+                lk = _league_key_from_name(d.get("league_name"))
+                if lk:
+                    _add_team(team_pool, d, lk)
 
-        # if DB has no teams, try bundled
-        if not any(league_to_teams.values()):
-            try:
-                from data.football_data import list_all_teams
-                for lk in LEAGUE_KEYS:
-                    for t in list_all_teams(lk) or []:
-                        tid = int(t.get("api_id") or 0)
-                        if not tid:
-                            continue
-                        league_to_teams[lk].append({
-                            "team_api_id": tid,
-                            "team_name": str(t.get("name") or tid),
-                            "short_name": t.get("short_name") or t.get("code"),
-                            "logo": t.get("logo"),
-                            "domestic_league_key": lk,
-                        })
-            except Exception:
-                pass
+        # 2) Bundled fallback/supplement (only for missing leagues/teams)
+        try:
+            from data.football_data import list_all_teams
+            for lk in LEAGUE_KEYS:
+                try:
+                    bundled = list_all_teams(lk) or []
+                except Exception:
+                    bundled = []
+                for t in bundled:
+                    d = dict(t)
+                    d.setdefault("season", int(season_year))
+                    _add_team(team_pool, d, lk)
+        except Exception:
+            pass
 
-        # score all teams
+        # 3) Score all candidates
         all_scored: list[dict[str, Any]] = []
-        for lk, teams in league_to_teams.items():
-            for t in teams:
-                rating = await self._team_seed_rating(int(t["team_api_id"]), season_year=season_year)
-                item = dict(t)
-                item["seed_rating"] = float(rating)
-                item["domestic_league_key"] = lk
-                all_scored.append(item)
+        for t in team_pool.values():
+            lk = str(t.get("domestic_league_key") or "")
+            if lk not in LEAGUE_KEYS:
+                continue
+            rating = 70.0
+            try:
+                rating = float(await self._team_seed_rating(int(t["team_api_id"]), season_year=season_year))
+            except Exception:
+                rating = 70.0
+            item = dict(t)
+            item.pop("_season", None)
+            item["seed_rating"] = float(rating)
+            item["domestic_league_key"] = lk
+            all_scored.append(item)
 
-        # rank within league and pick top per league with cap, then fill remainder by global rating
-        per_league_picks: list[dict[str, Any]] = []
+        # Dedupe by team_api_id (defensive)
+        dedup: dict[int, dict[str, Any]] = {}
+        for x in all_scored:
+            tid = int(x.get("team_api_id") or 0)
+            if not tid:
+                continue
+            prev = dedup.get(tid)
+            if prev is None or float(x.get("seed_rating") or 0) > float(prev.get("seed_rating") or 0):
+                dedup[tid] = x
+        all_scored = list(dedup.values())
+
+        # 4) Build selection with soft league spread, but never block filling
         per_league_count: dict[str, int] = {k: 0 for k in LEAGUE_KEYS}
-        # base allocation: distribute evenly, then give extras to stronger leagues
-        base = team_count // len(LEAGUE_KEYS)
-        rem = team_count % len(LEAGUE_KEYS)
+        selected: list[dict[str, Any]] = []
+        selected_ids: set[int] = set()
+
+        # Soft target allocation by league strength
         league_strength = []
         for lk in LEAGUE_KEYS:
             vals = sorted([float(x.get("seed_rating") or 0) for x in all_scored if x.get("domestic_league_key") == lk], reverse=True)
             topn = vals[:6]
             league_strength.append((sum(topn) / len(topn) if topn else 0.0, lk))
         league_strength.sort(reverse=True)
-        allocation = {lk: base for lk in LEAGUE_KEYS}
+        base = team_count // len(LEAGUE_KEYS)
+        rem = team_count % len(LEAGUE_KEYS)
+        soft_target = {lk: base for lk in LEAGUE_KEYS}
         for i in range(rem):
-            allocation[league_strength[i % len(league_strength)][1]] += 1
-        # cap
-        for lk in allocation:
-            allocation[lk] = min(int(max_per_league), int(allocation[lk]))
+            soft_target[league_strength[i % len(league_strength)][1]] += 1
 
+        # Pass 1: respect soft target and soft max_per_league
+        soft_cap = max(1, int(max_per_league)) if max_per_league is not None else team_count
+        # If soft cap is too small to fill, relax it
+        if soft_cap * len(LEAGUE_KEYS) < team_count:
+            soft_cap = team_count
         for lk in LEAGUE_KEYS:
             pool = [x for x in all_scored if x.get("domestic_league_key") == lk]
             pool.sort(key=lambda x: (-float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
-            take = allocation.get(lk, 0)
-            chosen = pool[:take]
-            per_league_picks.extend(chosen)
-            per_league_count[lk] = len(chosen)
-
-        # fill remaining slots globally (respect cap)
-        if len(per_league_picks) < team_count:
-            picked_ids = {int(x["team_api_id"]) for x in per_league_picks}
-            rest = [x for x in all_scored if int(x["team_api_id"]) not in picked_ids]
-            rest.sort(key=lambda x: (-float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
-            for x in rest:
-                if len(per_league_picks) >= team_count:
-                    break
-                lk = str(x.get("domestic_league_key") or "")
-                if per_league_count.get(lk, 0) >= int(max_per_league):
+            take = min(len(pool), int(soft_target.get(lk, 0)), soft_cap)
+            for x in pool[:take]:
+                tid = int(x["team_api_id"])
+                if tid in selected_ids:
                     continue
-                per_league_picks.append(x)
+                selected.append(x)
+                selected_ids.add(tid)
                 per_league_count[lk] = per_league_count.get(lk, 0) + 1
-                picked_ids.add(int(x["team_api_id"]))
 
-        # final deterministic ordering
-        per_league_picks.sort(key=lambda x: (-float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
-        out = per_league_picks[:team_count]
-        # assign stable seed rank
+        # Pass 2: fill remaining slots by global rating, still preferring spread but not hard-blocking
+        if len(selected) < team_count:
+            rest = [x for x in all_scored if int(x["team_api_id"]) not in selected_ids]
+            rest.sort(key=lambda x: (per_league_count.get(str(x.get("domestic_league_key")), 0), -float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
+            for x in rest:
+                if len(selected) >= team_count:
+                    break
+                tid = int(x["team_api_id"])
+                if tid in selected_ids:
+                    continue
+                lk = str(x.get("domestic_league_key") or "")
+                selected.append(x)
+                selected_ids.add(tid)
+                per_league_count[lk] = per_league_count.get(lk, 0) + 1
+
+        # Final deterministic ordering for seeding
+        selected.sort(key=lambda x: (-float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
+        out = selected[:team_count]
         for i, t in enumerate(out, start=1):
             t["seed_rank"] = i
         return out
@@ -2089,7 +2125,7 @@ class SeasonService:
         competition_key: str,
         season_year: int = 2026,
         guild_id: int | None = None,
-        max_per_league: int = 7,
+        max_per_league: int = 20,
     ) -> dict[str, Any]:
         cfg = self.get_european_competition_config(competition_key)
         team_count = int(cfg["team_count"])
@@ -2098,7 +2134,65 @@ class SeasonService:
         if pot_count * pot_size != team_count:
             raise ValueError("Invalid European competition config: pot_count * pots_size != team_count")
 
-        teams = await self.get_eligible_european_teams(competition_key, season_year=season_year, guild_id=guild_id, max_per_league=max_per_league)
+        # Resolve guild/season context for cross-competition dedupe
+        season = await self.get_season(str(season_id))
+        if season:
+            try:
+                season_year = int(season.get("season_year") or season_year)
+            except Exception:
+                pass
+            if guild_id is None and season.get("guild_id") is not None:
+                try:
+                    guild_id = int(season.get("guild_id"))
+                except Exception:
+                    pass
+
+        teams = await self.get_eligible_european_teams(
+            competition_key, season_year=season_year, guild_id=guild_id, max_per_league=max_per_league
+        )
+
+        # Prefer excluding teams already used in other European competitions (same guild+season_year)
+        used_elsewhere: set[int] = set()
+        try:
+            other_seasons = await self.db.fetchall(
+                "SELECT id, league_key FROM seasons WHERE league_key IN (?,?,?) AND season_year=?",
+                ("champions_league", "europa_league", "conference_league", int(season_year)),
+            )
+            for rs in other_seasons or []:
+                sd = dict(rs)
+                sid2 = str(sd.get("id") or "")
+                lk2 = str(sd.get("league_key") or "")
+                if not sid2 or lk2 == str(competition_key):
+                    continue
+                if guild_id is not None and sd.get("guild_id") is not None:
+                    try:
+                        if int(sd.get("guild_id")) != int(guild_id):
+                            continue
+                    except Exception:
+                        pass
+                rows = await self.db.fetchall(
+                    "SELECT team_api_id FROM competition_entries WHERE season_id=? AND competition_key=?",
+                    (sid2, lk2),
+                )
+                for rr in rows or []:
+                    try:
+                        used_elsewhere.add(int(dict(rr).get("team_api_id") or 0))
+                    except Exception:
+                        pass
+        except Exception:
+            # Non-fatal: fall back to no cross-competition exclusion
+            used_elsewhere = set()
+
+        if used_elsewhere:
+            preferred = [t for t in teams if int(t.get("team_api_id") or 0) not in used_elsewhere]
+            if len(preferred) >= team_count:
+                teams = preferred
+            else:
+                # Not enough unique teams across competitions; allow overlap but keep preference
+                seen_ids = {int(t.get("team_api_id") or 0) for t in preferred}
+                fallback = preferred + [t for t in teams if int(t.get("team_api_id") or 0) not in seen_ids]
+                teams = fallback
+
         if len(teams) < team_count:
             return {
                 "ok": False,
@@ -2109,6 +2203,38 @@ class SeasonService:
             }
 
         teams = teams[:team_count]
+        # Final safety: ensure no duplicates within this competition
+        uniq: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for t in teams:
+            tid = int(t.get("team_api_id") or 0)
+            if not tid or tid in seen:
+                continue
+            seen.add(tid)
+            uniq.append(t)
+        if len(uniq) < team_count:
+            # Try to top up from all scored candidates
+            all_teams = await self.get_eligible_european_teams(
+                competition_key, season_year=season_year, guild_id=guild_id, max_per_league=max_per_league
+            )
+            for t in all_teams:
+                tid = int(t.get("team_api_id") or 0)
+                if not tid or tid in seen:
+                    continue
+                uniq.append(t)
+                seen.add(tid)
+                if len(uniq) >= team_count:
+                    break
+        teams = uniq[:team_count]
+        if len(teams) < team_count:
+            return {
+                "ok": False,
+                "reason": "insufficient_teams",
+                "needed": team_count,
+                "found": len(teams),
+                "teams": teams,
+            }
+
         pots: list[list[dict[str, Any]]] = []
         for p in range(pot_count):
             chunk = teams[p * pot_size:(p + 1) * pot_size]

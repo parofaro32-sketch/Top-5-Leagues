@@ -210,14 +210,22 @@ def generate(state: MatchState, event: dict[str, Any], rng: random.Random) -> st
         et = event.get("event_type")
         side = event.get("team_side")
         if et in {E.GOAL, E.PENALTY_SCORED, E.PENALTY_SAVED, E.PENALTY_MISSED, E.RED_CARD, E.SECOND_YELLOW, E.DISALLOWED_GOAL}:
-            extra = _pick(rng, [
-                f" The scoreboard reads {_short_score(state)}, and the momentum swings sharply.",
-                f" At {_short_score(state)}, that moment carries real tactical weight.",
-                f" You can feel the emotional shift ripple across the pitch.",
-                f" A defining flashpoint at {_short_score(state)} with consequences for both benches.",
-                f" The stadium atmosphere changes instantly as {_short_score(state)} frames the contest.",
+            _ss = _short_score(state)
+            _score_opts = [
+                f" The scoreboard reads {_ss}, and the momentum swings sharply.",
+                f" At {_ss}, that moment carries real tactical weight.",
+                f" A defining flashpoint at {_ss} with consequences for both benches.",
+                f" The stadium atmosphere changes instantly as {_ss} frames the contest.",
+            ]
+            _noscore_opts = [
+                " You can feel the emotional shift ripple across the pitch.",
+                " That moment carries real tactical weight on both benches.",
+                " The atmosphere shifts instantly as the contest tilts.",
                 "",
-            ])
+            ]
+            # Avoid duplicating the score if it's already present in the text
+            opts = _noscore_opts if _ss in txt else (_score_opts + _noscore_opts)
+            extra = _pick(rng, opts)
             if extra and extra.strip() not in txt:
                 txt += extra
         elif et in {E.CHANCE, E.SAVE, E.BLOCK} and rng.random() < 0.5:

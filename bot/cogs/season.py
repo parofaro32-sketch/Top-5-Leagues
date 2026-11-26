@@ -911,13 +911,6 @@ class SeasonCog(commands.Cog):
             conf = await self.bot.season_service.confirm_transfer(int(tr.get("id")), confirmed_by=interaction.user.id if interaction.user else None)
             if not conf.get("ok"):
                 reason = str(conf.get("reason") or "auto-finalize failed")
-                if reason.startswith("active_match_blocks_transfer"):
-                    await interaction.followup.send(embed=info_embed(
-                        "Transfer Pending",
-                        f"Transfer recorded (ID `{tr.get('id')}`) for **{p_row.get('name','?')}** to **{t.get('name','?')}**, but finalization is pending because an active match is blocking it ({reason.split(':',1)[1]}).\n\n"
-                        f"The transfer has not been completed yet. Confirm it again once the match is no longer active."
-                    ), ephemeral=True)
-                    return
                 await interaction.followup.send(embed=error_embed("Transfer Failed", reason), ephemeral=True)
                 return
             await interaction.followup.send(embed=success_embed(
