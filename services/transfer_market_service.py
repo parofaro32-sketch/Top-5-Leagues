@@ -697,10 +697,20 @@ class TransferMarketService:
 
         # If no wage found, but there is a money token that is not the bonus and looks like wage
         if "wage" not in out:
+            years_val = out.get("contract_years")
             for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m|bn|billion)?)", t, re.I):
-                val = money_to_int(m.group(1))
+                raw_tok = m.group(1).strip()
+                val = money_to_int(raw_tok)
                 if val is None:
                     continue
+                # skip duration-like plain small ints
+                if not re.search(r"[€£$kmb]|million|mil|thousand|billion|bn", raw_tok, re.I):
+                    if 1 <= int(val) <= 7:
+                        continue
+                    if years_val is not None and int(val) == int(years_val):
+                        continue
+                    if 1900 <= int(val) <= 2100:
+                        continue
                 if "signing_bonus" in out and val == int(out.get("signing_bonus") or 0):
                     continue
                 if 1_000 <= val <= 5_000_000:
@@ -709,17 +719,29 @@ class TransferMarketService:
             if "wage" not in out:
                 m = re.fullmatch(r"[€£$]?\s*(\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m)?)", t.strip(), re.I)
                 if m:
-                    val = money_to_int(m.group(1))
+                    raw_tok = m.group(1).strip()
+                    val = money_to_int(raw_tok)
                     if val is not None:
-                        out["wage"] = val
+                        if not (not re.search(r"[€£$kmb]|million|mil|thousand|billion|bn", raw_tok, re.I) and 1 <= int(val) <= 7):
+                            out["wage"] = val
 
         # If two money values and bonus missing, infer bonus as the other one
         if "wage" in out and "signing_bonus" not in out:
+            years_val = out.get("contract_years")
             nums = []
             for m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|k|m|bn|billion)?)", t, re.I):
-                v = money_to_int(m.group(1))
-                if v is not None and v > 0:
-                    nums.append(int(v))
+                raw_tok = m.group(1).strip()
+                v = money_to_int(raw_tok)
+                if v is None or v <= 0:
+                    continue
+                if not re.search(r"[€£$kmb]|million|mil|thousand|billion|bn", raw_tok, re.I):
+                    if 1 <= int(v) <= 7:
+                        continue
+                    if years_val is not None and int(v) == int(years_val):
+                        continue
+                    if 1900 <= int(v) <= 2100:
+                        continue
+                nums.append(int(v))
             others = [v for v in nums if v != int(out["wage"])]
             if others:
                 # pick a plausible bonus

@@ -412,8 +412,8 @@ class TransfersCog(commands.Cog):
             valuation = meta.get("valuation") or {}
 
             raw_msg = str(getattr(modal, "offer", None).value if getattr(modal, "offer", None) else "").strip()
+            # NLU-first canonical parse (shared across contract flows)
             parsed = self.market.parse_contract_reply(raw_msg) if raw_msg else {}
-
             wage = parsed.get("wage")
             bonus = parsed.get("signing_bonus")
             role = parsed.get("role")
@@ -431,7 +431,11 @@ class TransfersCog(commands.Cog):
             _plain_accept = bool(re.fullmatch(r"(ok|okay|yes|yep|yeah|sure|fine|alright|all right|agree|agreed|deal|accept|yup)\W*", _raw_low))
             _explicit_accept_ref = bool(re.search(r"\b(accept|agree to|take)\b.{0,30}\b(your|the|that|those)\b.{0,20}\b(offer|counter|terms|demand|deal)\b", _raw_low))
             # Treat as agreement only when it's clearly accepting bot terms (no conflicting specific contract numbers)
-            _has_specific_contract_terms = bool(re.search(r"(\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)) or bool(re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)) or bool(re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low))
+            _has_specific_contract_terms = bool(
+                re.search(r"(\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)
+                or re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)
+                or re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low)
+            )
             _is_agreement = (not _negated_agree) and (_agreement_phrases or _plain_accept or _explicit_accept_ref) and not _has_specific_contract_terms
             if _is_agreement:
                 _agree_terms = meta.get("last_counter") or demand or {}
@@ -441,29 +445,12 @@ class TransfersCog(commands.Cog):
                 years = _agree_terms.get("contract_years", years)
                 meta["_agreement_accepted"] = True
 
-            # Parse natural language contract terms (NLU-first, no rigid format).
             missing: list[str] = []
-            try:
-                from services.nlu_service import extract_contract_terms
-                nlu_terms = extract_contract_terms(raw_msg)
-            except Exception:
-                nlu_terms = {}
-
-            # Merge NLU results only when the local values are missing
-            if wage is None and nlu_terms.get("wage") is not None:
-                wage = int(nlu_terms["wage"])
-            if bonus is None and nlu_terms.get("signing_bonus") is not None:
-                bonus = int(nlu_terms["signing_bonus"])
-            if role is None and nlu_terms.get("role"):
-                role = str(nlu_terms["role"])
-            if years is None and nlu_terms.get("contract_years") is not None:
-                years = int(nlu_terms["contract_years"])
 
             _bonus_mentioned = bool(re.search(r"\b(signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|upfront|bonus)\b", raw_msg, re.I))
             if bonus is None:
                 # If user mentioned bonus but we couldn't parse a value, ask for clarification.
                 if _bonus_mentioned and not re.search(r"\b(no|without|zero|none)\b", raw_msg, re.I):
-                    # try to parse any money near the bonus cue
                     _b2 = None
                     for pat in (
                         r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|upfront|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)",
@@ -483,22 +470,19 @@ class TransfersCog(commands.Cog):
                     # No bonus mentioned - treat as no signing bonus
                     bonus = 0
 
-            # If wage missing, try to infer from remaining money tokens not equal to bonus
+            # If wage missing, try to infer from remaining money tokens not equal to bonus/years
             if wage is None or int(wage) <= 0:
                 _nums: list[int] = []
                 for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?)", raw_msg, re.I):
                     _v = money_to_int(_m.group(1))
                     if _v is not None and _v > 0:
                         _nums.append(int(_v))
-                # remove values that are clearly years
                 _nums = [v for v in _nums if not (years is not None and int(v) == int(years) and v <= 10)]
                 if bonus is not None:
                     _nums = [v for v in _nums if int(v) != int(bonus)]
-                # prefer plausible weekly wage range
                 wage_cands = [v for v in _nums if 1_000 <= v <= 5_000_000]
                 if wage_cands:
-                    # if bonus exists and two cands, pick the one that's not bonus-like? usually lower
-                    wage = int(wage_cands[0]) if len(wage_cands) == 1 else int(min(wage_cands))
+                    wage = int(min(wage_cands))
                 elif _nums:
                     wage = int(_nums[0])
             if wage is None or int(wage) <= 0:

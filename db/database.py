@@ -471,6 +471,22 @@ CREATE TABLE IF NOT EXISTS team_claims (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_team_claims_unique ON team_claims(COALESCE(guild_id, -1), league_key, team_api_id);
 CREATE INDEX IF NOT EXISTS idx_team_claims_user ON team_claims(COALESCE(guild_id, -1), user_id);
 CREATE INDEX IF NOT EXISTS idx_team_claims_league ON team_claims(league_key, team_api_id);
+
+CREATE TABLE IF NOT EXISTS competition_entries (
+    season_id TEXT NOT NULL,
+    competition_key TEXT NOT NULL,
+    team_api_id INTEGER NOT NULL,
+    team_name TEXT NOT NULL,
+    domestic_league_key TEXT,
+    pot INTEGER,
+    group_name TEXT,
+    seed_rating REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (season_id, competition_key, team_api_id)
+);
+CREATE INDEX IF NOT EXISTS idx_comp_entries_season_comp ON competition_entries(season_id, competition_key);
+CREATE INDEX IF NOT EXISTS idx_comp_entries_group ON competition_entries(season_id, competition_key, group_name);
 """
 
 

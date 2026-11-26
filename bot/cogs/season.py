@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -14,7 +15,7 @@ try:
 except Exception:  # pragma: no cover - fallback for partial deploys
     success_embed = info_embed
 from data.football_data import list_league_keys, LEAGUE_DISPLAY_NAMES
-from services.season_service import LEAGUE_DISPLAY, LEAGUE_KEYS
+from services.season_service import LEAGUE_DISPLAY, LEAGUE_KEYS, EUROPEAN_COMPETITION_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,14 @@ def _league_choices() -> list[app_commands.Choice[str]]:
         name = LEAGUE_DISPLAY.get(k) or LEAGUE_DISPLAY_NAMES.get(k, k)
         choices.append(app_commands.Choice(name=name, value=k))
     return choices
+
+
+def _euro_choices() -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name="Champions League", value="champions_league"),
+        app_commands.Choice(name="Europa League", value="europa_league"),
+        app_commands.Choice(name="Conference League", value="conference_league"),
+    ]
 
 
 def _fmt_standings(rows: list[dict[str, Any]], limit: int = 20) -> str:
@@ -64,6 +73,77 @@ def _fmt_fixtures(rows: list[dict[str, Any]], limit: int = 20) -> str:
         tag = "✅" if status == "played" else ("🟢" if status == "live" else "🕒")
         lines.append(f"{tag} `MD{md:>2}` **{home}** {score} **{away}**  _(id:{fid}, {status})_")
     return "\n".join(lines) if lines else "No fixtures found."
+
+
+class ResignConfirmView(discord.ui.View):
+    def __init__(self, *, bot, user_id: int, guild_id: int | None, team_label: str, timeout: float = 120):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.user_id = int(user_id)
+        self.guild_id = guild_id
+        self.team_label = team_label
+        self.resolved = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if int(interaction.user.id) != int(self.user_id):
+            await interaction.response.send_message("Only the requesting manager can confirm this resignation.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Resign", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.resolved:
+            await interaction.response.send_message("This resignation has already been handled.", ephemeral=True)
+            return
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        try:
+            res = await self.bot.season_service.resign_manager(guild_id=self.guild_id, user_id=self.user_id)
+        except Exception:
+            logger.exception("resign_manager failed for user_id=%s guild_id=%s", self.user_id, self.guild_id)
+            await interaction.response.edit_message(content=None, embed=error_embed("Resign Failed", "I couldn't complete the resignation. Please try again."), view=self)
+            return
+
+        if not res.get("ok"):
+            reason = str(res.get("reason") or "unknown")
+            if reason == "no_claimed_team":
+                msg = "You do not currently manage a claimed team."
+            else:
+                msg = f"Resignation could not be completed ({reason})."
+            await interaction.response.edit_message(content=None, embed=error_embed("Resign Failed", msg), view=self)
+            return
+
+        released = res.get("released") or []
+        if released:
+            lines = []
+            for r in released[:10]:
+                tname = r.get("team_name") or f"Team {r.get('team_api_id')}"
+                lk = r.get("league_key")
+                league_name = LEAGUE_DISPLAY.get(str(lk), str(lk or "League"))
+                lines.append(f"- **{tname}** ({league_name})")
+            detail = "You have resigned from:\n" + "\n".join(lines)
+        else:
+            detail = f"You have resigned from **{self.team_label}**."
+        detail += "\n\nThe club is now vacant. You can claim another available team with `/claim` when you're ready."
+        await interaction.response.edit_message(content=None, embed=success_embed("Resignation Confirmed", detail[:3900]), view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.resolved:
+            await interaction.response.send_message("This resignation has already been handled.", ephemeral=True)
+            return
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content=None, embed=info_embed("Resignation Cancelled", f"You remain manager of **{self.team_label}**."), view=self)
+
+    async def on_timeout(self):
+        if self.resolved:
+            return
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
 
 
 class SeasonGroup(app_commands.Group):
@@ -413,6 +493,234 @@ class SeasonGroup(app_commands.Group):
         await interaction.followup.send(embed=info_embed(f"Top Assisters — {season.get('name')}", "\n".join(lines)[:3900]), ephemeral=True)
 
 
+    async def _get_or_create_euro_season(self, interaction: discord.Interaction, competition: str, season_year: int = 2026):
+        ss = self.cog.bot.season_service
+        season = await ss.get_active_season(interaction.guild_id, league_key=competition)
+        if season:
+            return season, False
+        season = await ss.create_season(guild_id=interaction.guild_id, league_key=competition, season_year=int(season_year))
+        return season, True
+
+    @app_commands.command(name="europots", description="Generate or view European competition pots (UCL/UEL/UECL)")
+    @app_commands.describe(competition="European competition", season_year="Season start year (used if creating)")
+    @app_commands.choices(competition=_euro_choices())
+    async def europots(self, interaction: discord.Interaction, competition: app_commands.Choice[str], season_year: int = 2026):
+        await interaction.response.defer(ephemeral=True)
+        ss = self.cog.bot.season_service
+        try:
+            season, created = await self._get_or_create_euro_season(interaction, competition.value, season_year)
+            sid = str(season["id"])
+            # If pots already exist, show them; else generate
+            existing = await ss.get_european_pots(sid, competition.value)
+            pots = existing.get("pots") or []
+            has_pots = any(len(p) > 0 for p in pots)
+            if not has_pots:
+                res = await ss.generate_european_pots(season_id=sid, competition_key=competition.value, season_year=int(season.get("season_year") or season_year), guild_id=interaction.guild_id)
+                if not res.get("ok"):
+                    reason = res.get("reason", "unknown")
+                    if reason == "insufficient_teams":
+                        await interaction.followup.send(embed=error_embed("Not Enough Teams", f"Found {res.get('found',0)}/{res.get('needed',0)} eligible teams for {competition.name}. Check that teams exist in the database."), ephemeral=True)
+                        return
+                    await interaction.followup.send(embed=error_embed("Pot Generation Failed", str(reason)), ephemeral=True)
+                    return
+                pots = res.get("pots") or []
+            lines = [f"**{competition.name} — Pots**", f"Season: {season.get('name')} (`{sid}`)"]
+            if created:
+                lines.append("_Season created automatically._")
+            for i, pot in enumerate(pots, start=1):
+                lines.append(f"\n**Pot {i}**")
+                for t in pot:
+                    dom = LEAGUE_DISPLAY.get(str(t.get('domestic_league_key') or ''), t.get('domestic_league_key') or '?')
+                    rating = t.get('seed_rating')
+                    rating_txt = f" • {float(rating):.1f}" if rating is not None else ""
+                    lines.append(f"- {t.get('team_name')} ({dom}{rating_txt})")
+            await interaction.followup.send(embed=info_embed(f"{competition.name} Pots", "\n".join(lines)[:3900]), ephemeral=True)
+        except Exception as e:
+            logger.exception("europots failed")
+            await interaction.followup.send(embed=error_embed("Pot Generation Failed", str(e)), ephemeral=True)
+
+    @app_commands.command(name="eurodraw", description="Draw European competition groups from pots")
+    @app_commands.describe(competition="European competition", season_year="Season start year (used if creating)")
+    @app_commands.choices(competition=_euro_choices())
+    async def eurodraw(self, interaction: discord.Interaction, competition: app_commands.Choice[str], season_year: int = 2026):
+        await interaction.response.defer(ephemeral=True)
+        ss = self.cog.bot.season_service
+        try:
+            season, _ = await self._get_or_create_euro_season(interaction, competition.value, season_year)
+            sid = str(season["id"])
+            # Ensure pots exist
+            pot_res = await ss.get_european_pots(sid, competition.value)
+            pots = pot_res.get("pots") or []
+            if not any(len(p) > 0 for p in pots):
+                gen = await ss.generate_european_pots(season_id=sid, competition_key=competition.value, season_year=int(season.get("season_year") or season_year), guild_id=interaction.guild_id)
+                if not gen.get("ok"):
+                    await interaction.followup.send(embed=error_embed("Draw Failed", f"Could not generate pots: {gen.get('reason','unknown')}"), ephemeral=True)
+                    return
+            res = await ss.draw_european_groups(season_id=sid, competition_key=competition.value)
+            if not res.get("ok"):
+                await interaction.followup.send(embed=error_embed("Draw Failed", str(res.get("detail") or res.get("reason") or "unknown")), ephemeral=True)
+                return
+            groups = res.get("groups") or []
+            lines = [f"**{competition.name} — Group Draw**", f"Season: {season.get('name')} (`{sid}`)"]
+            for g in groups:
+                lines.append(f"\n**Group {g.get('group_name')}**")
+                for t in g.get("teams") or []:
+                    dom = LEAGUE_DISPLAY.get(str(t.get('domestic_league_key') or ''), t.get('domestic_league_key') or '?')
+                    pot = t.get('pot')
+                    lines.append(f"- Pot {pot}: {t.get('team_name')} ({dom})")
+            await interaction.followup.send(embed=info_embed(f"{competition.name} Group Draw", "\n".join(lines)[:3900]), ephemeral=True)
+        except Exception as e:
+            logger.exception("eurodraw failed")
+            await interaction.followup.send(embed=error_embed("Draw Failed", str(e)), ephemeral=True)
+
+    @app_commands.command(name="eurofixtures", description="Generate European group-stage fixtures from drawn groups")
+    @app_commands.describe(competition="European competition", season_year="Season start year (used if creating)", regenerate="Replace existing unplayed fixtures")
+    @app_commands.choices(competition=_euro_choices())
+    async def eurofixtures(self, interaction: discord.Interaction, competition: app_commands.Choice[str], season_year: int = 2026, regenerate: bool = False):
+        await interaction.response.defer(ephemeral=True)
+        ss = self.cog.bot.season_service
+        try:
+            season, _ = await self._get_or_create_euro_season(interaction, competition.value, season_year)
+            sid = str(season["id"])
+            # Ensure pots + groups exist
+            pot_res = await ss.get_european_pots(sid, competition.value)
+            pots = pot_res.get("pots") or []
+            if not any(len(p) > 0 for p in pots):
+                gen = await ss.generate_european_pots(season_id=sid, competition_key=competition.value, season_year=int(season.get("season_year") or season_year), guild_id=interaction.guild_id)
+                if not gen.get("ok"):
+                    await interaction.followup.send(embed=error_embed("Fixture Generation Failed", f"Could not generate pots: {gen.get('reason','unknown')}"), ephemeral=True)
+                    return
+            groups_res = await ss.get_european_groups(sid, competition.value)
+            if not (groups_res.get("groups") or []):
+                draw = await ss.draw_european_groups(season_id=sid, competition_key=competition.value)
+                if not draw.get("ok"):
+                    await interaction.followup.send(embed=error_embed("Fixture Generation Failed", f"Could not draw groups: {draw.get('detail') or draw.get('reason','unknown')}"), ephemeral=True)
+                    return
+            res = await ss.generate_european_group_stage_fixtures(season_id=sid, competition_key=competition.value, regenerate=bool(regenerate))
+            if not res.get("ok"):
+                reason = str(res.get("reason") or "unknown")
+                detail = str(res.get("detail") or reason)
+                await interaction.followup.send(embed=error_embed("Fixture Generation Failed", detail), ephemeral=True)
+                return
+            await interaction.followup.send(embed=success_embed(
+                f"{competition.name} Fixtures Generated",
+                f"Season: {season.get('name')} (`{sid}`)\n"
+                f"Groups: {res.get('groups')}\n"
+                f"Matchdays: {res.get('matchdays')}\n"
+                f"Fixtures created: {res.get('fixtures_created')}\n\n"
+                f"Use `/season euroshow competition:{competition.name}` to inspect and `/season eurovalidate` to validate."
+            ), ephemeral=True)
+        except Exception as e:
+            logger.exception("eurofixtures failed")
+            await interaction.followup.send(embed=error_embed("Fixture Generation Failed", str(e)), ephemeral=True)
+
+    @app_commands.command(name="euroshow", description="Show European competition pots, groups, or fixtures")
+    @app_commands.describe(competition="European competition", view="What to show", matchday="Matchday (for fixtures view)")
+    @app_commands.choices(competition=_euro_choices(), view=[
+        app_commands.Choice(name="Pots", value="pots"),
+        app_commands.Choice(name="Groups", value="groups"),
+        app_commands.Choice(name="Fixtures", value="fixtures"),
+    ])
+    async def euroshow(self, interaction: discord.Interaction, competition: app_commands.Choice[str], view: app_commands.Choice[str], matchday: int | None = None):
+        await interaction.response.defer(ephemeral=True)
+        ss = self.cog.bot.season_service
+        season = await ss.get_active_season(interaction.guild_id, league_key=competition.value)
+        if not season:
+            await interaction.followup.send(embed=error_embed("No Competition Season", f"No active {competition.name} season found. Run `/season europots` first."), ephemeral=True)
+            return
+        sid = str(season["id"])
+        try:
+            if view.value == "pots":
+                res = await ss.get_european_pots(sid, competition.value)
+                pots = res.get("pots") or []
+                if not any(len(p) > 0 for p in pots):
+                    await interaction.followup.send(embed=info_embed(f"{competition.name} Pots", "No pots generated yet. Use `/season europots`."), ephemeral=True)
+                    return
+                lines = [f"Season: {season.get('name')} (`{sid}`)"]
+                for i, pot in enumerate(pots, start=1):
+                    lines.append(f"\n**Pot {i}**")
+                    for t in pot:
+                        dom = LEAGUE_DISPLAY.get(str(t.get('domestic_league_key') or ''), t.get('domestic_league_key') or '?')
+                        lines.append(f"- {t.get('team_name')} ({dom})")
+                await interaction.followup.send(embed=info_embed(f"{competition.name} Pots", "\n".join(lines)[:3900]), ephemeral=True)
+                return
+            if view.value == "groups":
+                res = await ss.get_european_groups(sid, competition.value)
+                groups = res.get("groups") or []
+                if not groups:
+                    await interaction.followup.send(embed=info_embed(f"{competition.name} Groups", "No groups drawn yet. Use `/season eurodraw`."), ephemeral=True)
+                    return
+                lines = [f"Season: {season.get('name')} (`{sid}`)"]
+                for g in groups:
+                    lines.append(f"\n**Group {g.get('group_name')}**")
+                    for t in g.get("teams") or []:
+                        dom = LEAGUE_DISPLAY.get(str(t.get('domestic_league_key') or ''), t.get('domestic_league_key') or '?')
+                        pot = t.get('pot')
+                        lines.append(f"- Pot {pot}: {t.get('team_name')} ({dom})")
+                await interaction.followup.send(embed=info_embed(f"{competition.name} Groups", "\n".join(lines)[:3900]), ephemeral=True)
+                return
+            # fixtures
+            md = int(matchday) if matchday is not None else None
+            rows = await ss.get_fixtures(sid, matchday=md)
+            if not rows:
+                await interaction.followup.send(embed=info_embed(f"{competition.name} Fixtures", "No fixtures found. Use `/season eurofixtures`."), ephemeral=True)
+                return
+            lines = [f"Season: {season.get('name')} (`{sid}`)"]
+            if md is not None:
+                lines.append(f"Matchday: {md}")
+            for r in rows[:40]:
+                hs = r.get("home_score")
+                as_ = r.get("away_score")
+                score = f"{hs}-{as_}" if hs is not None and as_ is not None else "vs"
+                meta = {}
+                try:
+                    meta = json.loads(r.get("meta_json") or "{}")
+                except Exception:
+                    meta = {}
+                gname = meta.get("group") or "?"
+                tag = "✅" if r.get("status") == "played" else ("🟢" if r.get("status") == "live" else "🕒")
+                lines.append(f"{tag} `MD{int(r.get('matchday') or 0):>2}` G{gname} **{r.get('home_team_name')}** {score} **{r.get('away_team_name')}** _(id:{r.get('id')})_")
+            await interaction.followup.send(embed=info_embed(f"{competition.name} Fixtures", "\n".join(lines)[:3900]), ephemeral=True)
+        except Exception as e:
+            logger.exception("euroshow failed")
+            await interaction.followup.send(embed=error_embed("Show Failed", str(e)), ephemeral=True)
+
+    @app_commands.command(name="eurovalidate", description="Validate European competition pots, groups, and fixtures")
+    @app_commands.describe(competition="European competition")
+    @app_commands.choices(competition=_euro_choices())
+    async def eurovalidate(self, interaction: discord.Interaction, competition: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True)
+        ss = self.cog.bot.season_service
+        season = await ss.get_active_season(interaction.guild_id, league_key=competition.value)
+        if not season:
+            await interaction.followup.send(embed=error_embed("No Competition Season", f"No active {competition.name} season found."), ephemeral=True)
+            return
+        sid = str(season["id"])
+        try:
+            res = await ss.validate_european_competition(sid, competition.value)
+            counts = res.get("counts") or {}
+            lines = [
+                f"Season: {season.get('name')} (`{sid}`)",
+                f"Entries: {counts.get('entries',0)} | Groups: {counts.get('groups',0)} | Fixtures: {counts.get('fixtures',0)}",
+            ]
+            issues = res.get("issues") or []
+            warnings = res.get("warnings") or []
+            if issues:
+                lines.append("\n**Issues**")
+                for it in issues[:20]:
+                    lines.append(f"- {it}")
+            if warnings:
+                lines.append("\n**Warnings**")
+                for it in warnings[:10]:
+                    lines.append(f"- {it}")
+            if not issues and not warnings:
+                lines.append("\nNo issues found. Pots, groups, and fixtures look valid.")
+            embed = success_embed(f"{competition.name} Validation", "\n".join(lines)[:3900]) if res.get("ok") else error_embed(f"{competition.name} Validation", "\n".join(lines)[:3900])
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.exception("eurovalidate failed")
+            await interaction.followup.send(embed=error_embed("Validation Failed", str(e)), ephemeral=True)
+
 class SeasonCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -452,6 +760,60 @@ class SeasonCog(commands.Cog):
         for i, r in enumerate(rows, start=1):
             lines.append(f"`{i:>2}.` **{r.get('player_name','?')}** ({r.get('team_name','?')}) — {int(r.get('assists',0))}A {int(r.get('goals',0))}G, {float(r.get('avg_rating',0.0)):.2f} avg")
         await interaction.followup.send(embed=info_embed(f"Top Assisters — {season.get('name')}", "\n".join(lines)[:3900]), ephemeral=True)
+
+    @app_commands.command(name="resign", description="Resign from your currently claimed club/manager position")
+    async def resign(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        ss = self.bot.season_service
+        try:
+            team = await ss.get_user_team_in_active_season(interaction.guild_id, interaction.user.id)
+        except Exception:
+            logger.exception("resign: failed to resolve current team")
+            await interaction.followup.send(embed=error_embed("Resign Failed", "I couldn't check your current manager position. Please try again."), ephemeral=True)
+            return
+
+        if not team:
+            # Also check claim-only across guild-less context in case of DM/guild mismatch
+            try:
+                claim = await ss._get_user_team_claim(interaction.guild_id, interaction.user.id)
+                if claim:
+                    team = {
+                        "team_name": claim.get("team_name"),
+                        "team_api_id": claim.get("team_api_id"),
+                        "league_key": claim.get("league_key"),
+                    }
+            except Exception:
+                pass
+
+        if not team:
+            await interaction.followup.send(
+                embed=error_embed("No Claimed Team", "You don't currently manage a claimed club. Use `/claim` to take charge of an available team."),
+                ephemeral=True,
+            )
+            return
+
+        team_name = str(team.get("team_name") or "your club")
+        league_key = team.get("league_key") or team.get("season_league_key")
+        league_name = LEAGUE_DISPLAY.get(str(league_key), str(league_key or "League"))
+        team_label = f"{team_name} ({league_name})" if league_key else team_name
+
+        view = ResignConfirmView(
+            bot=self.bot,
+            user_id=int(interaction.user.id),
+            guild_id=interaction.guild_id,
+            team_label=team_label,
+        )
+        await interaction.followup.send(
+            embed=info_embed(
+                "Confirm Resignation",
+                f"You are about to resign as manager of **{team_label}**.\n\n"
+                "This will remove your claim/manager assignment for that club and make it vacant. "
+                "This action cannot be undone automatically.\n\n"
+                "Press **Confirm Resign** to proceed, or **Cancel** to keep your position."
+            ),
+            view=view,
+            ephemeral=True,
+        )
 
     @app_commands.command(name="archive", description="Archive the current active season for a league (admin only)")
     @app_commands.describe(league="League season to archive (optional; uses current active season if omitted)")

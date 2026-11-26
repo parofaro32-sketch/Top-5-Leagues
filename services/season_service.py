@@ -16,12 +16,55 @@ from services.lineup_service import auto_build_lineup
 logger = logging.getLogger(__name__)
 
 LEAGUE_KEYS = ["premier_league", "la_liga", "bundesliga", "serie_a", "ligue_1"]
+EUROPEAN_COMPETITION_KEYS = ["champions_league", "europa_league", "conference_league"]
+ALL_COMPETITION_KEYS = LEAGUE_KEYS + EUROPEAN_COMPETITION_KEYS
 LEAGUE_DISPLAY = {
     "premier_league": "Premier League",
     "la_liga": "La Liga",
     "bundesliga": "Bundesliga",
     "serie_a": "Serie A",
     "ligue_1": "Ligue 1",
+    "champions_league": "Champions League",
+    "europa_league": "Europa League",
+    "conference_league": "Conference League",
+}
+
+EUROPEAN_COMPETITION_CONFIG: dict[str, dict[str, Any]] = {
+    # Traditional 32-team group stage: 8 groups of 4, 4 pots of 8, double round robin.
+    # Same-association (domestic league) clashes avoided in group draw when possible.
+    "champions_league": {
+        "key": "champions_league",
+        "name": "UEFA Champions League",
+        "short_name": "UCL",
+        "team_count": 32,
+        "group_count": 8,
+        "teams_per_group": 4,
+        "pot_count": 4,
+        "pots_size": 8,
+        "double_round_robin": True,
+    },
+    "europa_league": {
+        "key": "europa_league",
+        "name": "UEFA Europa League",
+        "short_name": "UEL",
+        "team_count": 32,
+        "group_count": 8,
+        "teams_per_group": 4,
+        "pot_count": 4,
+        "pots_size": 8,
+        "double_round_robin": True,
+    },
+    "conference_league": {
+        "key": "conference_league",
+        "name": "UEFA Conference League",
+        "short_name": "UECL",
+        "team_count": 32,
+        "group_count": 8,
+        "teams_per_group": 4,
+        "pot_count": 4,
+        "pots_size": 8,
+        "double_round_robin": True,
+    },
 }
 
 # Fair, varied per-team budgets (no two teams identical, no overpowered budgets).
@@ -313,7 +356,7 @@ class SeasonService:
         return await self.get_season(str(season_id))
 
     async def create_season(self, *, guild_id: int | None, league_key: str, season_year: int, name: str | None = None, auto_advance: bool = False) -> dict[str, Any]:
-        if league_key not in LEAGUE_KEYS:
+        if league_key not in ALL_COMPETITION_KEYS:
             raise ValueError(f"Unsupported league_key: {league_key}")
         # Prevent duplicate active season for same guild+league
         existing = await self.db.fetchone(
@@ -322,6 +365,20 @@ class SeasonService:
         )
         if existing:
             raise ValueError(f"An active season already exists for {LEAGUE_DISPLAY.get(league_key, league_key)} in this guild. Use it or archive it first.")
+
+        # European competitions: create season shell; pots/fixtures generated separately.
+        if league_key in EUROPEAN_COMPETITION_KEYS:
+            season_id = _season_id()
+            now = utc_now_iso()
+            cfg = self.get_european_competition_config(league_key)
+            display = name or f"{cfg.get('name', LEAGUE_DISPLAY.get(league_key, league_key))} {season_year}/{str(season_year+1)[-2:]}"
+            rules = {"competition_type": "european_group_stage", "european": cfg}
+            await self.db.execute(
+                """INSERT INTO seasons(id,guild_id,league_key,season_year,name,status,current_matchday,total_matchdays,auto_advance,rules_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,'active',1,0,?,?, ?,?)""",
+                (season_id, guild_id, league_key, int(season_year), display, 1 if auto_advance else 0, json.dumps(rules), now, now),
+            )
+            return await self.get_season(season_id)  # type: ignore
 
         from data.football_data import list_all_teams
         teams = list_all_teams(league_key)
@@ -1567,6 +1624,108 @@ class SeasonService:
         updated = await self.get_season_team(season_id, team_api_id)
         return {"ok": True, "team": updated, "season_id": season_id}
 
+    async def resign_manager(self, *, guild_id: int | None, user_id: int) -> dict[str, Any]:
+        """Resign the user from all claimed teams in the given guild context.
+        Clears team_claims and season_teams.manager_user_id. Safe if no claims exist.
+        """
+        now = utc_now_iso()
+        uid = int(user_id)
+
+        # Collect team_claims for this guild (and also guild-less claims if guild is None)
+        if guild_id is None:
+            claim_rows = await self.db.fetchall("SELECT * FROM team_claims WHERE user_id=?", (uid,))
+        else:
+            claim_rows = await self.db.fetchall(
+                "SELECT * FROM team_claims WHERE COALESCE(guild_id,-1)=COALESCE(?,-1) AND user_id=?",
+                (guild_id, uid),
+            )
+        claims = [dict(r) for r in (claim_rows or [])]
+
+        # Also find season_teams managed by this user in seasons for this guild
+        if guild_id is None:
+            st_rows = await self.db.fetchall(
+                """SELECT st.*, s.league_key AS season_league_key, s.name AS season_name, s.guild_id AS season_guild_id
+                   FROM season_teams st
+                   JOIN seasons s ON s.id = st.season_id
+                   WHERE st.manager_user_id=?""",
+                (uid,),
+            )
+        else:
+            st_rows = await self.db.fetchall(
+                """SELECT st.*, s.league_key AS season_league_key, s.name AS season_name, s.guild_id AS season_guild_id
+                   FROM season_teams st
+                   JOIN seasons s ON s.id = st.season_id
+                   WHERE st.manager_user_id=? AND (s.guild_id IS ? OR s.guild_id IS NULL)""",
+                (uid, guild_id),
+            )
+        season_teams = [dict(r) for r in (st_rows or [])]
+
+        if not claims and not season_teams:
+            return {"ok": False, "reason": "no_claimed_team", "released": []}
+
+        released: list[dict[str, Any]] = []
+        seen: set[tuple[str | None, int]] = set()
+
+        # Clear season team manager assignments
+        for st in season_teams:
+            sid = str(st.get("season_id") or "")
+            tid = int(st.get("team_api_id") or 0)
+            key = (sid, tid)
+            if not sid or not tid or key in seen:
+                continue
+            seen.add(key)
+            await self.db.execute(
+                "UPDATE season_teams SET manager_user_id=NULL, is_user_controlled=0, updated_at=? WHERE season_id=? AND team_api_id=? AND manager_user_id=?",
+                (now, sid, tid, uid),
+            )
+            released.append({
+                "team_api_id": tid,
+                "team_name": st.get("team_name"),
+                "league_key": st.get("league_key") or st.get("season_league_key"),
+                "season_id": sid,
+                "season_name": st.get("season_name"),
+                "source": "season_team",
+            })
+
+        # Delete team_claims
+        for c in claims:
+            lk = str(c.get("league_key") or "")
+            tid = int(c.get("team_api_id") or 0)
+            if not lk or not tid:
+                continue
+            await self.db.execute(
+                "DELETE FROM team_claims WHERE id=? AND user_id=?",
+                (int(c.get("id") or 0), uid),
+            )
+            # avoid duplicate in released list
+            if not any(int(r.get("team_api_id") or 0) == tid and str(r.get("league_key") or "") == lk for r in released):
+                released.append({
+                    "team_api_id": tid,
+                    "team_name": c.get("team_name"),
+                    "league_key": lk,
+                    "season_id": None,
+                    "season_name": None,
+                    "source": "team_claim",
+                })
+
+        # Also clear any season_teams in same guild that match released team_api_ids but weren't caught (defensive)
+        released_tids = {int(r.get("team_api_id") or 0) for r in released if int(r.get("team_api_id") or 0)}
+        if released_tids and guild_id is not None:
+            for tid in released_tids:
+                await self.db.execute(
+                    """UPDATE season_teams SET manager_user_id=NULL, is_user_controlled=0, updated_at=?
+                       WHERE team_api_id=? AND manager_user_id=? AND season_id IN (SELECT id FROM seasons WHERE guild_id IS ? OR guild_id IS NULL)""",
+                    (now, int(tid), uid, guild_id),
+                )
+        elif released_tids and guild_id is None:
+            for tid in released_tids:
+                await self.db.execute(
+                    "UPDATE season_teams SET manager_user_id=NULL, is_user_controlled=0, updated_at=? WHERE team_api_id=? AND manager_user_id=?",
+                    (now, int(tid), uid),
+                )
+
+        return {"ok": True, "released": released}
+
     async def list_claimed_teams(self, guild_id: int | None, league_key: str | None = None) -> list[dict[str, Any]]:
         async def _collect(status: str | None):
             seasons = await self.list_seasons(guild_id=guild_id, status=status)
@@ -1727,3 +1886,653 @@ class SeasonService:
             }
             return d
         return None
+
+    # ------------------------------------------------------------------
+    # European competitions (UCL / UEL / UECL)
+    # ------------------------------------------------------------------
+
+    def get_european_competition_config(self, competition_key: str) -> dict[str, Any]:
+        cfg = EUROPEAN_COMPETITION_CONFIG.get(str(competition_key))
+        if not cfg:
+            raise ValueError(f"Unsupported European competition: {competition_key}")
+        return dict(cfg)
+
+    async def _team_seed_rating(self, team_api_id: int, season_year: int = 2026) -> float:
+        """Deterministic seed rating fallback (higher = stronger).
+        Uses average overall of top 16 players in DB; falls back to 70.0.
+        """
+        rows = await self.db.fetchall(
+            "SELECT overall, potential, market_value FROM players WHERE team_api_id=? AND season=?",
+            (int(team_api_id), int(season_year)),
+        )
+        vals: list[float] = []
+        mv = 0.0
+        for r in rows or []:
+            d = dict(r)
+            try:
+                ov = float(d.get("overall") or 0)
+            except Exception:
+                ov = 0.0
+            if ov > 0:
+                vals.append(ov)
+            try:
+                mv += float(d.get("market_value") or 0)
+            except Exception:
+                pass
+        vals.sort(reverse=True)
+        top = vals[:16] if vals else []
+        base = (sum(top) / len(top)) if top else 70.0
+        # small market value bonus, capped so it doesn't dominate
+        mv_bonus = min(5.0, (mv / 500_000_000.0) * 5.0) if mv > 0 else 0.0
+        return round(base + mv_bonus, 4)
+
+    async def _get_domestic_league_key_for_team(self, team_api_id: int, season_year: int = 2026) -> str | None:
+        row = await self.db.fetchone(
+            "SELECT league_name FROM teams WHERE api_id=? AND season=? ORDER BY updated_at DESC LIMIT 1",
+            (int(team_api_id), int(season_year)),
+        )
+        if not row:
+            row = await self.db.fetchone(
+                "SELECT league_name FROM teams WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1",
+                (int(team_api_id),),
+            )
+        if not row:
+            return None
+        lname = str(dict(row).get("league_name") or "").strip().lower()
+        inv = {str(v).lower(): k for k, v in LEAGUE_DISPLAY.items()}
+        inv.update({
+            "english premier league": "premier_league",
+            "premier league": "premier_league",
+            "la liga": "la_liga",
+            "bundesliga": "bundesliga",
+            "serie a": "serie_a",
+            "ligue 1": "ligue_1",
+        })
+        return inv.get(lname)
+
+    async def get_eligible_european_teams(
+        self,
+        competition_key: str,
+        *,
+        season_year: int = 2026,
+        guild_id: int | None = None,
+        max_per_league: int = 7,
+    ) -> list[dict[str, Any]]:
+        cfg = self.get_european_competition_config(competition_key)
+        team_count = int(cfg["team_count"])
+
+        # gather teams from all 5 domestic leagues
+        league_to_teams: dict[str, list[dict[str, Any]]] = {k: [] for k in LEAGUE_KEYS}
+        for lk in LEAGUE_KEYS:
+            rows = await self.db.fetchall(
+                "SELECT api_id, name, short_name, code, logo, league_name FROM teams WHERE season=? AND lower(league_name)=lower(?)",
+                (int(season_year), str(LEAGUE_DISPLAY.get(lk, lk))),
+            )
+            if not rows:
+                # fallback by matching league_name variants
+                all_rows = await self.db.fetchall("SELECT api_id, name, short_name, code, logo, league_name FROM teams WHERE season=?", (int(season_year),))
+                for rr in all_rows or []:
+                    d = dict(rr)
+                    if self._norm_league_to_key(str(d.get("league_name") or "")) == lk:
+                        rows = (rows or []) + [rr]
+            seen = set()
+            for rr in rows or []:
+                d = dict(rr)
+                tid = int(d.get("api_id") or 0)
+                if not tid or tid in seen:
+                    continue
+                seen.add(tid)
+                league_to_teams[lk].append({
+                    "team_api_id": tid,
+                    "team_name": str(d.get("name") or tid),
+                    "short_name": d.get("short_name") or d.get("code"),
+                    "logo": d.get("logo"),
+                    "domestic_league_key": lk,
+                })
+
+        # if DB has no teams, try bundled
+        if not any(league_to_teams.values()):
+            try:
+                from data.football_data import list_all_teams
+                for lk in LEAGUE_KEYS:
+                    for t in list_all_teams(lk) or []:
+                        tid = int(t.get("api_id") or 0)
+                        if not tid:
+                            continue
+                        league_to_teams[lk].append({
+                            "team_api_id": tid,
+                            "team_name": str(t.get("name") or tid),
+                            "short_name": t.get("short_name") or t.get("code"),
+                            "logo": t.get("logo"),
+                            "domestic_league_key": lk,
+                        })
+            except Exception:
+                pass
+
+        # score all teams
+        all_scored: list[dict[str, Any]] = []
+        for lk, teams in league_to_teams.items():
+            for t in teams:
+                rating = await self._team_seed_rating(int(t["team_api_id"]), season_year=season_year)
+                item = dict(t)
+                item["seed_rating"] = float(rating)
+                item["domestic_league_key"] = lk
+                all_scored.append(item)
+
+        # rank within league and pick top per league with cap, then fill remainder by global rating
+        per_league_picks: list[dict[str, Any]] = []
+        per_league_count: dict[str, int] = {k: 0 for k in LEAGUE_KEYS}
+        # base allocation: distribute evenly, then give extras to stronger leagues
+        base = team_count // len(LEAGUE_KEYS)
+        rem = team_count % len(LEAGUE_KEYS)
+        league_strength = []
+        for lk in LEAGUE_KEYS:
+            vals = sorted([float(x.get("seed_rating") or 0) for x in all_scored if x.get("domestic_league_key") == lk], reverse=True)
+            topn = vals[:6]
+            league_strength.append((sum(topn) / len(topn) if topn else 0.0, lk))
+        league_strength.sort(reverse=True)
+        allocation = {lk: base for lk in LEAGUE_KEYS}
+        for i in range(rem):
+            allocation[league_strength[i % len(league_strength)][1]] += 1
+        # cap
+        for lk in allocation:
+            allocation[lk] = min(int(max_per_league), int(allocation[lk]))
+
+        for lk in LEAGUE_KEYS:
+            pool = [x for x in all_scored if x.get("domestic_league_key") == lk]
+            pool.sort(key=lambda x: (-float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
+            take = allocation.get(lk, 0)
+            chosen = pool[:take]
+            per_league_picks.extend(chosen)
+            per_league_count[lk] = len(chosen)
+
+        # fill remaining slots globally (respect cap)
+        if len(per_league_picks) < team_count:
+            picked_ids = {int(x["team_api_id"]) for x in per_league_picks}
+            rest = [x for x in all_scored if int(x["team_api_id"]) not in picked_ids]
+            rest.sort(key=lambda x: (-float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
+            for x in rest:
+                if len(per_league_picks) >= team_count:
+                    break
+                lk = str(x.get("domestic_league_key") or "")
+                if per_league_count.get(lk, 0) >= int(max_per_league):
+                    continue
+                per_league_picks.append(x)
+                per_league_count[lk] = per_league_count.get(lk, 0) + 1
+                picked_ids.add(int(x["team_api_id"]))
+
+        # final deterministic ordering
+        per_league_picks.sort(key=lambda x: (-float(x.get("seed_rating") or 0), str(x.get("team_name") or "")))
+        out = per_league_picks[:team_count]
+        # assign stable seed rank
+        for i, t in enumerate(out, start=1):
+            t["seed_rank"] = i
+        return out
+
+    def _norm_league_to_key(self, league_name: str) -> str | None:
+        lname = str(league_name or "").strip().lower()
+        inv = {str(v).lower(): k for k, v in LEAGUE_DISPLAY.items()}
+        inv.update({
+            "english premier league": "premier_league",
+            "premier league": "premier_league",
+            "la liga": "la_liga",
+            "bundesliga": "bundesliga",
+            "serie a": "serie_a",
+            "ligue 1": "ligue_1",
+        })
+        return inv.get(lname)
+
+    async def generate_european_pots(
+        self,
+        *,
+        season_id: str,
+        competition_key: str,
+        season_year: int = 2026,
+        guild_id: int | None = None,
+        max_per_league: int = 7,
+    ) -> dict[str, Any]:
+        cfg = self.get_european_competition_config(competition_key)
+        team_count = int(cfg["team_count"])
+        pot_count = int(cfg["pot_count"])
+        pot_size = int(cfg["pots_size"])
+        if pot_count * pot_size != team_count:
+            raise ValueError("Invalid European competition config: pot_count * pots_size != team_count")
+
+        teams = await self.get_eligible_european_teams(competition_key, season_year=season_year, guild_id=guild_id, max_per_league=max_per_league)
+        if len(teams) < team_count:
+            return {
+                "ok": False,
+                "reason": "insufficient_teams",
+                "needed": team_count,
+                "found": len(teams),
+                "teams": teams,
+            }
+
+        teams = teams[:team_count]
+        pots: list[list[dict[str, Any]]] = []
+        for p in range(pot_count):
+            chunk = teams[p * pot_size:(p + 1) * pot_size]
+            for t in chunk:
+                t["pot"] = p + 1
+            pots.append(chunk)
+
+        # persist
+        now = utc_now_iso()
+        await self.db.execute(
+            "DELETE FROM competition_entries WHERE season_id=? AND competition_key=?",
+            (str(season_id), str(competition_key)),
+        )
+        for pot in pots:
+            for t in pot:
+                await self.db.execute(
+                    """INSERT OR REPLACE INTO competition_entries(
+                        season_id, competition_key, team_api_id, team_name, domestic_league_key, pot, group_name, seed_rating, created_at, updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        str(season_id),
+                        str(competition_key),
+                        int(t["team_api_id"]),
+                        str(t.get("team_name") or ""),
+                        t.get("domestic_league_key"),
+                        int(t.get("pot") or 0),
+                        None,
+                        float(t.get("seed_rating") or 0.0),
+                        now,
+                        now,
+                    ),
+                )
+        return {"ok": True, "competition_key": competition_key, "season_id": str(season_id), "pots": pots, "team_count": len(teams)}
+
+    async def get_european_pots(self, season_id: str, competition_key: str) -> dict[str, Any]:
+        cfg = self.get_european_competition_config(competition_key)
+        rows = await self.db.fetchall(
+            "SELECT * FROM competition_entries WHERE season_id=? AND competition_key=? ORDER BY pot ASC, seed_rating DESC, team_name ASC",
+            (str(season_id), str(competition_key)),
+        )
+        entries = [dict(r) for r in (rows or [])]
+        pots: dict[int, list[dict[str, Any]]] = {}
+        for e in entries:
+            p = int(e.get("pot") or 0)
+            if p <= 0:
+                continue
+            pots.setdefault(p, []).append(e)
+        ordered_pots = [pots.get(i, []) for i in range(1, int(cfg["pot_count"]) + 1)]
+        return {"ok": True, "competition_key": competition_key, "season_id": str(season_id), "config": cfg, "pots": ordered_pots, "entries": entries}
+
+    async def draw_european_groups(
+        self,
+        *,
+        season_id: str,
+        competition_key: str,
+        seed: int | None = None,
+        max_attempts: int = 2000,
+    ) -> dict[str, Any]:
+        cfg = self.get_european_competition_config(competition_key)
+        pot_data = await self.get_european_pots(season_id, competition_key)
+        pots = pot_data.get("pots") or []
+        if not pots or any(len(p) == 0 for p in pots):
+            return {"ok": False, "reason": "pots_not_generated", "detail": "Generate pots before drawing groups."}
+
+        group_count = int(cfg["group_count"])
+        teams_per_group = int(cfg["teams_per_group"])
+        pot_count = int(cfg["pot_count"])
+        # Flatten validation
+        all_teams = [t for pot in pots for t in pot]
+        if len(all_teams) != group_count * teams_per_group:
+            return {"ok": False, "reason": "invalid_pot_size", "found": len(all_teams), "expected": group_count * teams_per_group}
+        team_ids = [int(t.get("team_api_id") or 0) for t in all_teams]
+        if len(set(team_ids)) != len(team_ids):
+            return {"ok": False, "reason": "duplicate_teams_in_pots"}
+
+        rng = random.Random(seed)
+
+        def _can_place(group: list[dict[str, Any]], team: dict[str, Any]) -> bool:
+            # One per pot already enforced by construction; enforce same-association constraint
+            dom = str(team.get("domestic_league_key") or "")
+            if not dom:
+                return True
+            for g in group:
+                if str(g.get("domestic_league_key") or "") == dom:
+                    return False
+            return True
+
+        # Build pot lists (copy)
+        pot_lists = [[dict(x) for x in pot] for pot in pots]
+        for pl in pot_lists:
+            rng.shuffle(pl)
+
+        best_groups: list[list[dict[str, Any]]] | None = None
+        best_conflicts = 10**9
+
+        for _attempt in range(max(1, int(max_attempts))):
+            groups: list[list[dict[str, Any]]] = [[] for _ in range(group_count)]
+            ok = True
+            # For each pot, assign one team to each group
+            for pi in range(pot_count):
+                candidates = list(pot_lists[pi])
+                rng.shuffle(candidates)
+                # order groups by fewest options first (heuristic)
+                group_order = list(range(group_count))
+                rng.shuffle(group_order)
+
+                assignment: dict[int, dict[str, Any]] = {}
+                used: set[int] = set()
+
+                def _backtrack(g_idx_list: list[int], pos: int) -> bool:
+                    if pos >= len(g_idx_list):
+                        return True
+                    gi = g_idx_list[pos]
+                    # try candidates with fewest valid placements? simple: shuffle candidates
+                    opts = [c for c in candidates if int(c.get("team_api_id") or 0) not in used and _can_place(groups[gi], c)]
+                    rng.shuffle(opts)
+                    for cand in opts:
+                        tid = int(cand.get("team_api_id") or 0)
+                        groups[gi].append(cand)
+                        used.add(tid)
+                        assignment[gi] = cand
+                        if _backtrack(g_idx_list, pos + 1):
+                            return True
+                        used.remove(tid)
+                        groups[gi].pop()
+                        assignment.pop(gi, None)
+                    return False
+
+                # heuristic: groups with most constraints first
+                g_order2 = sorted(group_order, key=lambda gi: sum(1 for c in candidates if _can_place(groups[gi], c)))
+                if not _backtrack(g_order2, 0):
+                    ok = False
+                    break
+
+            if ok:
+                best_groups = groups
+                best_conflicts = 0
+                break
+            # keep best (least conflicts) as fallback report; but we won't save invalid
+            # compute conflicts
+            conflicts = 0
+            for g in groups:
+                seen = {}
+                for t in g:
+                    dom = str(t.get("domestic_league_key") or "")
+                    if not dom:
+                        continue
+                    seen[dom] = seen.get(dom, 0) + 1
+                for v in seen.values():
+                    if v > 1:
+                        conflicts += (v - 1)
+            if conflicts < best_conflicts:
+                best_conflicts = conflicts
+
+        if best_groups is None:
+            return {
+                "ok": False,
+                "reason": "draw_infeasible",
+                "detail": "Could not generate a valid draw respecting same-association constraints. Try again or adjust configuration.",
+                "attempts": int(max_attempts),
+            }
+
+        # Persist group assignments
+        now = utc_now_iso()
+        group_names = [chr(ord("A") + i) for i in range(group_count)]
+        await self.db.execute(
+            "UPDATE competition_entries SET group_name=NULL, updated_at=? WHERE season_id=? AND competition_key=?",
+            (now, str(season_id), str(competition_key)),
+        )
+        for gi, group in enumerate(best_groups):
+            gname = group_names[gi]
+            for t in group:
+                await self.db.execute(
+                    "UPDATE competition_entries SET group_name=?, updated_at=? WHERE season_id=? AND competition_key=? AND team_api_id=?",
+                    (gname, now, str(season_id), str(competition_key), int(t.get("team_api_id") or 0)),
+                )
+
+        groups_out = []
+        for gi, group in enumerate(best_groups):
+            groups_out.append({
+                "group_name": group_names[gi],
+                "teams": group,
+            })
+        return {"ok": True, "season_id": str(season_id), "competition_key": str(competition_key), "groups": groups_out}
+
+    async def get_european_groups(self, season_id: str, competition_key: str) -> dict[str, Any]:
+        cfg = self.get_european_competition_config(competition_key)
+        rows = await self.db.fetchall(
+            "SELECT * FROM competition_entries WHERE season_id=? AND competition_key=? ORDER BY group_name ASC, pot ASC, seed_rating DESC",
+            (str(season_id), str(competition_key)),
+        )
+        entries = [dict(r) for r in (rows or [])]
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for e in entries:
+            g = str(e.get("group_name") or "").strip()
+            if not g:
+                continue
+            groups.setdefault(g, []).append(e)
+        ordered = [{"group_name": k, "teams": v} for k, v in sorted(groups.items())]
+        return {"ok": True, "season_id": str(season_id), "competition_key": str(competition_key), "config": cfg, "groups": ordered, "entries": entries}
+
+    async def generate_european_group_stage_fixtures(
+        self,
+        *,
+        season_id: str,
+        competition_key: str,
+        regenerate: bool = False,
+    ) -> dict[str, Any]:
+        cfg = self.get_european_competition_config(competition_key)
+        groups_res = await self.get_european_groups(season_id, competition_key)
+        groups = groups_res.get("groups") or []
+        if not groups:
+            return {"ok": False, "reason": "groups_not_drawn", "detail": "Draw groups before generating fixtures."}
+
+        # Validate groups
+        expected_groups = int(cfg["group_count"])
+        expected_tpg = int(cfg["teams_per_group"])
+        if len(groups) != expected_groups:
+            return {"ok": False, "reason": "invalid_group_count", "found": len(groups), "expected": expected_groups}
+        for g in groups:
+            if len(g.get("teams") or []) != expected_tpg:
+                return {"ok": False, "reason": "invalid_group_size", "group": g.get("group_name"), "found": len(g.get("teams") or []), "expected": expected_tpg}
+
+        # Check existing fixtures
+        existing = await self.db.fetchall(
+            "SELECT id, matchday, home_team_api_id, away_team_api_id, status FROM fixtures WHERE season_id=? AND league_key=?",
+            (str(season_id), str(competition_key)),
+        )
+        existing = [dict(r) for r in (existing or [])]
+        if existing and not regenerate:
+            return {"ok": False, "reason": "fixtures_already_exist", "existing_count": len(existing), "detail": "Fixtures already exist. Pass regenerate=True to replace them safely."}
+
+        # Regenerate safely: delete only fixtures for this season+competition
+        if existing and regenerate:
+            # Do not delete played/live fixtures by default? Safer to refuse if any played/live
+            locked = [f for f in existing if str(f.get("status") or "") in {"played", "live"} or int(f.get("finalized") or 0) == 1]
+            if locked:
+                return {"ok": False, "reason": "cannot_regenerate_played_fixtures", "locked_count": len(locked)}
+            await self.db.execute(
+                "DELETE FROM fixtures WHERE season_id=? AND league_key=?",
+                (str(season_id), str(competition_key)),
+            )
+
+        now = utc_now_iso()
+        all_fixtures: list[dict[str, Any]] = []
+        # Generate per-group round robin and merge by matchday
+        group_matchdays: list[list[dict[str, Any]]] = []
+        max_md = 0
+        for g in groups:
+            gname = str(g.get("group_name"))
+            teams = g.get("teams") or []
+            team_ids = [int(t.get("team_api_id") or 0) for t in teams]
+            by_id = {int(t.get("team_api_id") or 0): t for t in teams}
+            pairs_by_md = round_robin_pairs(team_ids)
+            if cfg.get("double_round_robin", True) is False:
+                # single round robin - keep as is? round_robin_pairs already returns double (home+away) for even n
+                # For single, take first half. But typical is double. Config says double_round_robin True.
+                half = len(pairs_by_md) // 2
+                pairs_by_md = pairs_by_md[:half]
+            max_md = max(max_md, len(pairs_by_md))
+            for md_idx, pairs in enumerate(pairs_by_md, start=1):
+                for home_id, away_id in pairs:
+                    ht = by_id.get(int(home_id), {})
+                    at = by_id.get(int(away_id), {})
+                    rec = {
+                        "season_id": str(season_id),
+                        "league_key": str(competition_key),
+                        "matchday": int(md_idx),
+                        "home_team_api_id": int(home_id),
+                        "away_team_api_id": int(away_id),
+                        "home_team_name": str(ht.get("team_name") or home_id),
+                        "away_team_name": str(at.get("team_name") or away_id),
+                        "group_name": gname,
+                    }
+                    all_fixtures.append(rec)
+
+        # Insert fixtures
+        for f in all_fixtures:
+            meta = {"group": f.get("group_name"), "stage": "group_stage", "competition_key": str(competition_key)}
+            await self.db.execute(
+                """INSERT OR REPLACE INTO fixtures(
+                    season_id,league_key,matchday,home_team_api_id,away_team_api_id,home_team_name,away_team_name,
+                    home_score,away_score,status,match_id,kickoff_at,finalized_at,finalized,meta_json,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,NULL,NULL,'pending',NULL,NULL,NULL,0,?,?,?)""",
+                (
+                    str(f["season_id"]), str(f["league_key"]), int(f["matchday"]),
+                    int(f["home_team_api_id"]), int(f["away_team_api_id"]),
+                    str(f["home_team_name"]), str(f["away_team_name"]),
+                    json.dumps(meta), now, now,
+                ),
+            )
+
+        # Ensure season exists/updated
+        season = await self.get_season(str(season_id))
+        if season:
+            try:
+                await self.db.execute(
+                    "UPDATE seasons SET total_matchdays=?, updated_at=? WHERE id=?",
+                    (max(int(season.get("total_matchdays") or 0), max_md), now, str(season_id)),
+                )
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "season_id": str(season_id),
+            "competition_key": str(competition_key),
+            "fixtures_created": len(all_fixtures),
+            "matchdays": max_md,
+            "groups": len(groups),
+        }
+
+    async def validate_european_competition(self, season_id: str, competition_key: str) -> dict[str, Any]:
+        cfg = self.get_european_competition_config(competition_key)
+        pot_res = await self.get_european_pots(season_id, competition_key)
+        groups_res = await self.get_european_groups(season_id, competition_key)
+        entries = pot_res.get("entries") or []
+        groups = groups_res.get("groups") or []
+        fixtures = await self.db.fetchall(
+            "SELECT * FROM fixtures WHERE season_id=? AND league_key=? ORDER BY matchday ASC, id ASC",
+            (str(season_id), str(competition_key)),
+        )
+        fixtures = [dict(r) for r in (fixtures or [])]
+
+        issues: list[str] = []
+        warnings: list[str] = []
+
+        team_count = int(cfg["team_count"])
+        if len(entries) != team_count:
+            issues.append(f"Expected {team_count} entries, found {len(entries)}.")
+        # duplicates
+        tids = [int(e.get("team_api_id") or 0) for e in entries]
+        if len(set(tids)) != len(tids):
+            issues.append("Duplicate teams found in competition entries.")
+        # pot sizes
+        pot_count = int(cfg["pot_count"])
+        pot_size = int(cfg["pots_size"])
+        for p in range(1, pot_count + 1):
+            c = sum(1 for e in entries if int(e.get("pot") or 0) == p)
+            if c != pot_size:
+                issues.append(f"Pot {p} has {c} teams, expected {pot_size}.")
+        # groups
+        if len(groups) != int(cfg["group_count"]):
+            issues.append(f"Expected {cfg['group_count']} groups, found {len(groups)}.")
+        for g in groups:
+            gteams = g.get("teams") or []
+            if len(gteams) != int(cfg["teams_per_group"]):
+                issues.append(f"Group {g.get('group_name')} has {len(gteams)} teams, expected {cfg['teams_per_group']}.")
+            # same-association check
+            doms = [str(t.get("domestic_league_key") or "") for t in gteams if t.get("domestic_league_key")]
+            dup_doms = {d for d in doms if doms.count(d) > 1}
+            if dup_doms:
+                issues.append(f"Group {g.get('group_name')} violates same-association constraint: {', '.join(sorted(dup_doms))}.")
+            # pot coverage
+            pots_seen = sorted({int(t.get("pot") or 0) for t in gteams})
+            if pots_seen != list(range(1, pot_count + 1)):
+                warnings.append(f"Group {g.get('group_name')} pot coverage: {pots_seen}.")
+
+        # fixtures validation
+        group_team_ids: dict[str, set[int]] = {}
+        for g in groups:
+            group_team_ids[str(g.get("group_name"))] = {int(t.get("team_api_id") or 0) for t in (g.get("teams") or [])}
+
+        seen_pairs = set()
+        for f in fixtures:
+            meta = {}
+            try:
+                meta = json.loads(f.get("meta_json") or "{}")
+            except Exception:
+                meta = {}
+            gname = str(meta.get("group") or "")
+            hid = int(f.get("home_team_api_id") or 0)
+            aid = int(f.get("away_team_api_id") or 0)
+            md = int(f.get("matchday") or 0)
+            pair = (md, hid, aid)
+            if pair in seen_pairs:
+                issues.append(f"Duplicate fixture: MD{md} {hid} vs {aid}.")
+            seen_pairs.add(pair)
+            if hid == aid:
+                issues.append(f"Self-match in fixture {f.get('id')}.")
+            if gname and gname in group_team_ids:
+                if hid not in group_team_ids[gname] or aid not in group_team_ids[gname]:
+                    issues.append(f"Fixture {f.get('id')} has team outside group {gname}.")
+            # same-association constraint in fixture (should already be enforced by group)
+            hdom = None
+            adom = None
+            for e in entries:
+                if int(e.get("team_api_id") or 0) == hid:
+                    hdom = str(e.get("domestic_league_key") or "")
+                if int(e.get("team_api_id") or 0) == aid:
+                    adom = str(e.get("domestic_league_key") or "")
+            if hdom and adom and hdom == adom:
+                issues.append(f"Fixture {f.get('id')} violates same-association constraint ({hdom}).")
+
+        # per-team fixture count
+        for g in groups:
+            gteams = g.get("teams") or []
+            gname = str(g.get("group_name"))
+            expected_per_team = (len(gteams) - 1) * (2 if cfg.get("double_round_robin", True) else 1)
+            for t in gteams:
+                tid = int(t.get("team_api_id") or 0)
+                c = 0
+                for f in fixtures:
+                    meta = {}
+                    try:
+                        meta = json.loads(f.get("meta_json") or "{}")
+                    except Exception:
+                        meta = {}
+                    if str(meta.get("group") or "") != gname:
+                        continue
+                    if int(f.get("home_team_api_id") or 0) == tid or int(f.get("away_team_api_id") or 0) == tid:
+                        c += 1
+                if c != expected_per_team and fixtures:
+                    issues.append(f"{t.get('team_name')} in Group {gname} has {c} fixtures, expected {expected_per_team}.")
+
+        return {
+            "ok": len(issues) == 0,
+            "competition_key": str(competition_key),
+            "season_id": str(season_id),
+            "issues": issues,
+            "warnings": warnings,
+            "counts": {
+                "entries": len(entries),
+                "groups": len(groups),
+                "fixtures": len(fixtures),
+            },
+        }

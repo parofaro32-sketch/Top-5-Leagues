@@ -741,37 +741,69 @@ class ClubCog(commands.Cog):
             # Season evidence for verification when available
             season_evidence = {}
             try:
-                st_rows = await self.bot.db.fetchall(
-                    "SELECT team_api_id, position, played, won, drawn, lost, gf, ga, gd, points, team_name FROM season_teams WHERE season_id=? ORDER BY position ASC",
-                    (season_id,),
-                )
-                st_rows = [dict(r) for r in st_rows]
-                total_teams = len(st_rows)
-                my_row = next((r for r in st_rows if int(r.get("team_api_id") or 0) == team_id), None)
-                if my_row is None:
-                    my_row = next((r for r in st_rows if str(r.get("team_name") or "").strip().lower() == team_name.strip().lower()), None)
-                if my_row is None:
-                    st_rows2 = await self.bot.db.fetchall("SELECT * FROM season_teams WHERE season_id=? AND team_api_id=?", (season_id, team_id))
-                    if st_rows2:
-                        my_row = dict(st_rows2[0])
-                        # compute position by points if missing
-                        if my_row.get("position") is None and total_teams:
-                            # rough: count teams with better sort key
-                            pass
-                played_rows = await self.bot.db.fetchall("SELECT status FROM fixtures WHERE season_id=?", (season_id,))
+                # Use standings (not season_teams) for position/points
+                try:
+                    standings = await self.bot.season_service.get_standings(season_id)
+                except Exception:
+                    standings = []
+                my_st = next((r for r in standings if int(r.get("team_api_id") or 0) == team_id), None)
+                my_position = int(my_st.get("rank") or 0) if my_st and my_st.get("rank") is not None else None
+                if my_position is None and my_st is not None:
+                    # fallback: compute rank index
+                    for i, r in enumerate(standings, start=1):
+                        if int(r.get("team_api_id") or 0) == team_id:
+                            my_position = i
+                            break
+
+                played_rows = await self.bot.db.fetchall("SELECT status, home_team_api_id, away_team_api_id, league_key, meta_json FROM fixtures WHERE season_id=?", (season_id,))
                 played_rows = [dict(r) for r in played_rows]
                 total_fixtures = len(played_rows)
-                played_fixtures = sum(1 for r in played_rows if str(r.get("status") or "") in {"played", "completed", "finalized"})
+                played_fixtures = sum(1 for r in played_rows if str(r.get("status") or "") in {"played", "completed", "finalized", "ft"})
+
+                # squad context
+                squad_size = 0
+                injured_count = 0
+                avg_overall = None
+                try:
+                    s_year = int((season or {}).get("season_year") or 2026)
+                    prow = await self.bot.db.fetchall(
+                        "SELECT overall, injured, status FROM players WHERE team_api_id=? AND season=?",
+                        (team_id, s_year),
+                    )
+                    prow = [dict(r) for r in (prow or [])]
+                    squad_size = len(prow)
+                    injured_count = sum(1 for p in prow if int(p.get("injured") or 0) == 1 or str(p.get("status") or "").lower() in {"injured", "out"})
+                    ovs = [float(p.get("overall") or 0) for p in prow if float(p.get("overall") or 0) > 0]
+                    avg_overall = (sum(ovs) / len(ovs)) if ovs else None
+                except Exception:
+                    pass
+
+                # multi-competition workload (other active seasons/fixtures for same teams?)
+                comp_count = 1
+                try:
+                    other_fixt = await self.bot.db.fetchall(
+                        "SELECT DISTINCT league_key FROM fixtures WHERE (home_team_api_id=? OR away_team_api_id=?) AND status IN ('pending','live')",
+                        (team_id, team_id),
+                    )
+                    comp_count = max(1, len({str(dict(r).get("league_key") or "") for r in (other_fixt or []) if str(dict(r).get("league_key") or "")}))
+                except Exception:
+                    pass
+
                 season_evidence = {
-                    "total_teams": total_teams,
-                    "my_position": int(my_row.get("position") or 0) if my_row else None,
-                    "my_points": int(my_row.get("points") or 0) if my_row else None,
-                    "my_played": int(my_row.get("played") or 0) if my_row else None,
-                    "my_won": int(my_row.get("won") or 0) if my_row else None,
-                    "my_drawn": int(my_row.get("drawn") or 0) if my_row else None,
-                    "my_lost": int(my_row.get("lost") or 0) if my_row else None,
+                    "total_teams": len(standings),
+                    "my_position": my_position,
+                    "my_points": int(my_st.get("points") or 0) if my_st else None,
+                    "my_played": int(my_st.get("played") or 0) if my_st else None,
+                    "my_won": int(my_st.get("won") or 0) if my_st else None,
+                    "my_drawn": int(my_st.get("drawn") or 0) if my_st else None,
+                    "my_lost": int(my_st.get("lost") or 0) if my_st else None,
+                    "my_gd": int(my_st.get("goal_difference") or 0) if my_st else None,
                     "total_fixtures": total_fixtures,
                     "played_fixtures": played_fixtures,
+                    "squad_size": squad_size,
+                    "injured_count": injured_count,
+                    "avg_overall": round(avg_overall, 1) if avg_overall is not None else None,
+                    "competition_count": comp_count,
                 }
             except Exception:
                 logger.exception("Failed to collect season evidence for board request")
@@ -815,48 +847,166 @@ class ClubCog(commands.Cog):
             if (achievement_insurance or explicit_insurance) and not clear_need and len(reason.strip()) >= 30:
                 clear_need = True
 
+            # Human-readable achievement summary
+            ach_labels = []
+            if treble_claim: ach_labels.append("treble claim")
+            elif double_claim: ach_labels.append("double/league+cup claim")
+            else:
+                if league_claim: ach_labels.append("league title claim")
+                if cup_claim: ach_labels.append("cup claim")
+                if continental_claim: ach_labels.append("continental/Champions League claim")
+            if achievements.get("qualification"): ach_labels.append("qualification claim")
+            if achievements.get("promotion"): ach_labels.append("promotion claim")
+            if achievements.get("survival"): ach_labels.append("survival/relegation battle claim")
+            if achievements.get("strong_season"): ach_labels.append("strong season claim")
+            if competing_many: ach_labels.append("multiple competitions / squad demand")
+
+            # Build a flexible, context-aware board decision (no hard keyword gate)
             reasons_out = []
             approved = False
             approved_amount = int(amount)
 
-            if not insurance_ok:
-                reasons_out.append("Board needs a stronger commitment/achievement case. Explain clearly what you're competing for and what you've achieved or are committing to deliver (league/cup/double/treble/European success).")
-            if not clear_need:
-                reasons_out.append("The case is not detailed enough. Explain the footballing need clearly (squad depth, injuries, competitions, renewals, objectives).")
+            pos = season_evidence.get("my_position")
+            total_teams = int(season_evidence.get("total_teams") or 0)
+            squad_size = int(season_evidence.get("squad_size") or 0)
+            injured_count = int(season_evidence.get("injured_count") or 0)
+            comp_count = int(season_evidence.get("competition_count") or 1)
+            avg_ovr = season_evidence.get("avg_overall")
+
+            # Signal extraction from natural language
+            t = text_l
+            wants_rebuild = bool(re.search(r"\brebuild|restructur|refresh|reset|new project\b", t))
+            wants_retention = bool(re.search(r"\bkeep (our|my|the) (best|key|top) players|retain|contract renewal|renewals|keep hold of\b", t))
+            wants_compete = bool(re.search(r"\bcompete|challenge|push for|go for|aim for|fight for\b", t))
+            finance_healthy = bool(re.search(r"\bfinances? (are )?(healthy|good|strong|stable)|healthy finances?|financially (healthy|strong|stable)|money in the bank\b", t))
+            struggling = bool(re.search(r"\bstruggl(e|ing)|hard to compete|can't compete|cannot compete|behind (the )?(big|bigger) clubs\b", t))
+            injuries_need = bool(re.search(r"\binjur(y|ies|ed)|fitness crisis\b", t))
+            small_squad = bool(re.search(r"\bsmall squad|squad is (too )?small|thin squad|lack of depth|not enough depth|need depth\b", t))
+            low_wage_budget = bool(re.search(r"\bwage budget (is )?(too )?low|can't afford wages|cannot afford wages|wages? too high\b", t))
+            european_next = bool(re.search(r"\bchampions league next season|europa league next season|conference league next season|playing in europe next season|european football next season\b", t))
+            promotion_push = bool(re.search(r"\bpromotion|promoted|go up\b", t))
+            relegation_fight = bool(re.search(r"\bavoid relegation|relegation battle|stay up|fight relegation\b", t))
+
+            # Contextual boosts
+            context_boost = 0.0
+            if injuries_need or injured_count >= 3:
+                context_boost += 0.08
+                if injured_count >= 3:
+                    reasons_out.append(f"Squad context: {injured_count} injured/unavailable players noted.")
+            if small_squad or (0 < squad_size < 22):
+                context_boost += 0.08
+                if 0 < squad_size < 22:
+                    reasons_out.append(f"Squad context: squad size is {squad_size}, which is limited for a full season.")
+            if comp_count >= 2 or competing_many or european_next:
+                context_boost += 0.10
+                if comp_count >= 2:
+                    reasons_out.append(f"Competition load: {comp_count} active competitions detected for this club.")
+                elif european_next:
+                    reasons_out.append("Competition context: European football next season was considered.")
+            if wants_rebuild:
+                context_boost += 0.06
+            if wants_retention or low_wage_budget:
+                context_boost += 0.07
+            if finance_healthy:
+                context_boost += 0.03
+            if struggling or relegation_fight:
+                context_boost += 0.05
+            if promotion_push or achievements.get("promotion"):
+                context_boost += 0.07
+            if strong_claim or (isinstance(pos, int) and pos > 0 and total_teams > 0 and pos <= max(2, total_teams // 4)):
+                context_boost += 0.08
+                if isinstance(pos, int) and pos > 0 and pos <= max(2, total_teams // 4):
+                    reasons_out.append(f"Performance context: current league position is {pos}/{total_teams}.")
+            if wants_compete:
+                context_boost += 0.03
+
+            # Achievement / commitment context
+            achievement_boost = 0.0
+            if achievement_insurance or explicit_insurance:
+                achievement_boost += 0.18
+            if treble_claim:
+                achievement_boost += 0.10
+            elif double_claim:
+                achievement_boost += 0.08
+            elif league_claim or cup_claim or continental_claim:
+                achievement_boost += 0.05
+            if achievements.get("qualification"):
+                achievement_boost += 0.05
+
+            # Amount realism relative to current budget
+            current = current_transfer if kind == "funds" else current_wage
+            ratio = (float(amount) / float(current)) if current > 0 else (1.0 if amount > 0 else 0.0)
+            amount_pressure = 0.0
+            if amount_reasonable:
+                if amount <= soft_cap:
+                    amount_pressure += 0.10
+                elif ratio <= 0.50:
+                    amount_pressure += 0.06
+                elif ratio <= 1.00:
+                    amount_pressure += 0.02
+                else:
+                    amount_pressure -= 0.03
+            else:
+                amount_pressure -= 0.20
+
+            # Clear need: be flexible for natural language
+            detail_ok = len(reason.strip()) >= 12
+            has_any_reason = bool(need_hits) or any([wants_rebuild, wants_retention, wants_compete, finance_healthy, struggling, injuries_need, small_squad, low_wage_budget, european_next, promotion_push, relegation_fight, competing_many, strong_claim, league_claim, cup_claim, continental_claim])
+            clear_need = detail_ok and (reason_quality >= 0.35 or has_any_reason)
+
+            # Final case score
+            case_score = (reason_quality * 0.55) + (need_score * 0.20) + context_boost + achievement_boost + amount_pressure
+            # small bonus for explicit, well-formed request
+            if amount > 0 and has_any_reason:
+                case_score += 0.05
+
+            # Hard cap on unreasonable amounts
             if not amount_reasonable:
                 reasons_out.append(f"Requested amount ({_money(amount)}) is above the reasonable single-request board limit ({_money(max_reasonable)}).")
 
-            # Realistic board decision
-            if insurance_ok and clear_need and amount_reasonable:
-                # verify claims softly against season data when possible
-                verified_note = None
-                pos = season_evidence.get("my_position")
-                if league_claim and pos == 1:
-                    verified_note = "League claim aligns with current standings (1st place)."
-                elif league_claim and isinstance(pos, int) and pos > 1:
-                    verified_note = f"League-title claim noted, but current standings show {pos}th place; board weighed it as ambition/context."
-                if double_claim or treble_claim:
-                    verified_note = (verified_note + " " if verified_note else "") + "Major trophy claim noted; board considered it as strong performance context."
-                if verified_note:
-                    reasons_out.append(verified_note)
+            # Decision thresholds (strict but fair)
+            approve_threshold = 0.52
+            partial_threshold = 0.42
 
-                if not amount_soft and reason_quality < 0.75:
-                    approved_amount = int(soft_cap + (amount - soft_cap) * 0.5)
-                    approved_amount = max(1, min(approved_amount, int(amount)))
-                    reasons_out.append(f"Board adjusted amount based on case strength: {_money(amount)} → {_money(approved_amount)}.")
-                elif not amount_soft and reason_quality < 0.90:
-                    # partial approval closer to request
-                    approved_amount = int(soft_cap + (amount - soft_cap) * 0.75)
-                    approved_amount = max(1, min(approved_amount, int(amount)))
-                    if approved_amount != int(amount):
-                        reasons_out.append(f"Board partially adjusted amount after review: {_money(amount)} → {_money(approved_amount)}.")
+            if amount_reasonable and (case_score >= approve_threshold or (clear_need and case_score >= partial_threshold)):
+                # decide full vs partial
+                if case_score >= 0.82 and amount <= max_reasonable:
+                    approved_amount = int(amount)
+                elif case_score >= 0.68:
+                    # allow up to request if within soft cap, else partial
+                    if amount <= soft_cap:
+                        approved_amount = int(amount)
+                    else:
+                        approved_amount = int(soft_cap + (amount - soft_cap) * 0.75)
+                elif case_score >= 0.55:
+                    approved_amount = int(min(amount, soft_cap if amount > soft_cap else amount))
+                    if amount > soft_cap:
+                        approved_amount = int(soft_cap + (amount - soft_cap) * 0.50)
+                else:
+                    # partial approval for borderline but reasonable case
+                    approved_amount = int(min(amount, max(1, soft_cap)))
+                    if amount > soft_cap:
+                        approved_amount = int(soft_cap + (amount - soft_cap) * 0.35)
+
+                approved_amount = max(1, min(int(approved_amount), int(amount), int(max_reasonable)))
+                if approved_amount < int(amount):
+                    reasons_out.append(f"Board adjusted the amount after reviewing case strength and club context: {_money(amount)} → {_money(approved_amount)}.")
+                else:
+                    reasons_out.append("Board accepted the case based on club context, needs, and current situation.")
                 approved = True
+            else:
+                approved = False
+                if not clear_need:
+                    reasons_out.append("The board needs a clearer footballing case. Explain what you need, why you need it, and how it fits the club's situation.")
+                elif amount_reasonable:
+                    reasons_out.append("The board was not convinced the request is justified strongly enough at this time. Provide more concrete context (squad needs, injuries, competition load, performance, finances, or objectives).")
 
             status = "approved" if approved else "rejected"
             meta_out = {
                 **meta,
                 "need_score": round(need_score, 3),
                 "reason_quality": round(reason_quality, 3),
+                "case_score": round(case_score, 3),
                 "need_hits": need_hits[:20],
                 "insurance_ok": insurance_ok,
                 "explicit_insurance": explicit_insurance,
@@ -874,18 +1024,6 @@ class ClubCog(commands.Cog):
                 (int(amount), reason, status, json.dumps(meta_out), utc_now_iso(), int(req["id"])),
             )
 
-            # Human-readable achievement summary
-            ach_labels = []
-            if treble_claim: ach_labels.append("treble claim")
-            elif double_claim: ach_labels.append("double/league+cup claim")
-            else:
-                if league_claim: ach_labels.append("league title claim")
-                if cup_claim: ach_labels.append("cup claim")
-                if continental_claim: ach_labels.append("continental/Champions League claim")
-            if achievements.get("qualification"): ach_labels.append("qualification claim")
-            if achievements.get("strong_season"): ach_labels.append("strong season claim")
-            if competing_many: ach_labels.append("multiple competitions / squad demand")
-
             board_lines = []
             board_lines.append(f"**Board Meeting — {team_name}**")
             board_lines.append(f"Manager: <@{message.author.id}>")
@@ -897,9 +1035,9 @@ class ClubCog(commands.Cog):
                 board_lines.append(f"- Current transfer budget: {_money(current_transfer)}")
             else:
                 board_lines.append(f"- Current wage budget: {_money(current_wage)}/wk")
-            board_lines.append(f"- Case understood: {', '.join(ach_labels[:6]) if ach_labels else 'no clear achievement/competition context detected'}")
-            board_lines.append(f"- Identified needs: {', '.join(need_hits[:8]) if need_hits else 'none clearly identified'}")
-            board_lines.append(f"- Commitment/achievement case: {'✅ accepted' if insurance_ok else '❌ insufficient'}")
+            board_lines.append(f"- Case understood: {', '.join(ach_labels[:6]) if ach_labels else 'general club/season context considered'}")
+            board_lines.append(f"- Identified needs: {', '.join(need_hits[:8]) if need_hits else 'context reviewed from your message'}")
+            board_lines.append(f"- Commitment/achievement case: {'✅ strong' if insurance_ok else '➖ considered in overall case'}")
             if season_evidence.get("my_position"):
                 board_lines.append(f"- Season context: {team_name} are currently {season_evidence.get('my_position')}th with {season_evidence.get('my_points', 0)} pts ({season_evidence.get('my_played', 0)} played).")
 

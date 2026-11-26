@@ -122,6 +122,35 @@ def parse_money(text: str | int | float | None) -> int | None:
     return int(round(val * mult))
 
 
+def _money_span_flags(raw: str) -> dict[str, bool]:
+    r = str(raw or "").strip().lower()
+    has_currency = bool(re.search(r"[€£$]", r))
+    has_suffix = bool(re.search(r"\b([kmb]|mil(?:lion)?s?|bn|billion|thousand|grand)\b", r, re.I) or re.search(r"(?<=\d)\s*[kmb]\b", r, re.I))
+    plain_numeric = bool(re.fullmatch(r"[€£$]?\s*[\d,.]+", r.strip()))
+    return {"has_currency": has_currency, "has_suffix": has_suffix, "plain_numeric": plain_numeric}
+
+
+def _is_duration_like_span(text: str, span: dict[str, Any], years: int | None) -> bool:
+    raw = str(span.get("raw") or "")
+    val = int(span.get("value") or 0)
+    flags = span.get("flags") or _money_span_flags(raw)
+    if flags.get("has_currency") or flags.get("has_suffix"):
+        return False
+    if not (1 <= val <= 7):
+        return False
+    s = str(text or "")
+    start = int(span.get("start") or 0)
+    end = int(span.get("end") or start)
+    around = s[max(0, start - 12):min(len(s), end + 20)].lower()
+    if re.search(r"\b(years?|yrs?|seasons?)\b", around):
+        return True
+    if years is not None and val == int(years):
+        # "contract 3" / "for 3" without explicit year word but equals parsed duration
+        if re.search(r"\b(contract|deal|length|duration|for|term)\b", around):
+            return True
+    return False
+
+
 def extract_money_spans(text: str | None) -> list[dict[str, Any]]:
     s = str(text or "")
     out = []
@@ -131,8 +160,16 @@ def extract_money_spans(text: str | None) -> list[dict[str, Any]]:
         if val is None:
             continue
         start, end = m.span(1)
-        ctx = s[max(0, start - 35):min(len(s), end + 35)].lower()
-        out.append({"raw": raw, "value": int(val), "start": start, "end": end, "context": ctx})
+        ctx = s[max(0, start - 60):min(len(s), end + 60)].lower()
+        flags = _money_span_flags(raw)
+        out.append({
+            "raw": raw,
+            "value": int(val),
+            "start": start,
+            "end": end,
+            "context": ctx,
+            "flags": flags,
+        })
     return out
 
 
@@ -179,10 +216,77 @@ def extract_role(text: str | None) -> str | None:
     return None
 
 
+def _cue_distance(text: str, span: dict[str, Any], cues: list[str], *, window: int = 48) -> int | None:
+    """Return min char distance between span and any cue occurrence within window. None if not found."""
+    s = str(text or "").lower()
+    start = int(span.get("start") or 0)
+    end = int(span.get("end") or start)
+    lo = max(0, start - window)
+    hi = min(len(s), end + window)
+    region = s[lo:hi]
+    best: int | None = None
+    for cue in cues:
+        c = str(cue).lower()
+        if not c:
+            continue
+        for m in re.finditer(re.escape(c), region):
+            c_start = lo + m.start()
+            c_end = lo + m.end()
+            if c_end <= start:
+                dist = start - c_end
+            elif c_start >= end:
+                dist = c_start - end
+            else:
+                dist = 0
+            if best is None or dist < best:
+                best = dist
+    return best
+
+
+def _span_kind(text: str, span: dict[str, Any], years: int | None) -> str:
+    """Classify a money span as 'wage', 'bonus', 'duration', or 'unknown' using local cue proximity."""
+    if _is_duration_like_span(text, span, years):
+        return "duration"
+    raw = str(span.get("raw") or "")
+    flags = span.get("flags") or _money_span_flags(raw)
+    val = int(span.get("value") or 0)
+
+    # Plain small integers with no currency/suffix are very likely durations or noise in contract text
+    if flags.get("plain_numeric") and not flags.get("has_currency") and not flags.get("has_suffix"):
+        if 1 <= val <= 7:
+            return "duration"
+        # bare year-like numbers (2026 etc) should not become wage/bonus accidentally
+        if 1900 <= val <= 2100:
+            return "duration"
+
+    wage_dist = _cue_distance(text, span, WAGE_CUES, window=50)
+    bonus_dist = _cue_distance(text, span, BONUS_CUES, window=50)
+
+    # Strong wage cues
+    strong_wage = _cue_distance(text, span, ["/wk", "per week", "weekly", "p/w", "pw", "a week", "per wk", "salary", "wages", "wage"], window=30)
+    strong_bonus = _cue_distance(text, span, ["signing bonus", "sign-on bonus", "sign on bonus", "signing fee", "sign-on fee", "upfront", "sign on"], window=40)
+
+    if strong_bonus is not None and (strong_wage is None or strong_bonus <= strong_wage):
+        return "bonus"
+    if strong_wage is not None and (strong_bonus is None or strong_wage < strong_bonus):
+        return "wage"
+    if bonus_dist is not None and (wage_dist is None or bonus_dist < wage_dist):
+        return "bonus"
+    if wage_dist is not None and (bonus_dist is None or wage_dist < bonus_dist):
+        return "wage"
+    if bonus_dist is not None and wage_dist is not None and bonus_dist == wage_dist:
+        # tie - prefer explicit bonus cue "bonus" word if very close, else unknown
+        if strong_bonus is not None:
+            return "bonus"
+        if strong_wage is not None:
+            return "wage"
+        return "unknown"
+    return "unknown"
+
+
 def extract_contract_terms(text: str | None) -> dict[str, Any]:
     """Extract wage, signing bonus, role, contract years from natural language.
     Returns dict with keys present only when confidently found (bonus may be 0 when explicitly none).
-    Also returns _confidence hints and _ambiguous flags.
     """
     raw = str(text or "").strip()
     s = norm_text(raw)
@@ -202,114 +306,135 @@ def extract_contract_terms(text: str | None) -> dict[str, Any]:
 
     money_spans = extract_money_spans(raw)
 
-    def has_any(hay: str, cues: list[str]) -> bool:
-        return any(c in hay for c in cues)
-
-    def ctx_has(ctx: str, cues: list[str]) -> bool:
-        return any(c in ctx for c in cues)
-
-    # Mark explicit no bonus
+    # Explicit no bonus
     if re.search(r"\b(no|without|zero|none)\b\s*(signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on|upfront)\b", s) or \
        re.search(r"\b(signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on|upfront)\b\s*[:=]?\s*(no|none|zero|0)\b", s):
         out["signing_bonus"] = 0
 
-    # Assign money spans by cues
-    used = set()
-    wage_val = None
-    bonus_val = out.get("signing_bonus")
+    explicit_no_bonus = out.get("signing_bonus") == 0
 
-    # Pass 1: explicit cues
+    # Classify spans
+    classified: list[dict[str, Any]] = []
     for i, sp in enumerate(money_spans):
-        ctx = sp["context"]
-        val = int(sp["value"])
-        is_wage = ctx_has(ctx, WAGE_CUES) or bool(re.search(r"/\s*w(k)?\b|p\s*/\s*w\b|per\s*w(eek|k)\b|\bw(k|eekly)\b", ctx))
-        is_bonus = ctx_has(ctx, BONUS_CUES)
-        # avoid misclassifying "4 years" as money
-        around = raw[max(0, sp["start"]-1):min(len(raw), sp["end"]+8)].lower()
-        if re.search(r"\b(year|yr|season)\b", around) and val <= 10:
-            used.add(i)
-            continue
-        if is_bonus and not is_wage:
-            if bonus_val is None or bonus_val == 0:
-                bonus_val = val
-            used.add(i)
-        elif is_wage and not is_bonus:
-            if wage_val is None:
-                wage_val = val
-            used.add(i)
+        kind = _span_kind(raw, sp, years)
+        classified.append({"i": i, "span": sp, "kind": kind, "value": int(sp.get("value") or 0)})
 
-    # Pass 2: if two unassigned amounts remain, infer by magnitude / typical ranges
-    remaining = [(i, money_spans[i]) for i in range(len(money_spans)) if i not in used]
-    if wage_val is None or (bonus_val is None and "signing_bonus" not in out):
+    # Pick best bonus and wage from explicit cues (proximity-based)
+    wage_pick: dict[str, Any] | None = None
+    bonus_pick: dict[str, Any] | None = None
+
+    def cue_score(span: dict[str, Any], cues: list[str], window: int = 50) -> int:
+        d = _cue_distance(raw, span, cues, window=window)
+        return 10_000 if d is None else d
+
+    for c in classified:
+        if c["kind"] == "duration":
+            continue
+        sp = c["span"]
+        val = c["value"]
+        if c["kind"] == "wage":
+            score = cue_score(sp, WAGE_CUES, 50)
+            # prefer closer cue; break ties by plausible wage range
+            cand = {"i": c["i"], "value": val, "score": score}
+            if wage_pick is None or cand["score"] < wage_pick["score"] or (cand["score"] == wage_pick["score"] and abs(val - 150_000) < abs(int(wage_pick["value"]) - 150_000)):
+                wage_pick = cand
+        elif c["kind"] == "bonus" and not explicit_no_bonus:
+            score = cue_score(sp, BONUS_CUES, 50)
+            cand = {"i": c["i"], "value": val, "score": score}
+            if bonus_pick is None or cand["score"] < bonus_pick["score"] or (cand["score"] == bonus_pick["score"] and val > int(bonus_pick["value"])):
+                bonus_pick = cand
+
+    used_idxs = set()
+    if wage_pick:
+        out["wage"] = int(wage_pick["value"])
+        used_idxs.add(wage_pick["i"])
+    if bonus_pick:
+        out["signing_bonus"] = int(max(0, bonus_pick["value"]))
+        used_idxs.add(bonus_pick["i"])
+
+    # Fallback inference for remaining unknown spans
+    remaining = [c for c in classified if c["i"] not in used_idxs and c["kind"] not in ("duration",)]
+    # Remove obvious year-like/garbage plain numbers
+    filtered_remaining = []
+    for c in remaining:
+        sp = c["span"]
+        flags = sp.get("flags") or _money_span_flags(sp.get("raw", ""))
+        val = int(c["value"])
+        if flags.get("plain_numeric") and not flags.get("has_currency") and not flags.get("has_suffix"):
+            # allow big plain numbers like 100000, 1000000 as possible money; skip tiny
+            if val < 1000:
+                continue
+        filtered_remaining.append(c)
+    remaining = filtered_remaining
+
+    if ("wage" not in out) or ("signing_bonus" not in out and not explicit_no_bonus):
         if len(remaining) == 1:
-            val = int(remaining[0][1]["value"])
-            # If it looks like a weekly wage, treat as wage; if it's a big lump sum and wage exists, bonus
-            if wage_val is None and 1_000 <= val <= 5_000_000 and not ctx_has(remaining[0][1]["context"], BONUS_CUES):
-                wage_val = val
-                used.add(remaining[0][0])
-            elif wage_val is not None and bonus_val is None and val >= 1_000:
-                bonus_val = val
-                used.add(remaining[0][0])
-            elif wage_val is None:
-                wage_val = val
-                used.add(remaining[0][0])
+            c = remaining[0]
+            val = int(c["value"])
+            if "wage" not in out and 1_000 <= val <= 5_000_000:
+                out["wage"] = val
+                used_idxs.add(c["i"])
+            elif "wage" in out and "signing_bonus" not in out and not explicit_no_bonus and val >= 1_000:
+                out["signing_bonus"] = val
+                used_idxs.add(c["i"])
+            elif "wage" not in out:
+                out["wage"] = val
+                used_idxs.add(c["i"])
         elif len(remaining) >= 2:
-            vals = [(i, int(sp["value"]), sp) for i, sp in remaining]
-            # Heuristic: weekly wage typically 5k-2M, signing bonus typically 50k-100M; when ambiguous, use cues/magnitude
-            wage_cand = None
-            bonus_cand = None
-            for i, val, sp in vals:
-                ctx = sp["context"]
-                if ctx_has(ctx, BONUS_CUES) and bonus_cand is None:
-                    bonus_cand = (i, val)
-                elif ctx_has(ctx, WAGE_CUES) and wage_cand is None:
-                    wage_cand = (i, val)
-            if wage_cand is None or bonus_cand is None:
-                # magnitude-based: if one is clearly wage-like and other larger lump-sum-like
-                by_val = sorted(vals, key=lambda x: x[1])
-                low_i, low_v, low_sp = by_val[0]
-                high_i, high_v, high_sp = by_val[-1]
-                # If the lower value is in wage range and high is much larger, low=wage, high=bonus
-                if wage_cand is None and bonus_cand is None:
-                    if 1_000 <= low_v <= 2_000_000 and high_v >= low_v * 2 and high_v >= 50_000:
-                        wage_cand, bonus_cand = (low_i, low_v), (high_i, high_v)
-                    elif 1_000 <= high_v <= 5_000_000 and 1_000 <= low_v <= 200_000_000:
-                        # both could be wage-like; prefer the one closer to typical wage as wage if explicitly marked, else leave ambiguous
-                        # but if only two numbers, assume smaller is wage, larger is bonus (common case)
-                        wage_cand, bonus_cand = (low_i, low_v), (high_i, high_v)
-            if wage_cand and wage_val is None:
-                wage_val = wage_cand[1]
-                used.add(wage_cand[0])
-            if bonus_cand and bonus_val is None:
-                bonus_val = bonus_cand[1]
-                used.add(bonus_cand[0])
+            vals = sorted([(int(c["value"]), c) for c in remaining], key=lambda x: x[0])
+            low_v, low_c = vals[0]
+            high_v, high_c = vals[-1]
+            # Common contract case: one wage-like, one bonus-like.
+            if "wage" not in out and "signing_bonus" not in out and not explicit_no_bonus:
+                if 1_000 <= low_v <= 2_000_000 and high_v >= 50_000 and high_v >= low_v:
+                    out["wage"] = int(low_v)
+                    out["signing_bonus"] = int(high_v)
+                    used_idxs.add(low_c["i"])
+                    used_idxs.add(high_c["i"])
+                else:
+                    # default: assign largest plausible wage to wage, second to bonus if larger
+                    wage_cand = None
+                    for v, c in reversed(vals):
+                        if 1_000 <= v <= 5_000_000:
+                            wage_cand = (v, c)
+                            break
+                    if wage_cand:
+                        out["wage"] = int(wage_cand[0])
+                        used_idxs.add(wage_cand[1]["i"])
+                        rem2 = [c for c in remaining if c["i"] not in used_idxs]
+                        if rem2 and not explicit_no_bonus:
+                            out["signing_bonus"] = int(max(int(x["value"]) for x in rem2))
+                            # mark the max one used
+                            mx = max(rem2, key=lambda x: int(x["value"]))
+                            used_idxs.add(mx["i"])
+            elif "wage" not in out:
+                for v, c in vals:
+                    if 1_000 <= v <= 5_000_000:
+                        out["wage"] = int(v)
+                        used_idxs.add(c["i"])
+                        break
+            elif "signing_bonus" not in out and not explicit_no_bonus:
+                rem2 = [c for c in remaining if c["i"] not in used_idxs and int(c["value"]) != int(out.get("wage") or -1)]
+                if rem2:
+                    mx = max(rem2, key=lambda x: int(x["value"]))
+                    if int(mx["value"]) >= 1_000:
+                        out["signing_bonus"] = int(mx["value"])
+                        used_idxs.add(mx["i"])
 
-    # Pass 3: leftover amounts
-    for i, sp in enumerate(money_spans):
-        if i in used:
-            continue
-        val = int(sp["value"])
-        if val <= 10:
-            continue
-        if wage_val is None and 1_000 <= val <= 5_000_000:
-            wage_val = val
-            used.add(i)
-        elif bonus_val is None and val >= 1_000:
-            bonus_val = val
-            used.add(i)
+    # Final sanity: don't let year value leak as wage/bonus
+    if years is not None:
+        if int(out.get("wage") or 0) == int(years) and int(years) <= 7:
+            out.pop("wage", None)
+        if int(out.get("signing_bonus") or -1) == int(years) and int(years) <= 7:
+            if not explicit_no_bonus:
+                out.pop("signing_bonus", None)
 
-    if wage_val is not None and wage_val > 0:
-        out["wage"] = int(wage_val)
-    if bonus_val is not None:
-        out["signing_bonus"] = int(max(0, bonus_val))
-    elif "signing_bonus" not in out:
-        # if bonus not mentioned at all, don't force - caller can decide; but keep absent
-        pass
-
-    # If wage and bonus ended up equal and no clear cue, treat as wage (ambiguous)
-    if out.get("wage") and out.get("signing_bonus") and out["wage"] == out["signing_bonus"]:
-        # keep wage, drop bonus unless bonus cue present
-        if not has_any(s, BONUS_CUES):
+    # If wage and bonus ended up identical with no clear bonus cue, drop bonus
+    if out.get("wage") and out.get("signing_bonus") and out["wage"] == out["signing_bonus"] and not explicit_no_bonus:
+        bonus_dist_any = None
+        wage_dist_any = None
+        # check if any cue exists in whole string
+        if not re.search(r"\b(signing\s*bonus|sign[- ]?on|upfront|bonus)\b", s):
             out.pop("signing_bonus", None)
 
     return out
@@ -441,21 +566,51 @@ def board_argument_strength(text: str | None, *, kind: str, amount: int | None =
     sl = norm_text(s)
     achievements = extract_achievements(s)
     commit = detect_commitment(s)
-    need_hits = []
+
+    need_hits: list[str] = []
     for p in COMPETITION_NEED_PATTERNS:
         if re.search(p, sl, re.I):
             need_hits.append(p)
-    # generic need signals
-    generic = ["injur", "depth", "squad", "sign", "transfer", "reinforc", "replace", "rebuild", "compete",
-               "window", "striker", "midfield", "defend", "goalkeeper", "winger", "fullback", "centre-back",
-               "center-back", "contract", "renew", "wage", "salary", "upgrade", "cover", "short", "thin",
-               "promotion", "relegation", "europe", "title", "cup", "season objective", "project", "finance",
-               "budget", "fund", "cash", "sell", "loan", "youth", "academy", "qualif", "champions league"]
+
+    # Generic need signals (broad, football-aware)
+    generic = [
+        "injur", "depth", "squad", "sign", "transfer", "reinforc", "replace", "rebuild", "compete",
+        "window", "striker", "midfield", "defend", "goalkeeper", "winger", "fullback", "centre-back",
+        "center-back", "contract", "renew", "wage", "salary", "upgrade", "cover", "short", "thin",
+        "promotion", "relegation", "europe", "title", "cup", "season objective", "project", "finance",
+        "budget", "fund", "cash", "sell", "loan", "youth", "academy", "qualif", "champions league",
+        "keep our best", "retain", "retention", "too small", "above expectations", "bigger clubs",
+        "avoid relegation", "stay up", "rebuild", "restructure", "next season", "qualified for europe",
+        "playing champions league", "playing europa", "wage budget is too low", "squad is too small",
+    ]
     for g in generic:
         if g in sl:
             need_hits.append(g)
+
+    # Specific contextual flags (for board reasoning)
+    flags = {
+        "injuries": bool(re.search(r"\binjur(y|ies|ed)\b", sl)),
+        "small_squad": bool(re.search(r"\b(small|thin) squad\b|lack of depth|not enough depth|need depth\b", sl)),
+        "competition_load": bool(re.search(r"\b(multiple|too many|3|three|4|four)\s+competitions?\b|fixture congestion\b|champions league next season|european football next season\b", sl)),
+        "rebuild": bool(re.search(r"\brebuild|restructur|refresh|reset\b", sl)),
+        "retention": bool(re.search(r"\bkeep (our|my|the) (best|key|top) players\b|retain|retention|renew(al|als)?\b", sl)),
+        "promotion": bool(achievements.get("promotion") or re.search(r"\bpromoted\b|promotion\b", sl)),
+        "relegation": bool(re.search(r"\bavoid relegation\b|relegation battle\b|stay up\b", sl)),
+        "finances_healthy": bool(re.search(r"\bfinances? (are )?(healthy|good|strong|stable)\b|financially (healthy|strong|stable)\b", sl)),
+        "struggling_compete": bool(re.search(r"\bstruggl(e|ing)\b|can't compete\b|cannot compete\b|bigger clubs\b", sl)),
+        "above_expectations": bool(re.search(r"\babove expectations\b|overachiev(ed|ing)\b|exceeded expectations\b", sl)),
+        "qualified_europe": bool(achievements.get("qualification") or re.search(r"\bqualified for europe\b|european football\b|champions league football\b", sl)),
+    }
+    for k, v in flags.items():
+        if v:
+            need_hits.append(f"flag:{k}")
+
     need_hits = sorted(set(need_hits))
-    need_score = min(1.0, 0.20 + 0.08 * len(need_hits) + min(0.25, len(s) / 500.0))
+    # Need score: give more weight to concrete football reasons
+    need_score = min(1.0, 0.18 + 0.07 * len(need_hits) + min(0.20, len(s) / 600.0))
+    if any(flags[k] for k in ["injuries", "small_squad", "competition_load", "rebuild", "retention", "relegation", "promotion"]):
+        need_score = min(1.0, need_score + 0.08)
+
     # achievement boost
     ach_score = 0.0
     if achievements.get("treble"):
@@ -477,6 +632,8 @@ def board_argument_strength(text: str | None, *, kind: str, amount: int | None =
         ach_score += 0.12
     if achievements.get("survival"):
         ach_score += 0.06
+    if flags.get("above_expectations"):
+        ach_score += 0.08
     ach_score = min(0.6, ach_score)
 
     # commitment boost - allow natural achievement-based arguments to count as strong commitment context
@@ -487,11 +644,10 @@ def board_argument_strength(text: str | None, *, kind: str, amount: int | None =
         commit_score = 0.15
     elif commit.get("has_commitment_language"):
         commit_score = 0.08
-    # if they claim they already won league+cup/double, treat as strong case
     if achievements.get("double") or achievements.get("treble"):
         commit_score = max(commit_score, 0.25)
 
-    reason_quality = min(1.0, need_score * 0.55 + ach_score + commit_score)
+    reason_quality = min(1.0, need_score * 0.50 + ach_score + commit_score)
     return {
         "need_score": round(need_score, 3),
         "achievement_score": round(ach_score, 3),
@@ -499,5 +655,6 @@ def board_argument_strength(text: str | None, *, kind: str, amount: int | None =
         "reason_quality": round(reason_quality, 3),
         "achievements": achievements,
         "commitment": commit,
-        "need_hits": need_hits[:25],
+        "need_hits": need_hits[:30],
+        "flags": flags,
     }
