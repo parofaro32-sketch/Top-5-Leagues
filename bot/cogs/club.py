@@ -597,17 +597,30 @@ class ClubCog(commands.Cog):
         try:
             if message.author.bot or not message.guild:
                 return
+            req = None
             ref = getattr(message, "reference", None)
-            if not ref or not getattr(ref, "message_id", None):
-                return
-            reply_to_id = int(ref.message_id)
-            row = await self.bot.db.fetchone(
-                "SELECT * FROM board_requests WHERE message_id=? ORDER BY id DESC LIMIT 1",
-                (reply_to_id,),
-            )
-            if not row:
-                return
-            req = dict(row)
+            if ref and getattr(ref, "message_id", None):
+                reply_to_id = int(ref.message_id)
+                row = await self.bot.db.fetchone(
+                    "SELECT * FROM board_requests WHERE message_id=? ORDER BY id DESC LIMIT 1",
+                    (reply_to_id,),
+                )
+                if row:
+                    req = dict(row)
+            # Fallback: if user didn't use Discord reply, handle their latest awaiting request in this channel
+            if req is None:
+                content = (message.content or "").strip()
+                if not content or content.startswith("/"):
+                    return
+                row = await self.bot.db.fetchone(
+                    """SELECT * FROM board_requests
+                       WHERE guild_id=? AND channel_id=? AND user_id=? AND status='awaiting_reply'
+                       ORDER BY id DESC LIMIT 1""",
+                    (int(message.guild.id), int(message.channel.id), int(message.author.id)),
+                )
+                if not row:
+                    return
+                req = dict(row)
             # Only the requesting manager can reply
             if int(req.get("user_id") or 0) != int(message.author.id):
                 return

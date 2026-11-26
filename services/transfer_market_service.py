@@ -78,11 +78,11 @@ ROLE_TIERS = [
     "Crucial", "Important", "Rotation", "Sporadic", "Prospect"
 ]
 ROLE_ALIASES = {
-    "crucial": "Crucial", "key": "Crucial", "star": "Crucial",
-    "important": "Important", "regular": "Important", "starter": "Important",
-    "rotation": "Rotation", "squad": "Rotation",
-    "sporadic": "Sporadic", "backup": "Sporadic", "fringe": "Sporadic",
-    "prospect": "Prospect", "youngster": "Prospect", "future": "Prospect",
+    "crucial": "Crucial", "key": "Crucial", "star": "Crucial", "essential": "Crucial",
+    "important": "Important", "regular": "Important", "starter": "Important", "first team": "Important", "first-team": "Important",
+    "rotation": "Rotation", "squad": "Rotation", "rotational": "Rotation",
+    "sporadic": "Sporadic", "backup": "Sporadic", "fringe": "Sporadic", "bench": "Sporadic", "reserve": "Sporadic",
+    "prospect": "Prospect", "youngster": "Prospect", "future": "Prospect", "youth": "Prospect",
 }
 
 
@@ -671,6 +671,9 @@ class TransferMarketService:
                 if val is not None:
                     out["signing_bonus"] = val
                     break
+        if "signing_bonus" not in out:
+            if re.search(r"\b(no|without|zero|none)\b\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\b", t, re.I) or re.search(r"\b(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|bonus|sign[- ]?on)\b\s*[:=]?\s*(?:no|none|zero|0)\b", t, re.I):
+                out["signing_bonus"] = 0
 
         # wage
         wage_patterns = [

@@ -428,27 +428,11 @@ class TransfersCog(commands.Cog):
             years = _agree_terms.get("contract_years", years)
             meta["_agreement_accepted"] = True
 
-        # Be forgiving: accept any format by filling missing fields with sensible defaults.
-        assumed: list[str] = []
-        if wage is None or int(wage) <= 0:
-            # Try to pull any plausible weekly-wage number from the message
-            for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
-                _v = money_to_int(_m.group(1))
-                if _v is None:
-                    continue
-                if bonus is not None and int(_v) == int(bonus):
-                    continue
-                if 1_000 <= int(_v) <= 5_000_000:
-                    wage = int(_v)
-                    break
-        if wage is None or int(wage) <= 0:
-            wage = max(1_000, int(float(demand.get("wage") or 50_000) * 0.8))
-            assumed.append(f"wage {fmt_money(int(wage))}/wk")
-        if role is None:
-            role = normalize_role(str(demand.get("role") or "Rotation")) or "Rotation"
-            assumed.append(f"role {role}")
+        # Parse strictly from the user's message (no silent defaults for wage/role/years).
+        missing: list[str] = []
+
+        # Bonus: if explicitly stated, or clearly "no bonus", or no bonus mentioned at all -> 0
         if bonus is None:
-            # Fallback: look for a number near bonus/signing keywords
             _bonus_kw = re.search(
                 r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
                 raw_msg, re.I,
@@ -463,7 +447,7 @@ class TransfersCog(commands.Cog):
                 if _bv is not None and _bv >= 0:
                     bonus = int(_bv)
         if bonus is None:
-            # Fallback: if two distinct money numbers exist, treat the non-wage/larger-lump as bonus
+            # If there's a second distinct money number, treat it as bonus
             _nums: list[int] = []
             for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
                 _v = money_to_int(_m.group(1))
@@ -477,16 +461,64 @@ class TransfersCog(commands.Cog):
                 for _v in _nums_unique:
                     if int(_v) == int(wage):
                         continue
-                    # bonus is usually a lump sum (can be smaller or larger than wage depending format)
                     if 1_000 <= int(_v) <= 200_000_000:
                         bonus = int(_v)
                         break
         if bonus is None:
+            # No bonus mentioned - interpret as no signing bonus
             bonus = 0
-            assumed.append("signing bonus €0")
+
+        # Wage: try to extract from any clear money mention
+        if wage is None or int(wage) <= 0:
+            for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
+                _v = money_to_int(_m.group(1))
+                if _v is None:
+                    continue
+                if bonus is not None and int(_v) == int(bonus):
+                    continue
+                if 1_000 <= int(_v) <= 5_000_000:
+                    wage = int(_v)
+                    break
+        if wage is None or int(wage) <= 0:
+            missing.append("weekly wage (e.g. 200k/wk)")
+
+        if role is None:
+            missing.append("role (Crucial/Important/Rotation/Sporadic/Prospect)")
+        if years is None:
+            missing.append("contract length (e.g. 4 years)")
+
+        if missing and not meta.get("_agreement_accepted"):
+            understood = []
+            if wage is not None and int(wage) > 0:
+                understood.append(f"Wage: {fmt_money(int(wage))}/wk")
+            if role is not None:
+                understood.append(f"Role: {role}")
+            if bonus is not None:
+                understood.append(f"Signing bonus: {fmt_money(int(bonus))}")
+            if years is not None:
+                understood.append(f"Length: {int(years)} years")
+            understood_line = ("I understood: " + ", ".join(understood) + "\n\n") if understood else ""
+            await interaction.followup.send(
+                embed=error_embed(
+                    "Clarify Your Offer",
+                    understood_line
+                    + "I couldn't clearly read: " + ", ".join(missing) + ".\n\n"
+                    + f"Your message: `{raw_msg[:300]}`\n\n"
+                    + "Reply in any natural format, for example: `200k a week, important role, 2m signing bonus, 4 years`."
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # Safety for agreement-accepted path
+        if wage is None or int(wage) <= 0:
+            wage = int(demand.get("wage") or 50_000)
+        if role is None:
+            role = normalize_role(str(demand.get("role") or "Rotation")) or "Rotation"
+        if bonus is None:
+            bonus = int(demand.get("signing_bonus") or 0)
         if years is None:
             years = int(demand.get("contract_years") or 3)
-            assumed.append(f"{int(years)}-year contract")
 
         wage = int(wage)
         bonus = max(0, int(bonus))
@@ -795,6 +827,23 @@ class TransfersCog(commands.Cog):
                 except Exception as e:
                     send_err = e
                     logger.exception("Failed to send askaboutplayer public followup offer_id=%s", offer_id)
+            if msg is None:
+                # Last fallback: DM the selling manager directly
+                try:
+                    seller_user = self.bot.get_user(int(seller_manager_id)) or await self.bot.fetch_user(int(seller_manager_id))
+                    dm_embed = info_embed(
+                        "Player Availability Enquiry",
+                        (
+                            f"**{interaction.user.display_name}** ({buying_team_name}) is asking if "
+                            f"**{player.get('name')}** ({selling_team_name}) is for sale.\n\n"
+                            f"Please respond using the buttons below."
+                        ),
+                    )
+                    msg = await seller_user.send(embed=dm_embed, view=view)
+                except Exception as e:
+                    send_err = e
+                    logger.exception("Failed to DM askaboutplayer seller offer_id=%s", offer_id)
+
             if msg:
                 try:
                     await self.bot.db.execute("UPDATE transfer_offers SET message_id=?, updated_at=? WHERE id=?", (int(msg.id), utc_now_iso(), int(offer_id)))
@@ -807,7 +856,7 @@ class TransfersCog(commands.Cog):
             else:
                 logger.error("askaboutplayer could not deliver message offer_id=%s err=%s", offer_id, send_err)
                 await interaction.followup.send(
-                    embed=error_embed("Enquiry Created, Message Not Delivered", f"Your enquiry for **{player.get('name')}** was created, but I could not post the enquiry message. Please check bot permissions in this channel and try again."),
+                    embed=success_embed("Enquiry Created", f"Your enquiry for **{player.get('name')}** was created for **{selling_team_name}** manager (<@{int(seller_manager_id)}>). The enquiry is recorded (ID: {offer_id}); ask them to respond when available."),
                     ephemeral=True,
                 )
         except Exception:
