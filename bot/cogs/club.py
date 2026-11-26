@@ -602,7 +602,7 @@ class ClubCog(commands.Cog):
                 return
             reply_to_id = int(ref.message_id)
             row = await self.bot.db.fetchone(
-                "SELECT * FROM board_requests WHERE message_id=? AND status='awaiting_reply' ORDER BY id DESC LIMIT 1",
+                "SELECT * FROM board_requests WHERE message_id=? ORDER BY id DESC LIMIT 1",
                 (reply_to_id,),
             )
             if not row:
@@ -613,6 +613,14 @@ class ClubCog(commands.Cog):
                 return
             # Basic channel/guild sanity
             if req.get("guild_id") and int(req.get("guild_id")) != int(message.guild.id):
+                return
+            status_now = str(req.get("status") or "")
+            if status_now != "awaiting_reply":
+                if status_now in {"approved", "rejected", "cancelled"}:
+                    try:
+                        await message.reply(embed=info_embed("Board Request Already Handled", f"This board request was already **{status_now}**. Run `/requestfunds` or `/requestwage` to start a new request if available."))
+                    except Exception:
+                        pass
                 return
 
             reason = (message.content or "").strip()

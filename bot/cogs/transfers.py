@@ -406,6 +406,28 @@ class TransfersCog(commands.Cog):
         role = parsed.get("role")
         years = parsed.get("contract_years")
 
+        # Agreement intent: "we agree", "deal", "accept your offer/counter/terms" etc.
+        _raw_low = raw_msg.lower().strip()
+        _negated_agree = bool(re.search(r"\b(don't|dont|do not|can't|cant|cannot|won't|wont|never|not)\b.{0,20}\bagree\b", _raw_low))
+        _agreement_phrases = bool(re.search(
+            r"\b(we agree|i agree|agreed|we have a deal|you got a deal|you have a deal|let'?s do it|lets do it|"
+            r"accept your (offer|counter|terms|demand)|accept the (offer|counter|terms|demand)|accept those terms|"
+            r"i'?ll take it|ill take it|that works for me|works for me|sounds good|fine by me|ok deal|okay deal|go ahead|done deal)\b",
+            _raw_low,
+        ))
+        _plain_accept = bool(re.fullmatch(r"(ok|okay|yes|yep|yeah|sure|fine|alright|all right|agree|agreed|deal|accept|yup)\W*", _raw_low))
+        _explicit_accept_ref = bool(re.search(r"\b(accept|agree to|take)\b.{0,30}\b(your|the|that|those)\b.{0,20}\b(offer|counter|terms|demand|deal)\b", _raw_low))
+        # Treat as agreement only when it's clearly accepting bot terms (no conflicting specific contract numbers)
+        _has_specific_contract_terms = bool(re.search(r"(\d[\d,.]*\s*[kmb]?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)) or bool(re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)) or bool(re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low))
+        _is_agreement = (not _negated_agree) and (_agreement_phrases or _plain_accept or _explicit_accept_ref) and not _has_specific_contract_terms
+        if _is_agreement:
+            _agree_terms = meta.get("last_counter") or demand or {}
+            wage = _agree_terms.get("wage", wage)
+            role = _agree_terms.get("role", role)
+            bonus = _agree_terms.get("signing_bonus", bonus)
+            years = _agree_terms.get("contract_years", years)
+            meta["_agreement_accepted"] = True
+
         # Be forgiving: accept any format by filling missing fields with sensible defaults.
         assumed: list[str] = []
         if wage is None or int(wage) <= 0:
@@ -425,6 +447,40 @@ class TransfersCog(commands.Cog):
         if role is None:
             role = normalize_role(str(demand.get("role") or "Rotation")) or "Rotation"
             assumed.append(f"role {role}")
+        if bonus is None:
+            # Fallback: look for a number near bonus/signing keywords
+            _bonus_kw = re.search(
+                r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
+                raw_msg, re.I,
+            )
+            if not _bonus_kw:
+                _bonus_kw = re.search(
+                    r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\b",
+                    raw_msg, re.I,
+                )
+            if _bonus_kw:
+                _bv = money_to_int(_bonus_kw.group(1))
+                if _bv is not None and _bv >= 0:
+                    bonus = int(_bv)
+        if bonus is None:
+            # Fallback: if two distinct money numbers exist, treat the non-wage/larger-lump as bonus
+            _nums: list[int] = []
+            for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
+                _v = money_to_int(_m.group(1))
+                if _v is not None and _v > 0:
+                    _nums.append(int(_v))
+            _nums_unique = []
+            for _v in _nums:
+                if _v not in _nums_unique:
+                    _nums_unique.append(_v)
+            if wage is not None and len(_nums_unique) >= 2:
+                for _v in _nums_unique:
+                    if int(_v) == int(wage):
+                        continue
+                    # bonus is usually a lump sum (can be smaller or larger than wage depending format)
+                    if 1_000 <= int(_v) <= 200_000_000:
+                        bonus = int(_v)
+                        break
         if bonus is None:
             bonus = 0
             assumed.append("signing bonus €0")
@@ -719,21 +775,39 @@ class TransfersCog(commands.Cog):
             )
             msg = None
             send_err = None
-            if interaction.channel:
+            # Try channel.send first
+            channel = interaction.channel
+            if channel is None and interaction.channel_id:
                 try:
-                    msg = await interaction.channel.send(content=seller_mention, embed=embed, view=view)
+                    channel = self.bot.get_channel(int(interaction.channel_id)) or await self.bot.fetch_channel(int(interaction.channel_id))
+                except Exception as e:
+                    send_err = e
+            if channel is not None:
+                try:
+                    msg = await channel.send(content=seller_mention, embed=embed, view=view)
                 except Exception as e:
                     send_err = e
                     logger.exception("Failed to send askaboutplayer channel message offer_id=%s", offer_id)
+            # Fallback: public followup message (works via interaction webhook)
+            if msg is None:
+                try:
+                    msg = await interaction.followup.send(content=seller_mention, embed=embed, view=view, ephemeral=False, wait=True)
+                except Exception as e:
+                    send_err = e
+                    logger.exception("Failed to send askaboutplayer public followup offer_id=%s", offer_id)
             if msg:
-                await self.bot.db.execute("UPDATE transfer_offers SET message_id=?, updated_at=? WHERE id=?", (msg.id, utc_now_iso(), int(offer_id)))
+                try:
+                    await self.bot.db.execute("UPDATE transfer_offers SET message_id=?, updated_at=? WHERE id=?", (int(msg.id), utc_now_iso(), int(offer_id)))
+                except Exception:
+                    logger.exception("Failed to store askaboutplayer message_id offer_id=%s", offer_id)
                 await interaction.followup.send(
-                    embed=success_embed("Enquiry Sent", f"Asked **{selling_team_name}** manager (<@{int(seller_manager_id)}>) if **{player.get('name')}** is for sale. They can respond with the **For Sale / Not For Sale** buttons in the channel message."),
+                    embed=success_embed("Enquiry Sent", f"Asked **{selling_team_name}** manager (<@{int(seller_manager_id)}>) if **{player.get('name')}** is for sale. They can respond with the **For Sale / Not For Sale** buttons."),
                     ephemeral=True,
                 )
             else:
+                logger.error("askaboutplayer could not deliver message offer_id=%s err=%s", offer_id, send_err)
                 await interaction.followup.send(
-                    embed=error_embed("Enquiry Created, Message Not Delivered", f"Your enquiry for **{player.get('name')}** was created, but I could not post the channel message to the manager. Please check bot permissions in this channel and try again."),
+                    embed=error_embed("Enquiry Created, Message Not Delivered", f"Your enquiry for **{player.get('name')}** was created, but I could not post the enquiry message. Please check bot permissions in this channel and try again."),
                     ephemeral=True,
                 )
         except Exception:
