@@ -607,17 +607,33 @@ class ClubCog(commands.Cog):
                 )
                 if row:
                     req = dict(row)
-            # Fallback: if user didn't use Discord reply, handle their latest awaiting request in this channel
+            # Fallback: if user didn't use Discord reply, handle their latest awaiting request in this channel/thread
             if req is None:
                 content = (message.content or "").strip()
                 if not content or content.startswith("/"):
                     return
-                row = await self.bot.db.fetchone(
-                    """SELECT * FROM board_requests
-                       WHERE guild_id=? AND channel_id=? AND user_id=? AND status='awaiting_reply'
-                       ORDER BY id DESC LIMIT 1""",
-                    (int(message.guild.id), int(message.channel.id), int(message.author.id)),
-                )
+                channel_ids: list[int] = [int(message.channel.id)]
+                parent_id = getattr(getattr(message, "channel", None), "parent_id", None)
+                if parent_id:
+                    channel_ids.append(int(parent_id))
+                row = None
+                for cid in channel_ids:
+                    row = await self.bot.db.fetchone(
+                        """SELECT * FROM board_requests
+                           WHERE guild_id=? AND channel_id=? AND user_id=? AND status='awaiting_reply'
+                           ORDER BY id DESC LIMIT 1""",
+                        (int(message.guild.id), int(cid), int(message.author.id)),
+                    )
+                    if row:
+                        break
+                # Last resort: latest awaiting request for this user in this guild
+                if not row:
+                    row = await self.bot.db.fetchone(
+                        """SELECT * FROM board_requests
+                           WHERE guild_id=? AND user_id=? AND status='awaiting_reply'
+                           ORDER BY id DESC LIMIT 1""",
+                        (int(message.guild.id), int(message.author.id)),
+                    )
                 if not row:
                     return
                 req = dict(row)
@@ -629,11 +645,10 @@ class ClubCog(commands.Cog):
                 return
             status_now = str(req.get("status") or "")
             if status_now != "awaiting_reply":
-                if status_now in {"approved", "rejected", "cancelled"}:
-                    try:
-                        await message.reply(embed=info_embed("Board Request Already Handled", f"This board request was already **{status_now}**. Run `/requestfunds` or `/requestwage` to start a new request if available."))
-                    except Exception:
-                        pass
+                try:
+                    await message.reply(embed=info_embed("Board Request Already Handled", f"This board request is currently **{status_now}**. Run `/requestfunds` or `/requestwage` to start a new request if needed."))
+                except Exception:
+                    pass
                 return
 
             reason = (message.content or "").strip()
@@ -816,20 +831,49 @@ class ClubCog(commands.Cog):
                     board_lines.append(f"- Approved wage increase: **{_money(final_amount)}/wk**")
                     board_lines.append(f"- Wage budget updated: {_money(current_wage)}/wk → **{_money(new_val)}/wk**")
                 board_lines.append("- Board note: approval is conditional on your stated commitment to compete for the league and cup.")
-                await message.reply(embed=success_embed("Board Meeting Result", "\n".join(board_lines)[:3900]))
+                result_embed = success_embed("Board Meeting Result", "\n".join(board_lines)[:3900])
+                try:
+                    await message.reply(embed=result_embed)
+                except Exception:
+                    try:
+                        await message.channel.send(content=f"<@{message.author.id}>", embed=result_embed)
+                    except Exception:
+                        pass
+                try:
+                    await message.author.send(embed=result_embed)
+                except Exception:
+                    pass
             else:
                 board_lines.append("")
                 board_lines.append("**Decision: REJECTED ❌**")
                 for r in reasons:
                     board_lines.append(f"- {r}")
                 board_lines.append("- Reply with a stronger, detailed case and explicitly include your promise to win the league and the cup.")
-                await message.reply(embed=error_embed("Board Meeting Result", "\n".join(board_lines)[:3900]))
+                result_embed = error_embed("Board Meeting Result", "\n".join(board_lines)[:3900])
+                try:
+                    await message.reply(embed=result_embed)
+                except Exception:
+                    try:
+                        await message.channel.send(content=f"<@{message.author.id}>", embed=result_embed)
+                    except Exception:
+                        pass
+                try:
+                    await message.author.send(embed=result_embed)
+                except Exception:
+                    pass
         except Exception:
             logger.exception("Failed to process board request reply")
+            err = error_embed("Board Request Error", "I couldn't process your board request reply. Please try again with a clear amount and a detailed case (include your promise to win the league and the cup).")
             try:
-                await message.reply(embed=error_embed("Board Request Error", "I couldn't process your board request reply. Please try again with a clear amount and detailed case (include your promise to win the league and the cup)."))
+                await message.reply(embed=err)
             except Exception:
-                pass
+                try:
+                    await message.channel.send(content=f"<@{message.author.id}>", embed=err)
+                except Exception:
+                    try:
+                        await message.author.send(embed=err)
+                    except Exception:
+                        pass
 
 async def setup(bot):
     await bot.add_cog(ClubCog(bot))

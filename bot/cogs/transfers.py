@@ -124,59 +124,71 @@ class TransfersCog(commands.Cog):
                 return
         except Exception:
             logger.exception("transfer interaction handler failed")
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=error_embed("Interaction Failed", "Something didn't go through. Please try again."), ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=error_embed("Interaction Failed", "Something didn't go through. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
     async def handle_contract_submit_button(self, interaction: discord.Interaction, offer_id: int):
         offer = await self.get_offer(offer_id)
         if not offer:
+            msg = error_embed("Not Found", "This negotiation is no longer available.")
             if not interaction.response.is_done():
-                await interaction.response.send_message("This negotiation is no longer available.", ephemeral=True)
+                await interaction.response.send_message(embed=msg, ephemeral=True)
             else:
-                await interaction.followup.send("This negotiation is no longer available.", ephemeral=True)
+                await interaction.followup.send(embed=msg, ephemeral=True)
             return
         if interaction.user.id != int(offer.get("buying_user_id") or 0):
-            msg = "Only the buying manager can submit a contract offer."
+            msg = error_embed("Not Allowed", "Only the buying manager can submit a contract offer.")
             if not interaction.response.is_done():
-                await interaction.response.send_message(msg, ephemeral=True)
+                await interaction.response.send_message(embed=msg, ephemeral=True)
             else:
-                await interaction.followup.send(msg, ephemeral=True)
+                await interaction.followup.send(embed=msg, ephemeral=True)
             return
         if offer.get("status") not in ("negotiating", "accepted", "countered"):
-            msg = "This negotiation is no longer active."
+            msg = error_embed("Inactive", "This negotiation is no longer active.")
             if not interaction.response.is_done():
-                await interaction.response.send_message(msg, ephemeral=True)
+                await interaction.response.send_message(embed=msg, ephemeral=True)
             else:
-                await interaction.followup.send(msg, ephemeral=True)
+                await interaction.followup.send(embed=msg, ephemeral=True)
             return
         await interaction.response.send_modal(ContractOfferModal(self, int(offer_id)))
 
     async def handle_contract_pullout(self, interaction: discord.Interaction, offer_id: int):
         offer = await self.get_offer(offer_id)
         if not offer:
+            msg = error_embed("Not Found", "This negotiation is no longer available.")
             if not interaction.response.is_done():
-                await interaction.response.send_message("This negotiation is no longer available.", ephemeral=True)
+                await interaction.response.send_message(embed=msg, ephemeral=True)
             else:
-                await interaction.followup.send("This negotiation is no longer available.", ephemeral=True)
+                await interaction.followup.send(embed=msg, ephemeral=True)
             return
         if interaction.user.id != int(offer.get("buying_user_id") or 0):
-            msg = "Only the buying manager can pull out."
+            msg = error_embed("Not Allowed", "Only the buying manager can pull out.")
             if not interaction.response.is_done():
-                await interaction.response.send_message(msg, ephemeral=True)
+                await interaction.response.send_message(embed=msg, ephemeral=True)
             else:
-                await interaction.followup.send(msg, ephemeral=True)
+                await interaction.followup.send(embed=msg, ephemeral=True)
             return
         await self.db_execute(
             "UPDATE transfer_offers SET status='cancelled', updated_at=? WHERE id=?",
             (utc_now_iso(), int(offer_id)),
         )
+        cancel_embed = info_embed("Negotiation Cancelled", "Negotiation cancelled by the buying manager.")
         try:
             if not interaction.response.is_done():
-                await interaction.response.edit_message(content="Negotiation cancelled by buying manager.", view=None)
+                await interaction.response.edit_message(embed=cancel_embed, view=None)
             else:
-                await interaction.edit_original_response(content="Negotiation cancelled by buying manager.", view=None)
+                await interaction.edit_original_response(embed=cancel_embed, view=None)
         except Exception:
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.send_message("Negotiation cancelled.", ephemeral=True)
+                    await interaction.response.send_message(embed=cancel_embed, ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=cancel_embed, ephemeral=True)
             except Exception:
                 pass
 
@@ -331,7 +343,7 @@ class TransfersCog(commands.Cog):
             status = "negotiating" if decision["accept"] else "rejected"
             cur = await self.bot.db.execute(
                 """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?, 'club_offer',0,0,?, ?,?)""",
+                   VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?, 'club_offer',0,0,?, ?,?)""",
                 (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision}), now, now),
             )
             offer_id = cur.lastrowid
@@ -373,259 +385,265 @@ class TransfersCog(commands.Cog):
         except Exception:
             logger.exception("botoffer command failed")
             try:
-                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while processing the bot offer. Please try again."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Command Failed", "I couldn't complete that bot offer. Please try again - if it keeps failing, check the team/player names and fee format."), ephemeral=True)
             except Exception:
                 pass
 
     async def handle_contract_modal_submit(self, interaction: discord.Interaction, modal: ContractOfferModal):
         await interaction.response.defer(ephemeral=True)
-        offer = await self.get_offer(modal.offer_id)
-        if not offer:
-            await interaction.followup.send(embed=error_embed("Not Found", "Negotiation not found."), ephemeral=True)
-            return
-        if interaction.user.id != int(offer.get("buying_user_id") or 0):
-            await interaction.followup.send(embed=error_embed("Not Allowed", "Only the buying manager can submit this offer."), ephemeral=True)
-            return
-        if offer.get("status") not in ("negotiating", "accepted", "countered"):
-            await interaction.followup.send(embed=error_embed("Inactive", "This negotiation is no longer active."), ephemeral=True)
-            return
-
-        meta = {}
         try:
-            meta = json.loads(offer.get("meta_json") or "{}")
-        except Exception:
+            offer = await self.get_offer(modal.offer_id)
+            if not offer:
+                await interaction.followup.send(embed=error_embed("Not Found", "Negotiation not found."), ephemeral=True)
+                return
+            if interaction.user.id != int(offer.get("buying_user_id") or 0):
+                await interaction.followup.send(embed=error_embed("Not Allowed", "Only the buying manager can submit this offer."), ephemeral=True)
+                return
+            if offer.get("status") not in ("negotiating", "accepted", "countered"):
+                await interaction.followup.send(embed=error_embed("Inactive", "This negotiation is no longer active."), ephemeral=True)
+                return
+
             meta = {}
-        demand = meta.get("demand") or {}
-        valuation = meta.get("valuation") or {}
+            try:
+                meta = json.loads(offer.get("meta_json") or "{}")
+            except Exception:
+                meta = {}
+            demand = meta.get("demand") or {}
+            valuation = meta.get("valuation") or {}
 
-        raw_msg = str(getattr(modal, "offer", None).value if getattr(modal, "offer", None) else "").strip()
-        parsed = self.market.parse_contract_reply(raw_msg) if raw_msg else {}
+            raw_msg = str(getattr(modal, "offer", None).value if getattr(modal, "offer", None) else "").strip()
+            parsed = self.market.parse_contract_reply(raw_msg) if raw_msg else {}
 
-        wage = parsed.get("wage")
-        bonus = parsed.get("signing_bonus")
-        role = parsed.get("role")
-        years = parsed.get("contract_years")
+            wage = parsed.get("wage")
+            bonus = parsed.get("signing_bonus")
+            role = parsed.get("role")
+            years = parsed.get("contract_years")
 
-        # Agreement intent: "we agree", "deal", "accept your offer/counter/terms" etc.
-        _raw_low = raw_msg.lower().strip()
-        _negated_agree = bool(re.search(r"\b(don't|dont|do not|can't|cant|cannot|won't|wont|never|not)\b.{0,20}\bagree\b", _raw_low))
-        _agreement_phrases = bool(re.search(
-            r"\b(we agree|i agree|agreed|we have a deal|you got a deal|you have a deal|let'?s do it|lets do it|"
-            r"accept your (offer|counter|terms|demand)|accept the (offer|counter|terms|demand)|accept those terms|"
-            r"i'?ll take it|ill take it|that works for me|works for me|sounds good|fine by me|ok deal|okay deal|go ahead|done deal)\b",
-            _raw_low,
-        ))
-        _plain_accept = bool(re.fullmatch(r"(ok|okay|yes|yep|yeah|sure|fine|alright|all right|agree|agreed|deal|accept|yup)\W*", _raw_low))
-        _explicit_accept_ref = bool(re.search(r"\b(accept|agree to|take)\b.{0,30}\b(your|the|that|those)\b.{0,20}\b(offer|counter|terms|demand|deal)\b", _raw_low))
-        # Treat as agreement only when it's clearly accepting bot terms (no conflicting specific contract numbers)
-        _has_specific_contract_terms = bool(re.search(r"(\d[\d,.]*\s*[kmb]?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)) or bool(re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)) or bool(re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low))
-        _is_agreement = (not _negated_agree) and (_agreement_phrases or _plain_accept or _explicit_accept_ref) and not _has_specific_contract_terms
-        if _is_agreement:
-            _agree_terms = meta.get("last_counter") or demand or {}
-            wage = _agree_terms.get("wage", wage)
-            role = _agree_terms.get("role", role)
-            bonus = _agree_terms.get("signing_bonus", bonus)
-            years = _agree_terms.get("contract_years", years)
-            meta["_agreement_accepted"] = True
+            # Agreement intent: "we agree", "deal", "accept your offer/counter/terms" etc.
+            _raw_low = raw_msg.lower().strip()
+            _negated_agree = bool(re.search(r"\b(don't|dont|do not|can't|cant|cannot|won't|wont|never|not)\b.{0,20}\bagree\b", _raw_low))
+            _agreement_phrases = bool(re.search(
+                r"\b(we agree|i agree|agreed|we have a deal|you got a deal|you have a deal|let'?s do it|lets do it|"
+                r"accept your (offer|counter|terms|demand)|accept the (offer|counter|terms|demand)|accept those terms|"
+                r"i'?ll take it|ill take it|that works for me|works for me|sounds good|fine by me|ok deal|okay deal|go ahead|done deal)\b",
+                _raw_low,
+            ))
+            _plain_accept = bool(re.fullmatch(r"(ok|okay|yes|yep|yeah|sure|fine|alright|all right|agree|agreed|deal|accept|yup)\W*", _raw_low))
+            _explicit_accept_ref = bool(re.search(r"\b(accept|agree to|take)\b.{0,30}\b(your|the|that|those)\b.{0,20}\b(offer|counter|terms|demand|deal)\b", _raw_low))
+            # Treat as agreement only when it's clearly accepting bot terms (no conflicting specific contract numbers)
+            _has_specific_contract_terms = bool(re.search(r"(\d[\d,.]*\s*[kmb]?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)) or bool(re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)) or bool(re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low))
+            _is_agreement = (not _negated_agree) and (_agreement_phrases or _plain_accept or _explicit_accept_ref) and not _has_specific_contract_terms
+            if _is_agreement:
+                _agree_terms = meta.get("last_counter") or demand or {}
+                wage = _agree_terms.get("wage", wage)
+                role = _agree_terms.get("role", role)
+                bonus = _agree_terms.get("signing_bonus", bonus)
+                years = _agree_terms.get("contract_years", years)
+                meta["_agreement_accepted"] = True
 
-        # Parse strictly from the user's message (no silent defaults for wage/role/years).
-        missing: list[str] = []
+            # Parse strictly from the user's message (no silent defaults for wage/role/years).
+            missing: list[str] = []
 
-        # Bonus: if explicitly stated, or clearly "no bonus", or no bonus mentioned at all -> 0
-        if bonus is None:
-            _bonus_kw = re.search(
-                r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
-                raw_msg, re.I,
-            )
-            if not _bonus_kw:
+            # Bonus: if explicitly stated, or clearly "no bonus", or no bonus mentioned at all -> 0
+            if bonus is None:
                 _bonus_kw = re.search(
-                    r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\b",
+                    r"(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\s*[:=]?\s*([€£$]?\s*\d[\d,.]*\s*[kmb]?)",
                     raw_msg, re.I,
                 )
-            if _bonus_kw:
-                _bv = money_to_int(_bonus_kw.group(1))
-                if _bv is not None and _bv >= 0:
-                    bonus = int(_bv)
-        if bonus is None:
-            # If there's a second distinct money number, treat it as bonus
-            _nums: list[int] = []
-            for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
-                _v = money_to_int(_m.group(1))
-                if _v is not None and _v > 0:
-                    _nums.append(int(_v))
-            _nums_unique = []
-            for _v in _nums:
-                if _v not in _nums_unique:
-                    _nums_unique.append(_v)
-            if wage is not None and len(_nums_unique) >= 2:
-                for _v in _nums_unique:
-                    if int(_v) == int(wage):
+                if not _bonus_kw:
+                    _bonus_kw = re.search(
+                        r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)\s*(?:signing\s*bonus|sign[- ]?on\s*bonus|signing\s*fee|sign[- ]?on|bonus)\b",
+                        raw_msg, re.I,
+                    )
+                if _bonus_kw:
+                    _bv = money_to_int(_bonus_kw.group(1))
+                    if _bv is not None and _bv >= 0:
+                        bonus = int(_bv)
+            if bonus is None:
+                # If there's a second distinct money number, treat it as bonus
+                _nums: list[int] = []
+                for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
+                    _v = money_to_int(_m.group(1))
+                    if _v is not None and _v > 0:
+                        _nums.append(int(_v))
+                _nums_unique = []
+                for _v in _nums:
+                    if _v not in _nums_unique:
+                        _nums_unique.append(_v)
+                if wage is not None and len(_nums_unique) >= 2:
+                    for _v in _nums_unique:
+                        if int(_v) == int(wage):
+                            continue
+                        if 1_000 <= int(_v) <= 200_000_000:
+                            bonus = int(_v)
+                            break
+            if bonus is None:
+                # No bonus mentioned - interpret as no signing bonus
+                bonus = 0
+
+            # Wage: try to extract from any clear money mention
+            if wage is None or int(wage) <= 0:
+                for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
+                    _v = money_to_int(_m.group(1))
+                    if _v is None:
                         continue
-                    if 1_000 <= int(_v) <= 200_000_000:
-                        bonus = int(_v)
+                    if bonus is not None and int(_v) == int(bonus):
+                        continue
+                    if 1_000 <= int(_v) <= 5_000_000:
+                        wage = int(_v)
                         break
-        if bonus is None:
-            # No bonus mentioned - interpret as no signing bonus
-            bonus = 0
+            if wage is None or int(wage) <= 0:
+                missing.append("weekly wage (e.g. 200k/wk)")
 
-        # Wage: try to extract from any clear money mention
-        if wage is None or int(wage) <= 0:
-            for _m in re.finditer(r"([€£$]?\s*\d[\d,.]*\s*[kmb]?)", raw_msg, re.I):
-                _v = money_to_int(_m.group(1))
-                if _v is None:
-                    continue
-                if bonus is not None and int(_v) == int(bonus):
-                    continue
-                if 1_000 <= int(_v) <= 5_000_000:
-                    wage = int(_v)
-                    break
-        if wage is None or int(wage) <= 0:
-            missing.append("weekly wage (e.g. 200k/wk)")
+            if role is None:
+                missing.append("role (Crucial/Important/Rotation/Sporadic/Prospect)")
+            if years is None:
+                missing.append("contract length (e.g. 4 years)")
 
-        if role is None:
-            missing.append("role (Crucial/Important/Rotation/Sporadic/Prospect)")
-        if years is None:
-            missing.append("contract length (e.g. 4 years)")
+            if missing and not meta.get("_agreement_accepted"):
+                understood = []
+                if wage is not None and int(wage) > 0:
+                    understood.append(f"Wage: {fmt_money(int(wage))}/wk")
+                if role is not None:
+                    understood.append(f"Role: {role}")
+                if bonus is not None:
+                    understood.append(f"Signing bonus: {fmt_money(int(bonus))}")
+                if years is not None:
+                    understood.append(f"Length: {int(years)} years")
+                understood_line = ("I understood: " + ", ".join(understood) + "\n\n") if understood else ""
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "Clarify Your Offer",
+                        understood_line
+                        + "I couldn't clearly read: " + ", ".join(missing) + ".\n\n"
+                        + f"Your message: `{raw_msg[:300]}`\n\n"
+                        + "Reply in any natural format, for example: `200k a week, important role, 2m signing bonus, 4 years`."
+                    ),
+                    ephemeral=True,
+                )
+                return
 
-        if missing and not meta.get("_agreement_accepted"):
-            understood = []
-            if wage is not None and int(wage) > 0:
-                understood.append(f"Wage: {fmt_money(int(wage))}/wk")
-            if role is not None:
-                understood.append(f"Role: {role}")
-            if bonus is not None:
-                understood.append(f"Signing bonus: {fmt_money(int(bonus))}")
-            if years is not None:
-                understood.append(f"Length: {int(years)} years")
-            understood_line = ("I understood: " + ", ".join(understood) + "\n\n") if understood else ""
-            await interaction.followup.send(
-                embed=error_embed(
-                    "Clarify Your Offer",
-                    understood_line
-                    + "I couldn't clearly read: " + ", ".join(missing) + ".\n\n"
-                    + f"Your message: `{raw_msg[:300]}`\n\n"
-                    + "Reply in any natural format, for example: `200k a week, important role, 2m signing bonus, 4 years`."
-                ),
-                ephemeral=True,
-            )
-            return
+            # Safety for agreement-accepted path
+            if wage is None or int(wage) <= 0:
+                wage = int(demand.get("wage") or 50_000)
+            if role is None:
+                role = normalize_role(str(demand.get("role") or "Rotation")) or "Rotation"
+            if bonus is None:
+                bonus = int(demand.get("signing_bonus") or 0)
+            if years is None:
+                years = int(demand.get("contract_years") or 3)
 
-        # Safety for agreement-accepted path
-        if wage is None or int(wage) <= 0:
-            wage = int(demand.get("wage") or 50_000)
-        if role is None:
-            role = normalize_role(str(demand.get("role") or "Rotation")) or "Rotation"
-        if bonus is None:
-            bonus = int(demand.get("signing_bonus") or 0)
-        if years is None:
-            years = int(demand.get("contract_years") or 3)
+            wage = int(wage)
+            bonus = max(0, int(bonus))
+            role = normalize_role(str(role)) or str(demand.get("role") or "Rotation")
+            try:
+                years = int(years)
+            except Exception:
+                years = int(demand.get("contract_years") or 3)
+            years = max(1, min(5, years))
 
-        wage = int(wage)
-        bonus = max(0, int(bonus))
-        role = normalize_role(str(role)) or str(demand.get("role") or "Rotation")
-        try:
-            years = int(years)
-        except Exception:
-            years = int(demand.get("contract_years") or 3)
-        years = max(1, min(5, years))
-        if assumed:
-            meta["_last_assumptions"] = assumed
+            round_no = int(meta.get("contract_round") or 0) + 1
+            pressure = int(meta.get("pressure") or 0)
+            is_free_agent = bool(meta.get("is_free_agent")) or str(offer.get("kind") or "") == "free_agent_contract" or int(offer.get("selling_team_api_id") or 0) == 9000001
 
-        round_no = int(meta.get("contract_round") or 0) + 1
-        pressure = int(meta.get("pressure") or 0)
-        is_free_agent = bool(meta.get("is_free_agent")) or str(offer.get("kind") or "") == "free_agent_contract" or int(offer.get("selling_team_api_id") or 0) == 9000001
+            # Pressure increases on lowball / disrespectful offers, stalling, and repeated rounds.
+            demand_wage = int(demand.get("wage") or 0)
+            wage_ratio = (wage / max(1, demand_wage)) if demand_wage else 1.0
+            if wage_ratio < 0.75:
+                pressure += 3
+            elif wage_ratio < 0.85:
+                pressure += 2
+            elif wage_ratio < 0.93:
+                pressure += 1
+            role_rank = {"Crucial": 0, "Important": 1, "Rotation": 2, "Sporadic": 3, "Prospect": 4}
+            offered_role = normalize_role(role) or "Rotation"
+            demand_role = str(demand.get("role") or "Rotation")
+            role_gap = role_rank.get(offered_role, 2) - role_rank.get(demand_role, 2)
+            if role_gap > 0:
+                pressure += 1
+            if round_no >= 3:
+                pressure += 1
+            if round_no >= 5:
+                pressure += 1
+            pressure = max(0, min(10, int(pressure)))
 
-        # Pressure increases on lowball / disrespectful offers, stalling, and repeated rounds.
-        demand_wage = int(demand.get("wage") or 0)
-        wage_ratio = (wage / max(1, demand_wage)) if demand_wage else 1.0
-        if wage_ratio < 0.75:
-            pressure += 3
-        elif wage_ratio < 0.85:
-            pressure += 2
-        elif wage_ratio < 0.93:
-            pressure += 1
-        role_rank = {"Crucial": 0, "Important": 1, "Rotation": 2, "Sporadic": 3, "Prospect": 4}
-        offered_role = normalize_role(role) or "Rotation"
-        demand_role = str(demand.get("role") or "Rotation")
-        role_gap = role_rank.get(offered_role, 2) - role_rank.get(demand_role, 2)
-        if role_gap > 0:
-            pressure += 1
-        if round_no >= 3:
-            pressure += 1
-        if round_no >= 5:
-            pressure += 1
-        pressure = max(0, min(10, int(pressure)))
+            season_year = int((await self.bot.season_service.get_season(str(offer.get("season_id")) or "") or {}).get("season_year") or 2026)
+            player = await self.market.get_player(int(offer.get("player_api_id") or 0), season_year) or {"name": offer.get("player_name"), "overall": valuation.get("market_value", 0) and 75, "potential": 75}
+            # ensure ovr/pot
+            if not player.get("overall") or not player.get("potential"):
+                p2 = await self.bot.db.fetchone("SELECT overall,potential,name,age,position,detailed_position,height_cm FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1", (int(offer.get("player_api_id") or 0),))
+                if p2:
+                    d2 = dict(p2)
+                    player = {**d2, **{k: v for k, v in player.items() if v is not None}}
 
-        season_year = int((await self.bot.season_service.get_season(str(offer.get("season_id")) or "") or {}).get("season_year") or 2026)
-        player = await self.market.get_player(int(offer.get("player_api_id") or 0), season_year) or {"name": offer.get("player_name"), "overall": valuation.get("market_value", 0) and 75, "potential": 75}
-        # ensure ovr/pot
-        if not player.get("overall") or not player.get("potential"):
-            p2 = await self.bot.db.fetchone("SELECT overall,potential,name,age,position,detailed_position,height_cm FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1", (int(offer.get("player_api_id") or 0),))
-            if p2:
-                d2 = dict(p2)
-                player = {**d2, **{k: v for k, v in player.items() if v is not None}}
+            offered = {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years}
+            result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure, is_free_agent=is_free_agent)
 
-        offered = {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years}
-        result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure, is_free_agent=is_free_agent)
+            meta["contract_round"] = round_no
+            meta["pressure"] = pressure
+            meta["last_offer"] = offered
+            meta["last_counter"] = result.get("counter")
+            bar = result.get("pressure_bar") or negotiation_pressure_bar(pressure, 10)
 
-        meta["contract_round"] = round_no
-        meta["pressure"] = pressure
-        meta["last_offer"] = offered
-        meta["last_counter"] = result.get("counter")
-        bar = result.get("pressure_bar") or negotiation_pressure_bar(pressure, 10)
-
-        if result.get("walked_away"):
-            meta["ended_reason"] = "pressure_walkaway"
-            await self.bot.db.execute(
-                "UPDATE transfer_offers SET status='cancelled', stage='ended', meta_json=?, updated_at=? WHERE id=?",
-                (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
-            )
-            await interaction.followup.send(embed=error_embed(
-                "Negotiation Ended",
-                result["message"]
-            ), ephemeral=True)
-            return
-
-        if result.get("accepted"):
-            meta["agreed_contract"] = offered
-            await self.bot.db.execute(
-                "UPDATE transfer_offers SET status='agreed', stage='agreed', meta_json=?, updated_at=? WHERE id=?",
-                (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
-            )
-            # finalize transfer
-            fin = await self._finalize_agreed_offer(offer, offered)
-            if fin.get("ok"):
-                extra = fin.get("message", "")
-                await interaction.followup.send(embed=success_embed(
-                    "Contract Agreed — Transfer Completed",
-                    result["message"] + "\n\n" + extra
-                ), ephemeral=True)
-            else:
+            if result.get("walked_away"):
+                meta["ended_reason"] = "pressure_walkaway"
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET status='cancelled', stage='ended', meta_json=?, updated_at=? WHERE id=?",
+                    (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
+                )
                 await interaction.followup.send(embed=error_embed(
-                    "Contract Agreed But Finalization Failed",
-                    result["message"] + f"\n\nTransfer finalization failed: {fin.get('reason','unknown')}. The agreement was recorded but could not be auto-finalized; check budgets/team state."
+                    "Negotiation Ended",
+                    result["message"]
                 ), ephemeral=True)
-            return
+                return
 
-        # counter
-        await self.bot.db.execute(
-            "UPDATE transfer_offers SET status='countered', stage='contract', meta_json=?, updated_at=? WHERE id=?",
-            (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
-        )
-        counter = result.get("counter") or {}
-        view = ContractNegView(self, int(offer.get("id")))
-        counter_line = ""
-        if counter:
-            counter_line = (
-                f"\n\n**Your offer:** {fmt_money(wage)}/wk • {role} • bonus {fmt_money(bonus)} • {years} yrs\n"
-                f"**Counter-demand:** {fmt_money(counter.get('wage'))}/wk • {counter.get('role')} • bonus {fmt_money(counter.get('signing_bonus'))} • {counter.get('contract_years')} yrs\n"
-                f"Round: {round_no} • {bar}\n"
-                "Submit a revised offer or pull out. Lowballing or stalling will raise pressure."
+            if result.get("accepted"):
+                meta["agreed_contract"] = offered
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET status='agreed', stage='agreed', meta_json=?, updated_at=? WHERE id=?",
+                    (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
+                )
+                # finalize transfer
+                fin = await self._finalize_agreed_offer(offer, offered)
+                if fin.get("ok"):
+                    extra = fin.get("message", "")
+                    await interaction.followup.send(embed=success_embed(
+                        "Contract Agreed — Transfer Completed",
+                        result["message"] + "\n\n" + extra
+                    ), ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=error_embed(
+                        "Contract Agreed But Finalization Failed",
+                        result["message"] + f"\n\nTransfer finalization failed: {fin.get('reason','unknown')}. The agreement was recorded but could not be auto-finalized; check budgets/team state."
+                    ), ephemeral=True)
+                return
+
+            # counter
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET status='countered', stage='contract', meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
             )
-        await interaction.followup.send(embed=info_embed(
-            "Contract Counter-Offer",
-            (result["message"] + counter_line)[:3900]
-        ), view=view, ephemeral=True)
+            counter = result.get("counter") or {}
+            view = ContractNegView(self, int(offer.get("id")))
+            counter_line = ""
+            if counter:
+                counter_line = (
+                    f"\n\n**Your offer:** {fmt_money(wage)}/wk • {role} • bonus {fmt_money(bonus)} • {years} yrs\n"
+                    f"**Counter-demand:** {fmt_money(counter.get('wage'))}/wk • {counter.get('role')} • bonus {fmt_money(counter.get('signing_bonus'))} • {counter.get('contract_years')} yrs\n"
+                    f"Round: {round_no} • {bar}\n"
+                    "Submit a revised offer or pull out. Lowballing or stalling will raise pressure."
+                )
+            await interaction.followup.send(embed=info_embed(
+                "Contract Counter-Offer",
+                (result["message"] + counter_line)[:3900]
+            ), view=view, ephemeral=True)
+
+        except Exception:
+            logger.exception("handle_contract_modal_submit failed offer_id=%s", getattr(modal, "offer_id", None))
+            try:
+                await interaction.followup.send(embed=error_embed("Negotiation Error", "I couldn't process that contract offer. Please try again with a clear offer like `200k/wk, important role, 2M signing bonus, 4 years`."), ephemeral=True)
+            except Exception:
+                pass
 
     async def _finalize_agreed_offer(self, offer: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
         season_id = offer.get("season_id")
@@ -790,7 +808,7 @@ class TransfersCog(commands.Cog):
             now = utc_now_iso()
             cur = await self.bot.db.execute(
                 """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,stage,meta_json,created_at,updated_at)
-                   VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?, 'ask', ?, ?,?)""",
+                   VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?,?,?, 'ask', ?, ?,?)""",
                 (season_id, interaction.guild_id, interaction.channel_id, "ask_about", interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(seller_manager_id), int(player.get("api_id")), str(player.get("name")), json.dumps({}), now, now),
             )
             offer_id = cur.lastrowid
@@ -862,7 +880,7 @@ class TransfersCog(commands.Cog):
         except Exception:
             logger.exception("askaboutplayer command failed")
             try:
-                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while sending the player enquiry. Please try again."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Command Failed", "I couldn't complete that enquiry. Please try again - if it keeps failing, check the team/player names."), ephemeral=True)
             except Exception:
                 pass
 
@@ -931,6 +949,16 @@ class TransfersCog(commands.Cog):
             if not selling_team:
                 await interaction.followup.send(embed=error_embed("Team Not Found", f"Could not find selling club `{selling_club}`. Check the name and try again."), ephemeral=True)
                 return
+            # If found an unclaimed copy, look for a claimed copy in other seasons
+            if selling_team.get("manager_user_id") is None:
+                seasons_all = await self.bot.season_service.list_seasons(guild_id=interaction.guild_id, status=None)
+                if not seasons_all and interaction.guild_id is not None:
+                    seasons_all = await self.bot.season_service.list_seasons(guild_id=None, status=None)
+                for s2 in seasons_all:
+                    st2 = await self._find_season_team_by_name(str(s2.get("id")), selling_club)
+                    if st2 and st2.get("manager_user_id") is not None:
+                        selling_team, selling_season = st2, s2
+                        break
             if selling_season:
                 selling_sid = str(selling_season.get("id"))
                 buying_sid = str((buying_team or {}).get("season_id") or season_id)
@@ -1025,7 +1053,7 @@ class TransfersCog(commands.Cog):
         except Exception:
             logger.exception("contractnego command failed")
             try:
-                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while starting the contract negotiation. Please try again."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Command Failed", "I couldn't start that contract negotiation. Please try again - if it keeps failing, check the player/club/fee details."), ephemeral=True)
             except Exception:
                 pass
 
@@ -1125,7 +1153,7 @@ class TransfersCog(commands.Cog):
         except Exception:
             logger.exception("freeagentcontract command failed")
             try:
-                await interaction.followup.send(embed=error_embed("Command Failed", "Something went wrong while starting the free-agent negotiation. Please try again."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Command Failed", "I couldn't start that free-agent negotiation. Please try again - if it keeps failing, check the player name."), ephemeral=True)
             except Exception:
                 pass
 

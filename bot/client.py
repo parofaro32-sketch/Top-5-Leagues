@@ -70,7 +70,7 @@ class FootballBot(commands.Bot):
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
         orig = getattr(error, "original", error)
         logger.exception("App command error: %s", error, exc_info=orig)
-        msg = "Something went wrong while running that command. Please try again."
+        msg = "That command didn't go through. Please try again."
         try:
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
