@@ -208,6 +208,21 @@ def _clean_llm_user_text(text: Any, *, max_len: int = 3500) -> str:
     s = re.sub(r"\n{3,}", "\n\n", s).strip()
     if len(s) > max_len:
         s = s[: max_len - 3].rstrip() + "..."
+
+    # Never leak internal reasoning/planning to users.
+    if s and "[Negotiation Pressure:" not in s and not re.search(r"^\s*\{[\s\S]*\}\s*$", s):
+        head = s[:700].lower()
+        markers = [
+            r"\bi should consider\b", r"\bi need to evaluate\b", r"\bi need to consider\b",
+            r"\blet me think\b", r"\bi will formulate\b", r"\bi'll formulate\b",
+            r"\bi should respond\b", r"\bi need to respond\b", r"\bthe prompt says\b",
+            r"\bthe user wants\b", r"\bmy response should\b", r"\bi'm going to\b",
+            r"\bi am going to\b", r"\bstep by step\b", r"\bchain of thought\b",
+        ]
+        hits = sum(1 for p in markers if re.search(p, head))
+        if hits >= 2 or (hits >= 1 and not re.search(r"\b(wage|salary|bonus|contract|years|deal|offer|counter|accept|reject|role|signing)\b", head)):
+            logger.warning("Dropped reasoning-leak text from LLM output: %s", s[:200])
+            return ""
     return s
 
 
@@ -1835,7 +1850,14 @@ class TransfersCog(commands.Cog):
                 )
                 return
 
-            opening_msg = _clean_llm_user_text(opening_msg) or opening_msg
+            opening_msg = _clean_llm_user_text(opening_msg)
+            if not opening_msg:
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
+                    (utc_now_iso(), int(offer_id)),
+                )
+                await interaction.followup.send(embed=error_embed("LLM Negotiation Failed", "I couldn't get a valid negotiation opening message. Please try again."), ephemeral=True)
+                return
 
             view = ContractNegView(self, int(offer_id))
             p = player

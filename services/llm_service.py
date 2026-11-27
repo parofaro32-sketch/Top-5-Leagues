@@ -568,6 +568,9 @@ class LLMService:
                         if isinstance(p, str):
                             parts.append(p)
                         elif isinstance(p, dict):
+                            ptype = str(p.get("type") or "").lower()
+                            if ptype in {"thinking", "thought", "reasoning", "analysis", "internal"}:
+                                continue
                             # OpenAI-compatible content parts
                             for key in ("text", "output_text", "content"):
                                 v = p.get(key)
@@ -578,23 +581,45 @@ class LLMService:
                     if text:
                         return text
 
-                # Some providers put text in other fields. Avoid reasoning_content unless it
-                # clearly contains JSON/message (thinking traces poison JSON parsing).
+                # Some providers put text in other fields. Never return raw reasoning/thinking.
                 for k in ("text", "output_text"):
                     v = msg.get(k)
                     if isinstance(v, str) and v.strip():
                         return v.strip()
                 for rk in ("reasoning_content", "reasoning"):
                     rc = msg.get(rk)
-                    if isinstance(rc, str) and rc.strip():
-                        rct = rc.strip()
-                        if "{" in rct or "[Negotiation Pressure:" in rct:
-                            return rct
-                        # Last-resort: some models put the actual reply in reasoning_content.
-                        if len(rct) >= 30 and any(w in rct.lower() for w in ["counter", "accept", "reject", "wage", "contract", "signing bonus", "walk away", "deal", "offer"]):
-                            # Avoid obvious chain-of-thought dumps
-                            if not re.search(r"(?i)\b(let me think|i need to|step by step|chain of thought)\b", rct[:120]):
-                                return rct
+                    if not isinstance(rc, str) or not rc.strip():
+                        continue
+                    rct = rc.strip()
+                    # Only extract a clean JSON object from reasoning; never return thinking traces.
+                    if "{" in rct:
+                        start = rct.find("{")
+                        end = rct.rfind("}")
+                        if start != -1 and end > start:
+                            candidate = rct[start:end + 1]
+                            try:
+                                obj = json.loads(candidate)
+                                if isinstance(obj, dict):
+                                    return json.dumps(obj, ensure_ascii=False)
+                            except Exception:
+                                repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+                                try:
+                                    obj = json.loads(repaired)
+                                    if isinstance(obj, dict):
+                                        return json.dumps(obj, ensure_ascii=False)
+                                except Exception:
+                                    pass
+                    # If reasoning contains a pressure-bar message, extract from bar onward only if it looks like a final message.
+                    mbar = re.search(r"\[Negotiation Pressure:[^\]]*\]", rct)
+                    if mbar:
+                        tail = rct[mbar.start():].strip()
+                        tail_head = tail[:500]
+                        if not re.search(
+                            r"(?i)\b(i should|i need to|i'll|i will|let me|we should|i must consider|the user wants|the prompt says|i'm going to|i am going to|my response should|here's how)\b",
+                            tail_head,
+                        ):
+                            return tail[:4000]
+                    # Otherwise ignore reasoning content.
 
             # Native Gemini response fallback (just in case)
             candidates = data.get("candidates") or []
@@ -712,9 +737,11 @@ class LLMService:
                                 except Exception:
                                     pass
                     return d
-            # Plain text response - use it as the message. The caller can infer defaults.
-            # Strip any leading/trailing markdown fences leftover
+            # Plain text response - use it as the message. Never leak internal reasoning.
             clean = LLMService._clean_user_message_text(t) or t.strip()
+            if LLMService._looks_like_reasoning_leak(clean):
+                logger.warning("LLM chat_json dropped reasoning-leak plain text: %s", clean[:200])
+                return None
             if len(clean) >= 10:
                 return {"message": clean[:4000], "_salvaged_plain": True}
             return None
@@ -812,6 +839,33 @@ class LLMService:
         filled = max(0, min(10, int(round((p / max(1, max_pressure)) * 10))))
         bar = "█" * filled + "░" * (10 - filled)
         return f"[Negotiation Pressure: {bar} {pct}%]"
+
+    @staticmethod
+    def _looks_like_reasoning_leak(text: Any) -> bool:
+        """Detect internal planning/reasoning mistakenly emitted as user-facing text."""
+        s = str(text or "").strip()
+        if not s:
+            return False
+        # Real negotiation outputs almost always include a pressure bar or JSON structure.
+        if "[Negotiation Pressure:" in s:
+            return False
+        if re.search(r"^\s*\{[\s\S]*\}\s*$", s):
+            return False
+        head = s[:700].lower()
+        reasoning_markers = [
+            r"\bi should consider\b", r"\bi need to evaluate\b", r"\bi need to consider\b",
+            r"\blet me think\b", r"\bi will formulate\b", r"\bi'll formulate\b",
+            r"\bi should respond\b", r"\bi need to respond\b", r"\bhow i should\b",
+            r"\bthe prompt says\b", r"\bthe user wants\b", r"\bmy response should\b",
+            r"\bi am going to\b", r"\bi'm going to\b", r"\bstep by step\b",
+            r"\bchain of thought\b", r"\binternal reasoning\b", r"\bas an ai\b",
+        ]
+        hits = sum(1 for p in reasoning_markers if re.search(p, head))
+        if hits >= 2:
+            return True
+        if hits >= 1 and not re.search(r"(?i)\b(wage|salary|bonus|contract|years|deal|offer|counter|accept|reject|role|signing)\b", head):
+            return True
+        return False
 
     @staticmethod
     def _clean_user_message_text(text: Any) -> str:
@@ -920,6 +974,8 @@ class LLMService:
         # If it still looks like raw JSON, avoid leaking it
         if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
             return "Negotiation update received."
+        if LLMService._looks_like_reasoning_leak(s):
+            return ""
         return s
 
     @staticmethod
@@ -1082,6 +1138,8 @@ class LLMService:
             "IMPORTANT INSTRUCTION: While negotiating, a bar showing negotiation pressure must be shown. "
             "If it reaches a high value, the manager should end negotiation. MUST BE EXTREMELY REALISTIC AND BE STRICT. "
             "You decide whether to accept or reject the fee. Do not mention being an AI. "
+            "CRITICAL: Output ONLY the final JSON object. Never include internal reasoning, planning, analysis, chain-of-thought, or descriptions of what you are doing. "
+            "The 'message' field must contain only the in-character negotiation reply shown to the manager. "
             "Return ONLY a JSON object with keys: "
             "accepted (boolean), walked_away (boolean), pressure (integer 0-10), message (string). "
             "Rules: pressure must be >= previous_pressure unless there is a strong reason, and never above 10. "
@@ -1128,7 +1186,7 @@ class LLMService:
             # Last resort: plain chat and salvage text as message
             plain = await self.chat(
                 [
-                    {"role": "system", "content": sys.replace("Return ONLY a JSON object with keys: accepted (boolean), walked_away (boolean), pressure (integer 0-10), message (string). ", "")},
+                    {"role": "system", "content": sys.replace("Return ONLY a JSON object with keys: accepted (boolean), walked_away (boolean), pressure (integer 0-10), message (string). ", "") + " Output only the final in-character negotiation message. No reasoning, no planning, no chain-of-thought."},
                     {"role": "user", "content": user},
                 ],
                 temperature=0.5,
@@ -1136,7 +1194,10 @@ class LLMService:
             )
             if isinstance(plain, str) and plain.strip():
                 cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
-                data = {"message": cleaned_plain, "_salvaged_plain": True}
+                if not self._looks_like_reasoning_leak(cleaned_plain):
+                    data = {"message": cleaned_plain, "_salvaged_plain": True}
+                else:
+                    logger.warning("LLM dropped reasoning-leak plain fallback: %s", cleaned_plain[:200])
         if not isinstance(data, dict):
             return None
 
@@ -1261,6 +1322,8 @@ class LLMService:
         sys = (
             persona + " "
             "You decide the negotiation outcome. Do not mention being an AI. "
+            "CRITICAL: Output ONLY the final JSON object. Never include internal reasoning, planning, analysis, chain-of-thought, or descriptions of what you are doing. "
+            "The 'message' field must contain only the in-character negotiation reply shown to the manager. "
             "Return ONLY a JSON object with keys: "
             "accepted (boolean), walked_away (boolean), manager_ended (boolean), pressure (integer 0-10), "
             "counter (object|null with wage integer euros/week, role one of Crucial/Important/Rotation/Sporadic/Prospect, signing_bonus integer euros, contract_years integer 1-5), "
@@ -1320,7 +1383,7 @@ class LLMService:
             # Last resort: plain chat and salvage
             plain = await self.chat(
                 [
-                    {"role": "system", "content": re.sub(r"Return ONLY a JSON object with keys:.*?message \(string\)\.\s*", "", sys, count=1, flags=re.DOTALL)},
+                    {"role": "system", "content": re.sub(r"Return ONLY a JSON object with keys:.*?message \(string\)\.\s*", "", sys, count=1, flags=re.DOTALL) + " Output only the final in-character negotiation message. No reasoning, no planning, no chain-of-thought."},
                     {"role": "user", "content": user},
                 ],
                 temperature=0.5,
@@ -1328,7 +1391,10 @@ class LLMService:
             )
             if isinstance(plain, str) and plain.strip():
                 cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
-                data = {"message": cleaned_plain, "_salvaged_plain": True}
+                if not self._looks_like_reasoning_leak(cleaned_plain):
+                    data = {"message": cleaned_plain, "_salvaged_plain": True}
+                else:
+                    logger.warning("LLM dropped reasoning-leak plain fallback: %s", cleaned_plain[:200])
 
         if not isinstance(data, dict):
             return None
@@ -1511,6 +1577,8 @@ class LLMService:
         sys = (
             persona + " "
             "This is the OPENING message of the contract negotiation. Do not mention being an AI. "
+            "CRITICAL: Output ONLY the final JSON object. Never include internal reasoning, planning, analysis, chain-of-thought, or descriptions of what you are doing. "
+            "The 'message' field must contain only the in-character negotiation reply shown to the manager. "
             "Return ONLY a JSON object with keys: message (string). "
             "The message must start with the negotiation pressure bar [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
             "Clearly state the opening demands with exact numbers: weekly wage, role, signing bonus, contract years. "
@@ -1571,7 +1639,8 @@ class LLMService:
                             f"Start with the negotiation pressure bar [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
                             "Clearly state opening demands with exact numbers: weekly wage, role, signing bonus, contract years. "
                             "Use the provided demand values exactly. Reference the player's OVR/POT/market value. "
-                            "Be realistic, firm, and strict. 2-5 short paragraphs. Return only the message text."
+                            "Be realistic, firm, and strict. 2-5 short paragraphs. Return only the message text. "
+                            "No internal reasoning, planning, analysis, or chain-of-thought."
                         ),
                     },
                     {"role": "user", "content": user},
@@ -1580,7 +1649,9 @@ class LLMService:
                 max_tokens=1000,
             )
             if isinstance(plain, str) and plain.strip():
-                msg = self._clean_user_message_text(plain.strip()) or plain.strip()
+                cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
+                if not self._looks_like_reasoning_leak(cleaned_plain):
+                    msg = cleaned_plain
 
         if not msg:
             return None
