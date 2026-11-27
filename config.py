@@ -128,7 +128,7 @@ def load_settings() -> Settings:
         llm_api_keys=llm_api_keys,
         llm_base_url=os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai").strip().rstrip("/"),
         llm_model=os.getenv("LLM_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash",
-        llm_timeout=int(os.getenv("LLM_TIMEOUT", "20")),
+        llm_timeout=int(os.getenv("LLM_TIMEOUT", "45")),
         llm_models=llm_models,
         openrouter_api_key=openrouter_api_keys[0] if openrouter_api_keys else "",
         openrouter_api_keys=openrouter_api_keys,

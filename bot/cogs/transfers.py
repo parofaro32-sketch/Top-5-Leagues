@@ -713,30 +713,7 @@ class TransfersCog(commands.Cog):
             years = parsed.get("contract_years")
 
             # Agreement intent: "we agree", "deal", "accept your offer/counter/terms" etc.
-            _raw_low = raw_msg.lower().strip()
-            _negated_agree = bool(re.search(r"\b(don't|dont|do not|can't|cant|cannot|won't|wont|never|not)\b.{0,20}\bagree\b", _raw_low))
-            _agreement_phrases = bool(re.search(
-                r"\b(we agree|i agree|agreed|we have a deal|you got a deal|you have a deal|let'?s do it|lets do it|"
-                r"accept your (offer|counter|terms|demand)|accept the (offer|counter|terms|demand)|accept those terms|"
-                r"i'?ll take it|ill take it|that works for me|works for me|sounds good|fine by me|ok deal|okay deal|go ahead|done deal)\b",
-                _raw_low,
-            ))
-            _plain_accept = bool(re.fullmatch(r"(ok|okay|yes|yep|yeah|sure|fine|alright|all right|agree|agreed|deal|accept|yup)\W*", _raw_low))
-            _explicit_accept_ref = bool(re.search(r"\b(accept|agree to|take)\b.{0,30}\b(your|the|that|those)\b.{0,20}\b(offer|counter|terms|demand|deal)\b", _raw_low))
-            # Treat as agreement only when it's clearly accepting bot terms (no conflicting specific contract numbers)
-            _has_specific_contract_terms = bool(
-                re.search(r"(\d[\d,.]*\s*(?:[kmb]|million|mil|thousand|billion|bn)?\s*(?:/wk|wk|week|weekly|per week|pw|p/w))", _raw_low)
-                or re.search(r"\b\d+\s*(?:year|yr|years|yrs|season|seasons)\b", _raw_low)
-                or re.search(r"\b(signing bonus|sign-on|bonus)\b\s*[:=]?\s*\d", _raw_low)
-            )
-            _is_agreement = (not _negated_agree) and (_agreement_phrases or _plain_accept or _explicit_accept_ref) and not _has_specific_contract_terms
-            if _is_agreement:
-                _agree_terms = meta.get("last_counter") or demand or {}
-                wage = _agree_terms.get("wage", wage)
-                role = _agree_terms.get("role", role)
-                bonus = _agree_terms.get("signing_bonus", bonus)
-                years = _agree_terms.get("contract_years", years)
-                meta["_agreement_accepted"] = True
+            # Intent is decided by the LLM from user_message (no deterministic agreement shortcut).
 
             missing: list[str] = []
 
@@ -814,7 +791,7 @@ class TransfersCog(commands.Cog):
                 missing.append("contract length (e.g. 4 years)")
 
             # LLM fallback for missing fields (only fills gaps; deterministic parse takes precedence)
-            if missing and not meta.get("_agreement_accepted"):
+            if missing:
                 try:
                     llm = getattr(self.bot, "llm_service", None)
                     if llm and getattr(llm, "enabled", False):
@@ -847,9 +824,10 @@ class TransfersCog(commands.Cog):
                     logger.exception("LLM contract term fallback failed")
 
             # Never block on parsing - LLM handles natural language understanding.
-            # Fill any missing fields from last counter / demand so we can always proceed.
-            if missing and not meta.get("_agreement_accepted"):
-                _fill = meta.get("last_counter") or demand or {}
+            # Fill missing fields from the manager's last offer/counter/demand as baseline; user_message carries intent.
+            offered_is_explicit = (len(missing) == 0)
+            if missing:
+                _fill = meta.get("last_offer") or meta.get("last_counter") or demand or {}
                 if wage is None or int(wage) <= 0:
                     wage = int(_fill.get("wage") or demand.get("wage") or 100_000)
                 if role is None:
@@ -858,9 +836,8 @@ class TransfersCog(commands.Cog):
                     bonus = int(_fill.get("signing_bonus") or demand.get("signing_bonus") or 0)
                 if years is None:
                     years = int(_fill.get("contract_years") or demand.get("contract_years") or 3)
-                meta["_llm_infer_terms"] = True
 
-            # Safety for agreement-accepted path
+            # Safety defaults
             if wage is None or int(wage) <= 0:
                 wage = int(demand.get("wage") or 50_000)
             if role is None:
@@ -944,6 +921,7 @@ class TransfersCog(commands.Cog):
                         valuation=valuation if isinstance(valuation, dict) else None,
                         scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
                         user_message=raw_msg,
+                        offered_is_explicit=bool(offered_is_explicit),
                     )
                     if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
                         result = dict(llm_decision)
@@ -956,29 +934,29 @@ class TransfersCog(commands.Cog):
             if not isinstance(result, dict):
                 # Retry with the same Prompt #2/#3 method (no ad-hoc prompt).
                 logger.warning("LLM contract negotiation returned no structured result; retrying negotiate_contract offer_id=%s err=%s", offer.get("id"), last_err)
-                for _retry in range(2):
-                    try:
-                        llm_decision = await llm.negotiate_contract(
-                            player=player,
-                            demand=demand,
-                            offered=offered,
-                            previous_pressure=previous_pressure,
-                            max_pressure=10,
-                            round_no=int(round_no),
-                            is_free_agent=bool(is_free_agent),
-                            buying_team_name=str(offer.get("buying_team_name") or ""),
-                            selling_team_name=str(offer.get("selling_team_name") or ""),
-                            valuation=valuation if isinstance(valuation, dict) else None,
-                            scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
-                            user_message=raw_msg,
-                        )
-                        if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
-                            result = dict(llm_decision)
-                            break
-                        last_err = "empty_or_invalid_decision"
-                    except Exception as e:
-                        last_err = str(e)
-                        logger.exception("LLM contract negotiation retry failed attempt=%s offer_id=%s", _retry + 1, offer.get("id"))
+                try:
+                    llm_decision = await llm.negotiate_contract(
+                        player=player,
+                        demand=demand,
+                        offered=offered,
+                        previous_pressure=previous_pressure,
+                        max_pressure=10,
+                        round_no=int(round_no),
+                        is_free_agent=bool(is_free_agent),
+                        buying_team_name=str(offer.get("buying_team_name") or ""),
+                        selling_team_name=str(offer.get("selling_team_name") or ""),
+                        valuation=valuation if isinstance(valuation, dict) else None,
+                        scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
+                        user_message=raw_msg,
+                        offered_is_explicit=bool(offered_is_explicit),
+                    )
+                    if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
+                        result = dict(llm_decision)
+                    else:
+                        last_err = last_err or "empty_or_invalid_decision"
+                except Exception as e:
+                    last_err = str(e)
+                    logger.exception("LLM contract negotiation retry failed offer_id=%s", offer.get("id"))
 
             if not isinstance(result, dict):
                 last_err = last_err or getattr(llm, "last_error", None) or "empty_or_invalid_decision"
@@ -993,19 +971,26 @@ class TransfersCog(commands.Cog):
                 return
 
             pressure = max(0, min(10, int(result.get("pressure", previous_pressure) or 0)))
-            # Only allow walkaway at 100% pressure.
-            if pressure >= 10:
-                result["walked_away"] = True
+            if bool(result.get("manager_ended")):
+                result["manager_ended"] = True
                 result["accepted"] = False
-                result["counter"] = None
-                pressure = 10
-            if bool(result.get("walked_away")) and pressure < 10:
                 result["walked_away"] = False
-                result["accepted"] = False
-                _mw = str(result.get("message") or "")
-                if re.search(r"(?i)\b(walk(?:ing)? away|negotiations? (?:are )?over|talks? (?:are )?over|deal is off)\b", _mw):
-                    _mw = re.sub(r"(?i)\b(walk(?:ing)? away|negotiations? (?:are )?over|talks? (?:are )?over|deal is off)\b[^.!\n]*[.!]?", "talks are close to breaking point, but they are still willing to hear an improved offer.", _mw)
-                    result["message"] = _mw
+                result["counter"] = None
+                result["agreed_terms"] = None
+            else:
+                # Only allow agent walkaway at 100% pressure.
+                if pressure >= 10:
+                    result["walked_away"] = True
+                    result["accepted"] = False
+                    result["counter"] = None
+                    pressure = 10
+                if bool(result.get("walked_away")) and pressure < 10:
+                    result["walked_away"] = False
+                    result["accepted"] = False
+                    _mw = str(result.get("message") or "")
+                    if re.search(r"(?i)\b(walk(?:ing)? away|negotiations? (?:are )?over|talks? (?:are )?over|deal is off)\b", _mw):
+                        _mw = re.sub(r"(?i)\b(walk(?:ing)? away|negotiations? (?:are )?over|talks? (?:are )?over|deal is off)\b[^.!\n]*[.!]?", "talks are close to breaking point, but they are still willing to hear an improved offer.", _mw)
+                        result["message"] = _mw
             if bool(result.get("accepted")):
                 result["walked_away"] = False
                 result["counter"] = None
@@ -1077,6 +1062,18 @@ class TransfersCog(commands.Cog):
                 bar = result["pressure_bar"]
                 meta["pressure"] = _p_now
                 meta["last_counter"] = result.get("counter")
+
+            if result.get("manager_ended"):
+                meta["ended_reason"] = "manager_ended"
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET status='cancelled', stage='ended', meta_json=?, updated_at=? WHERE id=?",
+                    (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
+                )
+                await interaction.followup.send(embed=info_embed(
+                    "Negotiation Ended",
+                    result["message"]
+                ), ephemeral=True)
+                return
 
             if result.get("walked_away"):
                 meta["ended_reason"] = "pressure_walkaway"

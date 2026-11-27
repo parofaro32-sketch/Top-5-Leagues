@@ -76,7 +76,7 @@ class LLMService:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=max(5, int(self.settings.llm_timeout or 20)))
+            timeout = aiohttp.ClientTimeout(total=max(20, int(self.settings.llm_timeout or 45)))
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
@@ -157,6 +157,8 @@ class LLMService:
                 defaults=[
                     "nvidia/nemotron-3.5-lightning",
                     "nvidia/nemotron-3.5-super-vl",
+                    "nvidia/nemotron-3.5-lightning:free",
+                    "nvidia/nemotron-3.5-super-vl:free",
                 ],
             )
             providers.append({
@@ -277,6 +279,11 @@ class LLMService:
         # If caller requests a specific model, try it first on the primary provider.
         requested_model = str(model or "").strip()
         last_error: str | None = None
+        _timeout_s = int(getattr(self.settings, "llm_timeout", 45) or 45)
+        overall_deadline = time.monotonic() + float(max(30, min(_timeout_s * 2, 90)))
+
+        def _deadline_exceeded() -> bool:
+            return time.monotonic() >= overall_deadline
 
         def _log_failure(status: int, prov: str, mdl: str, raw: str) -> None:
             logger.warning("LLM chat failed status=%s provider=%s model=%s body=%s", status, prov, mdl, (raw or "")[:500])
@@ -288,6 +295,10 @@ class LLMService:
             return any(k in body_l for k in ["quota", "resource_exhausted", "rate limit exceeded", "too many requests"])
 
         for prov_idx, prov in enumerate(providers):
+            if _deadline_exceeded():
+                last_error = last_error or "overall_deadline_exceeded"
+                logger.warning("LLM chat overall deadline exceeded before provider=%s", prov.get("name"))
+                break
             prov_name = str(prov.get("name") or f"provider_{prov_idx}")
             prov_state = self._provider_state_for(prov_name)
             base_url = str(prov.get("base_url") or "")
@@ -312,13 +323,19 @@ class LLMService:
                 if prov_idx == 0:
                     models = self._candidate_models_for_provider(primary=requested_model, configured=list(getattr(self.settings, "llm_models", None) or []), defaults=models)
                 elif requested_model not in models:
-                    # Also try requested model on fallback providers (some are cross-compatible, e.g. OpenRouter).
-                    models = [requested_model, *models]
+                    # Only prepend cross-provider if model id is clearly compatible (e.g. OpenRouter-style provider/model).
+                    if "/" in requested_model:
+                        models = [requested_model, *models]
 
             i = 0
             rotations = 0
             provider_dead = False
             while i < len(models):
+                if _deadline_exceeded():
+                    last_error = last_error or "overall_deadline_exceeded"
+                    logger.warning("LLM chat overall deadline exceeded provider=%s model=%s", prov_name, models[i] if i < len(models) else "?")
+                    provider_dead = True
+                    break
                 m = models[i]
                 prov_state["key_index"] = int(prov_state.get("key_index") or 0) % max(1, len(api_keys))
                 key_idx = int(prov_state.get("key_index") or 0)
@@ -567,11 +584,17 @@ class LLMService:
                     v = msg.get(k)
                     if isinstance(v, str) and v.strip():
                         return v.strip()
-                rc = msg.get("reasoning_content")
-                if isinstance(rc, str) and rc.strip():
-                    rct = rc.strip()
-                    if "{" in rct or "[Negotiation Pressure:" in rct:
-                        return rct
+                for rk in ("reasoning_content", "reasoning"):
+                    rc = msg.get(rk)
+                    if isinstance(rc, str) and rc.strip():
+                        rct = rc.strip()
+                        if "{" in rct or "[Negotiation Pressure:" in rct:
+                            return rct
+                        # Last-resort: some models put the actual reply in reasoning_content.
+                        if len(rct) >= 30 and any(w in rct.lower() for w in ["counter", "accept", "reject", "wage", "contract", "signing bonus", "walk away", "deal", "offer"]):
+                            # Avoid obvious chain-of-thought dumps
+                            if not re.search(r"(?i)\b(let me think|i need to|step by step|chain of thought)\b", rct[:120]):
+                                return rct
 
             # Native Gemini response fallback (just in case)
             candidates = data.get("candidates") or []
@@ -710,6 +733,12 @@ class LLMService:
         if isinstance(salvaged1, dict) and salvaged1.get("message"):
             logger.info("LLM chat_json salvaged plain-text response from first call (len=%s)", len(str(salvaged1.get("message") or "")))
             return salvaged1
+
+        # If providers are globally exhausted/timed out, don't burn another full round.
+        _le = str(self.last_error or "").lower()
+        if not text1 and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+            logger.warning("LLM chat_json skipping second attempt due to last_error=%s", self.last_error)
+            return None
 
         text2 = await self.chat(
             messages,
@@ -1006,30 +1035,7 @@ class LLMService:
                 pass
         return None
 
-    @staticmethod
-    def _infer_walkaway_from_text(text: str) -> bool:
-        t = str(text or "").lower()
-        patterns = [
-            r"\bwalk(?:ing)? away\b", r"\bend(?:ing)? (?:the )?negotiat", r"\btalks? (?:are )?over\b",
-            r"\bdeal is off\b", r"\bno deal\b", r"\bpull(?:ing)? out\b", r"\bleav(?:e|ing) the table\b",
-            r"\bnot negotiating any further\b", r"\bnegotiations? (?:have )?collapsed\b",
-        ]
-        return any(re.search(p, t) for p in patterns)
-
-    @staticmethod
-    def _infer_accept_from_text(text: str) -> bool:
-        t = str(text or "").lower()
-        # Avoid false positives like "cannot accept"
-        if re.search(r"\b(can(?:not|'t)|won't|will not|unable to|refuse to|do not|don't)\b.{0,20}\baccept\b", t):
-            return False
-        patterns = [
-            r"\bwe (?:can )?accept\b", r"\bi (?:can )?accept\b", r"\bwe(?:'re| are) happy to accept\b",
-            r"\bdeal(?: is)? accepted\b", r"\baccepted? (?:the|your) (?:offer|fee|bid|terms)\b",
-            r"\bwe have a deal\b", r"\bagree(?:d)? to (?:the|your) (?:offer|fee|bid|terms)\b",
-            r"\bfee is accepted\b", r"\boffer is accepted\b",
-        ]
-        return any(re.search(p, t) for p in patterns)
-
+    # Text-inference decision helpers removed (pure LLM decisions).
     async def negotiate_fee(
         self,
         *,
@@ -1085,6 +1091,9 @@ class LLMService:
             temperature=0.7,
             max_tokens=1300,
         )
+        _le = str(self.last_error or "").lower()
+        if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+            return None
         if not isinstance(data, dict):
             data = await self.chat_json(
                 [
@@ -1094,6 +1103,9 @@ class LLMService:
                 temperature=0.2,
                 max_tokens=1300,
             )
+        _le = str(self.last_error or "").lower()
+        if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+            return None
         if not isinstance(data, dict):
             # Last resort: plain chat and salvage text as message
             plain = await self.chat(
@@ -1126,11 +1138,8 @@ class LLMService:
 
         msg = self._clean_user_message_text(_pick(data, "message", "response", "reply", "text", default="") or "")
 
-        # Infer from message when fields are missing or salvaged
-        has_accepted_key = any(k in data for k in ("accepted", "accept", "is_accepted", "isAccepted"))
-        has_walked_key = any(k in data for k in ("walked_away", "walkedAway", "walk_away", "walkaway"))
+        # Pure LLM decision: trust structured fields; no text-heuristic guessing.
         has_pressure_key = any(k in data for k in ("pressure", "pressure_level", "pressure_pct"))
-
         inferred_pressure = self._infer_pressure_from_text(msg, previous=prev_p, max_pressure=max_pressure)
         if not has_pressure_key and inferred_pressure is not None:
             pressure_raw = inferred_pressure
@@ -1138,15 +1147,8 @@ class LLMService:
             pressure_raw = self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)
         pressure = max(prev_p, min(int(max_pressure), int(pressure_raw)))
 
-        if has_walked_key:
-            walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
-        else:
-            walked_away = self._infer_walkaway_from_text(msg)
-
-        if has_accepted_key:
-            accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
-        else:
-            accepted = self._infer_accept_from_text(msg) if not walked_away else False
+        walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
+        accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
 
         if pressure >= int(max_pressure):
             walked_away = True
@@ -1198,6 +1200,7 @@ class LLMService:
         valuation: dict[str, Any] | None = None,
         scenario: str | None = None,
         user_message: str | None = None,
+        offered_is_explicit: bool = True,
     ) -> dict[str, Any] | None:
         """LLM-driven contract negotiation decision (prompts #2/#3). Returns validated dict or None."""
         if not self.enabled:
@@ -1241,21 +1244,22 @@ class LLMService:
             persona + " "
             "You decide the negotiation outcome. Do not mention being an AI. "
             "Return ONLY a JSON object with keys: "
-            "accepted (boolean), walked_away (boolean), pressure (integer 0-10), "
+            "accepted (boolean), walked_away (boolean), manager_ended (boolean), pressure (integer 0-10), "
             "counter (object|null with wage integer euros/week, role one of Crucial/Important/Rotation/Sporadic/Prospect, signing_bonus integer euros, contract_years integer 1-5), "
             "agreed_terms (object|null with wage, role, signing_bonus, contract_years - set when accepted is true, otherwise null), "
             "message (string). "
             "Rules: pressure must be >= previous_pressure unless there is strong reason, never above 10. "
+            "If the manager/user clearly ends negotiations, declines to continue, says no deal / not interested / stop / cancel, or refuses to proceed, set manager_ended=true, accepted=false, walked_away=false, counter=null, agreed_terms=null, and write a polite in-character closing message. "
             "If pressure >= 10 or walked_away is true, accepted must be false, counter must be null, agreed_terms must be null, and message must clearly end negotiations. "
-            "If accepted is true, walked_away must be false, counter must be null, agreed_terms must contain the exact agreed terms, and message must clearly confirm agreement. "
-            "If accepted is false and walked_away is false, counter must be present and message must clearly state the counter-demand with exact numbers. "
+            "If accepted is true, walked_away must be false, manager_ended must be false, counter must be null, agreed_terms must contain the exact agreed terms, and message must clearly confirm agreement. "
+            "If accepted is false and walked_away is false and manager_ended is false, counter must be present and message must clearly state your response/counter-demand with exact numbers. "
             "message must start with the negotiation pressure bar in the format [Negotiation Pressure: ███░░░░░░░ XX%]. "
             "message should be 2-5 short paragraphs. Be realistic and strict; use OVR/POT/market value in reasoning. "
-            "IMPORTANT: The user's message is provided as user_message. Interpret it as natural language, even if informal, partial, conversational, or vague "
-            "(e.g. 'can we lower salary to like 100k', 'what about 150k', 'make it 3 years', 'throw in a bigger bonus', 'ok deal'). "
-            "Use user_message together with the offered fields to understand what the manager is proposing. "
-            "If the message is a question, a vague proposal, or missing details, respond in character as the agent, explain what you need or make a firm counter - "
-            "but still return a valid JSON decision (counter or walked_away as appropriate). Never refuse to understand; always reply in character."
+            "IMPORTANT: The user's message is provided as user_message. Interpret it as natural language, even if informal, partial, conversational, or vague. "
+            "Examples: 'can we lower salary to like 100k', 'what about 150k', 'make it 3 years', 'throw in a bigger bonus', 'ok deal', 'no deal sorry', 'can you lower all aspects?'. "
+            "If the user asks you to lower/reduce/improve terms or be more flexible (even without exact numbers), respond in character by lowering the relevant demands and return a concrete counter with reduced numbers - do not reply with a generic 'your offer is not acceptable' without a concrete improved counter. "
+            "If offered_is_explicit is false, the manager did not submit concrete numeric terms; treat user_message as the primary intent and do not assume offered numbers are a firm new offer. "
+            "Never refuse to understand; always reply in character as the agent/manager persona."
         )
 
         user = json.dumps({
@@ -1265,6 +1269,7 @@ class LLMService:
             "buying_club": buying,
             "demand": demand,
             "offered": offered,
+            "offered_is_explicit": bool(offered_is_explicit),
             "user_message": str(user_message or "").strip(),
             "previous_pressure": prev_p,
             "max_pressure": int(max_pressure),
@@ -1278,6 +1283,9 @@ class LLMService:
             temperature=0.7,
             max_tokens=1300,
         )
+        _le = str(self.last_error or "").lower()
+        if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+            return None
         if not isinstance(data, dict):
             data = await self.chat_json(
                 [
@@ -1287,11 +1295,14 @@ class LLMService:
                 temperature=0.2,
                 max_tokens=1300,
             )
+        _le = str(self.last_error or "").lower()
+        if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+            return None
         if not isinstance(data, dict):
             # Last resort: plain chat and salvage
             plain = await self.chat(
                 [
-                    {"role": "system", "content": sys.replace("Return ONLY a JSON object with keys: accepted (boolean), walked_away (boolean), pressure (integer 0-10), counter (object|null with wage integer euros/week, role one of Crucial/Important/Rotation/Sporadic/Prospect, signing_bonus integer euros, contract_years integer 1-5), message (string). ", "")},
+                    {"role": "system", "content": re.sub(r"Return ONLY a JSON object with keys:.*?message \(string\)\.\s*", "", sys, count=1, flags=re.DOTALL)},
                     {"role": "user", "content": user},
                 ],
                 temperature=0.5,
@@ -1318,10 +1329,7 @@ class LLMService:
 
         msg = self._clean_user_message_text(_pick(data, "message", "response", "reply", "text", default="") or "")
 
-        has_accepted_key = any(k in data for k in ("accepted", "accept", "is_accepted", "isAccepted"))
-        has_walked_key = any(k in data for k in ("walked_away", "walkedAway", "walk_away", "walkaway"))
         has_pressure_key = any(k in data for k in ("pressure", "pressure_level", "pressure_pct"))
-
         inferred_pressure = self._infer_pressure_from_text(msg, previous=prev_p, max_pressure=max_pressure)
         if not has_pressure_key and inferred_pressure is not None:
             pressure_raw = inferred_pressure
@@ -1329,32 +1337,32 @@ class LLMService:
             pressure_raw = self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)
         pressure = max(prev_p, min(int(max_pressure), int(pressure_raw)))
 
-        if has_walked_key:
-            walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
-        else:
-            walked_away = self._infer_walkaway_from_text(msg)
+        # Pure LLM decision: trust structured fields; no text-heuristic guessing.
+        walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
+        accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
+        manager_ended = self._coerce_bool(_pick(data, "manager_ended", "managerEnded", "user_ended", "userEnded", "cancelled_by_manager", default=False), False)
 
-        if has_accepted_key:
-            accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
+        if manager_ended:
+            accepted = False
+            walked_away = False
+            # Keep pressure as-is; manager chose to end negotiation.
         else:
-            accepted = self._infer_accept_from_text(msg) if not walked_away else False
-
-        if pressure >= int(max_pressure):
-            walked_away = True
-            accepted = False
-        # User rule: allow contract negotiation to continue until pressure reaches 100%.
-        if walked_away and pressure < int(max_pressure):
-            walked_away = False
-            # Do not end early; keep pressure below 100%.
-            pressure = min(max(int(pressure), int(prev_p)), int(max_pressure) - 1)
-            accepted = False
-        if walked_away:
-            accepted = False
-        if accepted:
-            walked_away = False
+            if pressure >= int(max_pressure):
+                walked_away = True
+                accepted = False
+            # User rule: allow contract negotiation to continue until pressure reaches 100%.
+            if walked_away and pressure < int(max_pressure):
+                walked_away = False
+                # Do not end early; keep pressure below 100%.
+                pressure = min(max(int(pressure), int(prev_p)), int(max_pressure) - 1)
+                accepted = False
+            if walked_away:
+                accepted = False
+            if accepted:
+                walked_away = False
 
         counter = None
-        if not accepted and not walked_away:
+        if not accepted and not walked_away and not manager_ended:
             raw_counter = _pick(data, "counter", "counter_offer", "counterOffer", "counter_demand", "counterDemand", default=None)
             counter = self._sanitize_contract_counter(raw_counter, fallback=demand)
             if counter is None:
@@ -1376,6 +1384,8 @@ class LLMService:
                     f"{offered.get('role')}, {self._money(offered.get('signing_bonus'))} signing bonus, "
                     f"{int(offered.get('contract_years') or 0)} years."
                 )
+            elif manager_ended:
+                msg = f"{bar_tmp}\nUnderstood. We'll end negotiations here for now."
             elif walked_away:
                 msg = f"{bar_tmp}\nNegotiations are over. The player's camp is walking away."
             elif counter:
@@ -1424,6 +1434,7 @@ class LLMService:
         return {
             "accepted": bool(accepted),
             "walked_away": bool(walked_away),
+            "manager_ended": bool(manager_ended),
             "pressure": int(pressure),
             "pressure_bar": bar,
             "counter": counter,
@@ -1505,6 +1516,9 @@ class LLMService:
             temperature=0.7,
             max_tokens=1300,
         )
+        _le = str(self.last_error or "").lower()
+        if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+            return None
         if not isinstance(data, dict):
             data = await self.chat_json(
                 [
@@ -1514,6 +1528,9 @@ class LLMService:
                 temperature=0.2,
                 max_tokens=1300,
             )
+        _le = str(self.last_error or "").lower()
+        if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+            return None
 
         msg = ""
         if isinstance(data, dict):
