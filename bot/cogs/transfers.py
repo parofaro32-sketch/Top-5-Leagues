@@ -937,7 +937,6 @@ class TransfersCog(commands.Cog):
                             sanitized = llm._sanitize_contract_counter(merged, fallback=demand)
                     if sanitized is None and isinstance(raw_counter, dict):
                         # minimal inline sanitize
-                        from services.transfer_market_service import normalize_role
                         _w = int(raw_counter.get("wage") or demand.get("wage") or 100000)
                         _b = int(raw_counter.get("signing_bonus") or demand.get("signing_bonus") or 0)
                         _y = int(raw_counter.get("contract_years") or demand.get("contract_years") or 3)
