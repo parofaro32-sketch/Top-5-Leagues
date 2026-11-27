@@ -774,7 +774,11 @@ class TransfersCog(commands.Cog):
 
             wage = int(wage)
             bonus = max(0, int(bonus))
-            role = normalize_role(str(role)) or str(demand.get("role") or "Rotation")
+            role = (
+                normalize_role(str(role))
+                or normalize_role(str(demand.get("role") or ""))
+                or "Rotation"
+            )
             try:
                 years = int(years)
             except Exception:
@@ -947,7 +951,7 @@ class TransfersCog(commands.Cog):
                 if sanitized is None:
                     sanitized = {
                         "wage": int(demand.get("wage") or 100000),
-                        "role": str(demand.get("role") or "Rotation"),
+                        "role": normalize_role(str(demand.get("role") or "Rotation")) or "Rotation",
                         "signing_bonus": int(demand.get("signing_bonus") or 0),
                         "contract_years": int(demand.get("contract_years") or 3),
                     }

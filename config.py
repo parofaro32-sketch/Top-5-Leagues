@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -29,6 +29,7 @@ class Settings:
     llm_base_url: str
     llm_model: str
     llm_timeout: int
+    llm_api_keys: list[str] = field(default_factory=list)
 
     @property
     def has_discord_token(self) -> bool:
@@ -38,9 +39,26 @@ class Settings:
     def has_football_api_key(self) -> bool:
         return bool(self.football_api_key and self.football_api_key not in {"", "your_api_football_key_here"})
 
+    def __post_init__(self) -> None:
+        # Normalize key sources for direct Settings(...) construction in tests/callers.
+        raw_keys = [str(k or "").strip() for k in (self.llm_api_keys or [])]
+        keys = [k for k in raw_keys if k and k not in {"", "your_llm_api_key_here"}]
+        single = str(self.llm_api_key or "").strip()
+        if single in {"", "your_llm_api_key_here"}:
+            single = ""
+        if not keys and single:
+            keys = [single]
+        # de-dupe preserving order
+        deduped: list[str] = []
+        for k in keys:
+            if k not in deduped:
+                deduped.append(k)
+        self.llm_api_keys = deduped
+        self.llm_api_key = deduped[0] if deduped else ""
+
     @property
     def has_llm(self) -> bool:
-        return bool(self.llm_api_key and self.llm_api_key not in {"", "your_llm_api_key_here"})
+        return bool(self.llm_api_keys)
 
 
 def load_settings() -> Settings:
@@ -51,6 +69,14 @@ def load_settings() -> Settings:
     source = os.getenv("FOOTBALL_DATA_SOURCE", "bundled").strip().lower() or "bundled"
     if source not in {"bundled", "api", "auto"}:
         source = "bundled"
+
+    _llm_keys_raw = os.getenv("LLM_API_KEYS", "").replace(";", ",").split(",")
+    llm_api_keys = [k.strip() for k in _llm_keys_raw if k.strip() and k.strip() not in {"", "your_llm_api_key_here"}]
+    if not llm_api_keys:
+        _single = os.getenv("LLM_API_KEY", "").strip()
+        if _single and _single not in {"", "your_llm_api_key_here"}:
+            llm_api_keys = [_single]
+    llm_api_key = llm_api_keys[0] if llm_api_keys else ""
 
     return Settings(
         discord_bot_token=os.getenv("DISCORD_BOT_TOKEN", "").strip(),
@@ -66,7 +92,8 @@ def load_settings() -> Settings:
         cache_ttl_hours=int(os.getenv("CACHE_TTL_HOURS", "24")),
         api_request_timeout=int(os.getenv("API_REQUEST_TIMEOUT", "20")),
         api_max_retries=int(os.getenv("API_MAX_RETRIES", "3")),
-        llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
+        llm_api_key=llm_api_key,
+        llm_api_keys=llm_api_keys,
         llm_base_url=os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai").strip().rstrip("/"),
         llm_model=os.getenv("LLM_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash",
         llm_timeout=int(os.getenv("LLM_TIMEOUT", "20")),

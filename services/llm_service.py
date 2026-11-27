@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import re
+import time
+from collections import deque
 from typing import Any
 
 import aiohttp
@@ -24,10 +26,41 @@ class LLMService:
         self.settings = settings
         self._session: aiohttp.ClientSession | None = None
         self.last_error: str | None = None
+        self._cooldown_until: float = 0.0
+        self._request_times: deque[float] = deque(maxlen=60)
+        self._key_index: int = 0
 
     @property
     def enabled(self) -> bool:
         return bool(self.settings.has_llm)
+
+    @property
+    def _api_keys(self) -> list[str]:
+        keys = list(getattr(self.settings, "llm_api_keys", None) or [])
+        if not keys and self.settings.llm_api_key:
+            keys = [self.settings.llm_api_key]
+        # de-dupe while preserving order
+        out: list[str] = []
+        for k in keys:
+            k = str(k or "").strip()
+            if k and k not in out:
+                out.append(k)
+        return out
+
+    def _current_api_key(self) -> str:
+        keys = self._api_keys
+        if not keys:
+            return ""
+        self._key_index = self._key_index % len(keys)
+        return keys[self._key_index]
+
+    def _rotate_api_key(self) -> bool:
+        keys = self._api_keys
+        if len(keys) <= 1:
+            return False
+        self._key_index = (self._key_index + 1) % len(keys)
+        logger.info("LLM rotated to API key index %s/%s", self._key_index + 1, len(keys))
+        return True
 
     async def close(self) -> None:
         if self._session and not self._session.closed:
@@ -42,7 +75,7 @@ class LLMService:
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.settings.llm_api_key}",
+            "Authorization": f"Bearer {self._current_api_key()}",
             "Content-Type": "application/json",
         }
 
@@ -100,6 +133,13 @@ class LLMService:
             return None
 
         self.last_error = None
+        # Respect cooldown from prior 429/quota responses
+        now_m = time.monotonic()
+        if now_m < self._cooldown_until:
+            wait_s = min(15.0, self._cooldown_until - now_m)
+            if wait_s > 0:
+                logger.info("LLM cooldown active, waiting %.1fs", wait_s)
+                await asyncio.sleep(wait_s)
         session = await self._get_session()
         url = self._chat_url()
         headers = self._headers()
@@ -109,7 +149,10 @@ class LLMService:
         def _log_failure(status: int, m: str, raw: str) -> None:
             logger.warning("LLM chat failed status=%s model=%s body=%s", status, m, (raw or "")[:500])
 
-        for idx, m in enumerate(models):
+        i = 0
+        rotations = 0
+        while i < len(models):
+            m = models[i]
             payload: dict[str, Any] = {
                 "model": m,
                 "messages": messages,
@@ -122,10 +165,17 @@ class LLMService:
             resp_status: int | None = None
             raw = ""
             data: dict[str, Any] | None = None
+            retry_after: float | None = None
             try:
                 async with session.post(url, headers=headers, json=payload) as resp:
                     raw = await resp.text()
                     resp_status = resp.status
+                    ra = resp.headers.get("Retry-After")
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except Exception:
+                            retry_after = None
                     if resp.status >= 400:
                         last_error = f"status={resp.status} body={raw[:500]}"
                         # Retry without response_format if provider rejects it
@@ -135,6 +185,12 @@ class LLMService:
                             try:
                                 async with session.post(url, headers=headers, json=payload2) as resp2:
                                     raw2 = await resp2.text()
+                                    ra2 = resp2.headers.get("Retry-After")
+                                    if ra2:
+                                        try:
+                                            retry_after = float(ra2)
+                                        except Exception:
+                                            pass
                                     if resp2.status < 400:
                                         try:
                                             data2 = json.loads(raw2)
@@ -161,7 +217,8 @@ class LLMService:
                             except RuntimeError as rexc:
                                 if str(rexc) == "_no_text_after_rf_retry":
                                     # move to next model
-                                    if idx < len(models) - 1:
+                                    if i < len(models) - 1:
+                                        i += 1
                                         continue
                                     return None
                                 raise
@@ -175,24 +232,46 @@ class LLMService:
                             return None
                         if resp_status == 429:
                             _log_failure(resp_status, m, raw)
-                            if idx < len(models) - 1:
-                                await asyncio.sleep(0.8)
+                            body_l = (raw or "").lower()
+                            quota_hit = any(k in body_l for k in ["quota", "resource_exhausted", "rate limit exceeded", "too many requests"])
+                            wait_s = float(retry_after) if retry_after is not None else (15.0 if quota_hit else 2.0)
+                            wait_s = max(1.0, min(wait_s, 30.0))
+                            if quota_hit:
+                                # Try rotating to another key if available; same-key model fallback rarely helps.
+                                if self._rotate_api_key() and rotations < max(1, len(self._api_keys)):
+                                    rotations += 1
+                                    headers = self._headers()
+                                    # Short cooldown for this service to avoid tight hammering; new key has its own quota.
+                                    self._cooldown_until = max(self._cooldown_until, time.monotonic() + 1.0)
+                                    await asyncio.sleep(1.0)
+                                    continue
+                                self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait_s)
+                                self.last_error = last_error or f"status=429 quota body={raw[:200]}"
+                                return None
+                            self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait_s)
+                            if i < len(models) - 1:
+                                i += 1
+                                await asyncio.sleep(wait_s)
                                 continue
+                            self.last_error = last_error or f"status=429 body={raw[:200]}"
                             return None
                         if resp_status >= 500:
                             _log_failure(resp_status, m, raw)
-                            if idx < len(models) - 1:
+                            if i < len(models) - 1:
+                                i += 1
                                 await asyncio.sleep(0.4)
                                 continue
                             return None
                         if self._is_model_error(resp_status or 0, raw):
                             _log_failure(resp_status or 0, m, raw)
-                            if idx < len(models) - 1:
+                            if i < len(models) - 1:
+                                i += 1
                                 continue
                             return None
                         # Other 4xx - log and try next model (might be param-specific)
                         _log_failure(resp_status or 0, m, raw)
-                        if idx < len(models) - 1:
+                        if i < len(models) - 1:
+                            i += 1
                             continue
                         return None
 
@@ -201,24 +280,27 @@ class LLMService:
                     except Exception:
                         last_error = f"status=200 invalid_json body={raw[:300]}"
                         logger.warning("LLM chat 200 but invalid JSON body model=%s body=%s", m, raw[:500])
-                        if idx < len(models) - 1:
+                        if i < len(models) - 1:
+                            i += 1
                             continue
                         return None
             except Exception as e:
                 last_error = str(e)
                 logger.exception("LLM chat request failed model=%s", m)
-                if idx < len(models) - 1:
+                if i < len(models) - 1:
+                    i += 1
                     continue
                 return None
 
             if not isinstance(data, dict):
-                if idx < len(models) - 1:
+                if i < len(models) - 1:
+                    i += 1
                     continue
                 return None
 
             text = self._extract_chat_text(data)
             if text:
-                if idx > 0:
+                if i > 0:
                     logger.info("LLM chat succeeded with fallback model=%s", m)
                 self.last_error = None
                 return text
@@ -233,7 +315,8 @@ class LLMService:
                 finish_reason = None
             logger.warning("LLM chat returned no text model=%s finish_reason=%s raw=%s", m, finish_reason, str(raw)[:500])
             last_error = f"status=200 no_text finish_reason={finish_reason} body={str(raw)[:300]}"
-            if idx < len(models) - 1:
+            if i < len(models) - 1:
+                i += 1
                 continue
             return None
 
