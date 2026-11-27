@@ -29,10 +29,12 @@ class LLMService:
         self._cooldown_until: float = 0.0
         self._request_times: deque[float] = deque(maxlen=60)
         self._key_index: int = 0
+        # Per-provider state: {name: {"key_index": int, "cooldown_until": float}}
+        self._provider_state: dict[str, dict[str, Any]] = {}
 
     @property
     def enabled(self) -> bool:
-        return bool(self.settings.has_llm)
+        return bool(self._providers())
 
     @property
     def _api_keys(self) -> list[str]:
@@ -86,6 +88,114 @@ class LLMService:
             return base
         return f"{base}/chat/completions"
 
+    # ------------------------------------------------------------------
+    # Multi-provider support (Gemini primary + OpenRouter/Groq fallbacks)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_base_url(base: str) -> str:
+        b = str(base or "").strip().rstrip("/")
+        if not b:
+            return b
+        if b.endswith("/chat/completions"):
+            return b
+        return f"{b}/chat/completions"
+
+    @staticmethod
+    def _dedupe_strs(values: list[str] | None) -> list[str]:
+        out: list[str] = []
+        for v in values or []:
+            s = str(v or "").strip()
+            if s and s not in out:
+                out.append(s)
+        return out
+
+    def _provider_state_for(self, name: str) -> dict[str, Any]:
+        st = self._provider_state.get(name)
+        if not isinstance(st, dict):
+            st = {"key_index": 0, "cooldown_until": 0.0}
+            self._provider_state[name] = st
+        st.setdefault("key_index", 0)
+        st.setdefault("cooldown_until", 0.0)
+        return st
+
+    def _providers(self) -> list[dict[str, Any]]:
+        """Build provider chain: primary Gemini first, then OpenRouter, then Groq."""
+        providers: list[dict[str, Any]] = []
+
+        primary_keys = self._dedupe_strs(getattr(self.settings, "llm_api_keys", None) or ([self.settings.llm_api_key] if self.settings.llm_api_key else []))
+        if primary_keys:
+            primary_models = self._candidate_models_for_provider(
+                primary=str(self.settings.llm_model or "").strip(),
+                configured=list(getattr(self.settings, "llm_models", None) or []),
+                defaults=[
+                    "gemini-3.8-flash",
+                    "gemini-3.8-flash-preview",
+                    "gemini-3-flash-preview",
+                    "gemini-2.0-flash",
+                    "gemini-2.0-flash-lite",
+                ],
+            )
+            providers.append({
+                "name": "primary",
+                "base_url": self._normalize_base_url(self.settings.llm_base_url),
+                "api_keys": primary_keys,
+                "models": primary_models,
+                "extra_headers": {},
+            })
+
+        or_keys = self._dedupe_strs(getattr(self.settings, "openrouter_api_keys", None) or [])
+        if or_keys:
+            or_models = self._candidate_models_for_provider(
+                primary="",
+                configured=list(getattr(self.settings, "openrouter_models", None) or []),
+                defaults=[
+                    "meta-llama/llama-3.1-8b-instruct",
+                    "google/gemma-3-4b-it",
+                    "qwen/qwen-2.5-7b-instruct",
+                ],
+            )
+            providers.append({
+                "name": "openrouter",
+                "base_url": self._normalize_base_url(getattr(self.settings, "openrouter_base_url", "https://openrouter.ai/api/v1")),
+                "api_keys": or_keys,
+                "models": or_models,
+                "extra_headers": {
+                    "HTTP-Referer": "https://github.com/parofaro32-sketch/Top-5-Leagues",
+                    "X-Title": "Football Manager Bot",
+                },
+            })
+
+        groq_keys = self._dedupe_strs(getattr(self.settings, "groq_api_keys", None) or [])
+        if groq_keys:
+            groq_models = self._candidate_models_for_provider(
+                primary="",
+                configured=list(getattr(self.settings, "groq_models", None) or []),
+                defaults=[
+                    "llama-3.1-8b-instant",
+                    "llama-3.3-70b-versatile",
+                    "gemma2-9b-it",
+                ],
+            )
+            providers.append({
+                "name": "groq",
+                "base_url": self._normalize_base_url(getattr(self.settings, "groq_base_url", "https://api.groq.com/openai/v1")),
+                "api_keys": groq_keys,
+                "models": groq_models,
+                "extra_headers": {},
+            })
+
+        return providers
+
+    @staticmethod
+    def _candidate_models_for_provider(*, primary: str, configured: list[str], defaults: list[str]) -> list[str]:
+        out: list[str] = []
+        for m in [primary, *configured, *defaults]:
+            s = str(m or "").strip()
+            if s and s not in out:
+                out.append(s)
+        return out
+
     def _candidate_models(self, model: str | None) -> list[str]:
         primary = str(model or self.settings.llm_model or "").strip()
         configured = [str(m or "").strip() for m in (getattr(self.settings, "llm_models", None) or []) if str(m or "").strip()]
@@ -134,195 +244,250 @@ class LLMService:
             return None
 
         self.last_error = None
-        # Respect cooldown from prior 429/quota responses
-        now_m = time.monotonic()
-        if now_m < self._cooldown_until:
-            wait_s = min(15.0, self._cooldown_until - now_m)
-            if wait_s > 0:
-                logger.info("LLM cooldown active, waiting %.1fs", wait_s)
-                await asyncio.sleep(wait_s)
         session = await self._get_session()
-        url = self._chat_url()
-        headers = self._headers()
-        models = self._candidate_models(model)
+        providers = self._providers()
+        if not providers:
+            self.last_error = "llm_disabled"
+            return None
+
+        # If caller requests a specific model, try it first on the primary provider.
+        requested_model = str(model or "").strip()
         last_error: str | None = None
 
-        def _log_failure(status: int, m: str, raw: str) -> None:
-            logger.warning("LLM chat failed status=%s model=%s body=%s", status, m, (raw or "")[:500])
+        def _log_failure(status: int, prov: str, mdl: str, raw: str) -> None:
+            logger.warning("LLM chat failed status=%s provider=%s model=%s body=%s", status, prov, mdl, (raw or "")[:500])
 
-        i = 0
-        rotations = 0
-        while i < len(models):
-            m = models[i]
-            payload: dict[str, Any] = {
-                "model": m,
-                "messages": messages,
-                "temperature": float(temperature),
-                "max_tokens": int(max_tokens),
-            }
-            if response_format is not None:
-                payload["response_format"] = response_format
+        def _is_quota(status: int, raw: str) -> bool:
+            if status != 429:
+                return False
+            body_l = (raw or "").lower()
+            return any(k in body_l for k in ["quota", "resource_exhausted", "rate limit exceeded", "too many requests"])
 
-            resp_status: int | None = None
-            raw = ""
-            data: dict[str, Any] | None = None
-            retry_after: float | None = None
-            try:
-                async with session.post(url, headers=headers, json=payload) as resp:
-                    raw = await resp.text()
-                    resp_status = resp.status
-                    ra = resp.headers.get("Retry-After")
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except Exception:
-                            retry_after = None
-                    if resp.status >= 400:
-                        last_error = f"status={resp.status} body={raw[:500]}"
-                        # Retry without response_format if provider rejects it
-                        if response_format is not None and self._is_response_format_error(resp.status, raw):
-                            payload2 = dict(payload)
-                            payload2.pop("response_format", None)
+        for prov_idx, prov in enumerate(providers):
+            prov_name = str(prov.get("name") or f"provider_{prov_idx}")
+            prov_state = self._provider_state_for(prov_name)
+            base_url = str(prov.get("base_url") or "")
+            api_keys = self._dedupe_strs(list(prov.get("api_keys") or []))
+            if not base_url or not api_keys:
+                continue
+
+            # Respect per-provider cooldown
+            now_m = time.monotonic()
+            cd = float(prov_state.get("cooldown_until") or 0.0)
+            if now_m < cd:
+                wait_s = min(10.0, cd - now_m)
+                if wait_s > 0.5:
+                    logger.info("LLM provider %s cooldown %.1fs, skipping to next provider", prov_name, wait_s)
+                    continue
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+
+            models = list(prov.get("models") or [])
+            if requested_model:
+                # Try requested model first on primary provider; on other providers keep their defaults.
+                if prov_idx == 0:
+                    models = self._candidate_models_for_provider(primary=requested_model, configured=list(getattr(self.settings, "llm_models", None) or []), defaults=models)
+                elif requested_model not in models:
+                    # Also try requested model on fallback providers (some are cross-compatible, e.g. OpenRouter).
+                    models = [requested_model, *models]
+
+            i = 0
+            rotations = 0
+            provider_dead = False
+            while i < len(models):
+                m = models[i]
+                prov_state["key_index"] = int(prov_state.get("key_index") or 0) % max(1, len(api_keys))
+                key_idx = int(prov_state.get("key_index") or 0)
+                current_key = api_keys[key_idx]
+                headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
+                headers.update(dict(prov.get("extra_headers") or {}))
+
+                payload: dict[str, Any] = {
+                    "model": m,
+                    "messages": messages,
+                    "temperature": float(temperature),
+                    "max_tokens": int(max_tokens),
+                }
+                if response_format is not None:
+                    payload["response_format"] = response_format
+
+                resp_status: int | None = None
+                raw = ""
+                data: dict[str, Any] | None = None
+                retry_after: float | None = None
+                try:
+                    async with session.post(base_url, headers=headers, json=payload) as resp:
+                        raw = await resp.text()
+                        resp_status = resp.status
+                        ra = resp.headers.get("Retry-After")
+                        if ra:
                             try:
-                                async with session.post(url, headers=headers, json=payload2) as resp2:
-                                    raw2 = await resp2.text()
-                                    ra2 = resp2.headers.get("Retry-After")
-                                    if ra2:
-                                        try:
-                                            retry_after = float(ra2)
-                                        except Exception:
-                                            pass
-                                    if resp2.status < 400:
-                                        try:
-                                            data2 = json.loads(raw2)
-                                        except Exception:
-                                            data2 = None
-                                        if isinstance(data2, dict):
-                                            text2 = self._extract_chat_text(data2)
-                                            if text2:
-                                                if m != (model or self.settings.llm_model):
-                                                    logger.info("LLM chat succeeded with fallback model=%s (response_format removed)", m)
-                                                self.last_error = None
-                                                return text2
-                                            # 200 but no text - treat as soft failure, try next model
-                                            logger.warning("LLM chat returned no text after response_format retry model=%s raw=%s", m, raw2[:500])
-                                            last_error = f"status=200 no_text body={raw2[:300]}"
+                                retry_after = float(ra)
+                            except Exception:
+                                retry_after = None
+                        if resp.status >= 400:
+                            last_error = f"status={resp.status} provider={prov_name} body={raw[:500]}"
+                            # Retry without response_format if provider rejects it
+                            if response_format is not None and self._is_response_format_error(resp.status, raw):
+                                payload2 = dict(payload)
+                                payload2.pop("response_format", None)
+                                try:
+                                    async with session.post(base_url, headers=headers, json=payload2) as resp2:
+                                        raw2 = await resp2.text()
+                                        ra2 = resp2.headers.get("Retry-After")
+                                        if ra2:
+                                            try:
+                                                retry_after = float(ra2)
+                                            except Exception:
+                                                pass
+                                        if resp2.status < 400:
+                                            try:
+                                                data2 = json.loads(raw2)
+                                            except Exception:
+                                                data2 = None
+                                            if isinstance(data2, dict):
+                                                text2 = self._extract_chat_text(data2)
+                                                if text2:
+                                                    if prov_idx > 0 or m != (requested_model or self.settings.llm_model):
+                                                        logger.info("LLM chat succeeded provider=%s model=%s (response_format removed)", prov_name, m)
+                                                    self.last_error = None
+                                                    return text2
+                                            logger.warning("LLM chat returned no text after response_format retry provider=%s model=%s raw=%s", prov_name, m, raw2[:500])
+                                            last_error = f"status=200 no_text provider={prov_name} body={raw2[:300]}"
                                             data = None
                                             raw = raw2
                                             resp_status = 200
-                                            # fall through to next model logic below
                                             raise RuntimeError("_no_text_after_rf_retry")
-                                    raw = raw2
-                                    resp_status = resp2.status
-                                    last_error = f"status={resp2.status} body={raw2[:500]}"
-                            except RuntimeError as rexc:
-                                if str(rexc) == "_no_text_after_rf_retry":
-                                    # move to next model
-                                    if i < len(models) - 1:
-                                        i += 1
-                                        continue
-                                    return None
-                                raise
-                            except Exception:
-                                # response_format retry failed unexpectedly; keep original status
-                                pass
+                                        raw = raw2
+                                        resp_status = resp2.status
+                                        last_error = f"status={resp2.status} provider={prov_name} body={raw2[:500]}"
+                                except RuntimeError as rexc:
+                                    if str(rexc) == "_no_text_after_rf_retry":
+                                        if i < len(models) - 1:
+                                            i += 1
+                                            continue
+                                        provider_dead = True
+                                        break
+                                    raise
+                                except Exception:
+                                    pass
 
-                        # Decide whether to continue to next model
-                        if resp_status in {401, 403}:
-                            _log_failure(resp_status, m, raw)
-                            return None
-                        if resp_status == 429:
-                            _log_failure(resp_status, m, raw)
-                            body_l = (raw or "").lower()
-                            quota_hit = any(k in body_l for k in ["quota", "resource_exhausted", "rate limit exceeded", "too many requests"])
-                            wait_s = float(retry_after) if retry_after is not None else (15.0 if quota_hit else 2.0)
-                            wait_s = max(1.0, min(wait_s, 30.0))
-                            if quota_hit:
-                                # Try rotating to another key if available; same-key model fallback rarely helps.
-                                if self._rotate_api_key() and rotations < max(1, len(self._api_keys)):
+                            if resp_status in {401, 403}:
+                                _log_failure(resp_status, prov_name, m, raw)
+                                # Try rotating key; if no more keys, provider is dead.
+                                if len(api_keys) > 1 and rotations < max(1, len(api_keys)):
+                                    prov_state["key_index"] = (key_idx + 1) % len(api_keys)
                                     rotations += 1
-                                    headers = self._headers()
-                                    # Short cooldown for this service to avoid tight hammering; new key has its own quota.
-                                    self._cooldown_until = max(self._cooldown_until, time.monotonic() + 1.0)
-                                    await asyncio.sleep(1.0)
+                                    logger.info("LLM rotated %s key index %s/%s after auth failure", prov_name, prov_state["key_index"] + 1, len(api_keys))
                                     continue
-                                self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait_s)
-                                self.last_error = last_error or f"status=429 quota body={raw[:200]}"
-                                return None
-                            self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait_s)
+                                provider_dead = True
+                                break
+
+                            if resp_status == 429:
+                                _log_failure(resp_status, prov_name, m, raw)
+                                quota_hit = _is_quota(resp_status, raw)
+                                wait_s = float(retry_after) if retry_after is not None else (15.0 if quota_hit else 2.0)
+                                wait_s = max(1.0, min(wait_s, 30.0))
+                                if quota_hit:
+                                    if len(api_keys) > 1 and rotations < max(1, len(api_keys)):
+                                        prov_state["key_index"] = (key_idx + 1) % len(api_keys)
+                                        rotations += 1
+                                        prov_state["cooldown_until"] = max(float(prov_state.get("cooldown_until") or 0.0), time.monotonic() + 1.0)
+                                        logger.info("LLM rotated %s key index %s/%s after quota", prov_name, prov_state["key_index"] + 1, len(api_keys))
+                                        await asyncio.sleep(1.0)
+                                        continue
+                                    prov_state["cooldown_until"] = max(float(prov_state.get("cooldown_until") or 0.0), time.monotonic() + wait_s)
+                                    last_error = last_error or f"status=429 quota provider={prov_name} body={raw[:200]}"
+                                    provider_dead = True
+                                    break
+                                prov_state["cooldown_until"] = max(float(prov_state.get("cooldown_until") or 0.0), time.monotonic() + wait_s)
+                                if i < len(models) - 1:
+                                    i += 1
+                                    await asyncio.sleep(min(wait_s, 5.0))
+                                    continue
+                                provider_dead = True
+                                break
+
+                            if resp_status >= 500:
+                                _log_failure(resp_status, prov_name, m, raw)
+                                if i < len(models) - 1:
+                                    i += 1
+                                    await asyncio.sleep(0.4)
+                                    continue
+                                provider_dead = True
+                                break
+
+                            if self._is_model_error(resp_status or 0, raw):
+                                _log_failure(resp_status or 0, prov_name, m, raw)
+                                if i < len(models) - 1:
+                                    i += 1
+                                    continue
+                                provider_dead = True
+                                break
+
+                            _log_failure(resp_status or 0, prov_name, m, raw)
                             if i < len(models) - 1:
                                 i += 1
-                                await asyncio.sleep(wait_s)
                                 continue
-                            self.last_error = last_error or f"status=429 body={raw[:200]}"
-                            return None
-                        if resp_status >= 500:
-                            _log_failure(resp_status, m, raw)
-                            if i < len(models) - 1:
-                                i += 1
-                                await asyncio.sleep(0.4)
-                                continue
-                            return None
-                        if self._is_model_error(resp_status or 0, raw):
-                            _log_failure(resp_status or 0, m, raw)
+                            provider_dead = True
+                            break
+
+                        try:
+                            data = json.loads(raw)
+                        except Exception:
+                            last_error = f"status=200 invalid_json provider={prov_name} body={raw[:300]}"
+                            logger.warning("LLM chat 200 but invalid JSON provider=%s model=%s body=%s", prov_name, m, raw[:500])
                             if i < len(models) - 1:
                                 i += 1
                                 continue
-                            return None
-                        # Other 4xx - log and try next model (might be param-specific)
-                        _log_failure(resp_status or 0, m, raw)
-                        if i < len(models) - 1:
-                            i += 1
-                            continue
-                        return None
+                            provider_dead = True
+                            break
+                except Exception as e:
+                    last_error = str(e)
+                    logger.exception("LLM chat request failed provider=%s model=%s", prov_name, m)
+                    if i < len(models) - 1:
+                        i += 1
+                        continue
+                    provider_dead = True
+                    break
 
-                    try:
-                        data = json.loads(raw)
-                    except Exception:
-                        last_error = f"status=200 invalid_json body={raw[:300]}"
-                        logger.warning("LLM chat 200 but invalid JSON body model=%s body=%s", m, raw[:500])
-                        if i < len(models) - 1:
-                            i += 1
-                            continue
-                        return None
-            except Exception as e:
-                last_error = str(e)
-                logger.exception("LLM chat request failed model=%s", m)
-                if i < len(models) - 1:
-                    i += 1
-                    continue
-                return None
+                if not isinstance(data, dict):
+                    if i < len(models) - 1:
+                        i += 1
+                        continue
+                    provider_dead = True
+                    break
 
-            if not isinstance(data, dict):
-                if i < len(models) - 1:
-                    i += 1
-                    continue
-                return None
+                text = self._extract_chat_text(data)
+                if text:
+                    if prov_idx > 0 or i > 0 or rotations > 0:
+                        logger.info("LLM chat succeeded provider=%s model=%s", prov_name, m)
+                    self.last_error = None
+                    return text
 
-            text = self._extract_chat_text(data)
-            if text:
-                if i > 0:
-                    logger.info("LLM chat succeeded with fallback model=%s", m)
-                self.last_error = None
-                return text
-
-            # No extractable text - could be thinking-token exhaustion or safety filter.
-            finish_reason = None
-            try:
-                choices = data.get("choices") or []
-                if choices:
-                    finish_reason = (choices[0] or {}).get("finish_reason")
-            except Exception:
                 finish_reason = None
-            logger.warning("LLM chat returned no text model=%s finish_reason=%s raw=%s", m, finish_reason, str(raw)[:500])
-            last_error = f"status=200 no_text finish_reason={finish_reason} body={str(raw)[:300]}"
-            if i < len(models) - 1:
-                i += 1
-                continue
-            return None
+                try:
+                    choices = data.get("choices") or []
+                    if choices:
+                        finish_reason = (choices[0] or {}).get("finish_reason")
+                except Exception:
+                    finish_reason = None
+                logger.warning("LLM chat returned no text provider=%s model=%s finish_reason=%s raw=%s", prov_name, m, finish_reason, str(raw)[:500])
+                last_error = f"status=200 no_text provider={prov_name} finish_reason={finish_reason} body={str(raw)[:300]}"
+                if i < len(models) - 1:
+                    i += 1
+                    continue
+                provider_dead = True
+                break
+
+            if not provider_dead:
+                # exhausted models loop without explicit provider_dead; move to next provider
+                pass
+            # try next provider
 
         if last_error:
-            logger.warning("LLM chat exhausted candidates; last_error=%s", last_error)
+            logger.warning("LLM chat exhausted all providers/models; last_error=%s", last_error)
+        self.last_error = last_error
         return None
 
     @staticmethod

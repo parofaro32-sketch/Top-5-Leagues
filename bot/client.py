@@ -102,9 +102,16 @@ class FootballBot(commands.Bot):
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (%s)", self.user, getattr(self.user, "id", "?"))
         if self.llm_service.enabled:
-            logger.info("LLM enabled model=%s base_url=%s", self.settings.llm_model, self.settings.llm_base_url)
+            providers = []
+            if self.settings.llm_api_keys:
+                providers.append(f"gemini:{self.settings.llm_model}")
+            if getattr(self.settings, "openrouter_api_keys", None):
+                providers.append("openrouter")
+            if getattr(self.settings, "groq_api_keys", None):
+                providers.append("groq")
+            logger.info("LLM enabled providers=%s primary_model=%s base_url=%s", ",".join(providers) or "unknown", self.settings.llm_model, self.settings.llm_base_url)
         else:
-            logger.warning("LLM disabled (set LLM_API_KEY to enable LLM negotiation replies)")
+            logger.warning("LLM disabled (set LLM_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY to enable LLM negotiation replies)")
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
         orig = getattr(error, "original", error)

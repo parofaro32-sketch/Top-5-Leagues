@@ -31,6 +31,15 @@ class Settings:
     llm_timeout: int
     llm_api_keys: list[str] = field(default_factory=list)
     llm_models: list[str] = field(default_factory=list)
+    # Optional fallback providers (used when primary Gemini provider fails/exhausts)
+    openrouter_api_key: str = ""
+    openrouter_api_keys: list[str] = field(default_factory=list)
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_models: list[str] = field(default_factory=list)
+    groq_api_key: str = ""
+    groq_api_keys: list[str] = field(default_factory=list)
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_models: list[str] = field(default_factory=list)
 
     @property
     def has_discord_token(self) -> bool:
@@ -59,7 +68,7 @@ class Settings:
 
     @property
     def has_llm(self) -> bool:
-        return bool(self.llm_api_keys)
+        return bool(self.llm_api_keys or self.openrouter_api_keys or self.groq_api_keys)
 
 
 def load_settings() -> Settings:
@@ -82,6 +91,25 @@ def load_settings() -> Settings:
     _llm_models_raw = os.getenv("LLM_MODELS", "") or os.getenv("LLM_MODEL_FALLBACKS", "")
     llm_models = [m.strip() for m in _llm_models_raw.replace(";", ",").split(",") if m.strip()]
 
+    def _parse_keys(*env_names: str) -> list[str]:
+        out: list[str] = []
+        for name in env_names:
+            raw = os.getenv(name, "").replace(";", ",")
+            for k in raw.split(","):
+                k = k.strip()
+                if k and k not in {"", "your_llm_api_key_here", "your_openrouter_api_key_here", "your_groq_api_key_here"} and k not in out:
+                    out.append(k)
+        return out
+
+    def _parse_models(env_name: str) -> list[str]:
+        raw = os.getenv(env_name, "").replace(";", ",")
+        return [m.strip() for m in raw.split(",") if m.strip()]
+
+    openrouter_api_keys = _parse_keys("OPENROUTER_API_KEYS", "OPENROUTER_API_KEY")
+    groq_api_keys = _parse_keys("GROQ_API_KEYS", "GROQ_API_KEY")
+    openrouter_models = _parse_models("OPENROUTER_MODELS") or _parse_models("OPENROUTER_MODEL")
+    groq_models = _parse_models("GROQ_MODELS") or _parse_models("GROQ_MODEL")
+
     return Settings(
         discord_bot_token=os.getenv("DISCORD_BOT_TOKEN", "").strip(),
         discord_guild_id=guild_id,
@@ -102,4 +130,12 @@ def load_settings() -> Settings:
         llm_model=os.getenv("LLM_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash",
         llm_timeout=int(os.getenv("LLM_TIMEOUT", "20")),
         llm_models=llm_models,
+        openrouter_api_key=openrouter_api_keys[0] if openrouter_api_keys else "",
+        openrouter_api_keys=openrouter_api_keys,
+        openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip("/") or "https://openrouter.ai/api/v1",
+        openrouter_models=openrouter_models,
+        groq_api_key=groq_api_keys[0] if groq_api_keys else "",
+        groq_api_keys=groq_api_keys,
+        groq_base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").strip().rstrip("/") or "https://api.groq.com/openai/v1",
+        groq_models=groq_models,
     )
