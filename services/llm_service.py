@@ -940,16 +940,34 @@ class LLMService:
 
     def _player_profile(self, player: dict[str, Any], valuation: dict[str, Any] | None = None) -> dict[str, Any]:
         v = valuation or {}
+
+        def _int_or_none(*keys: str) -> int | None:
+            for k in keys:
+                val = player.get(k)
+                if val is None or str(val).strip() == "":
+                    continue
+                try:
+                    return int(round(float(val)))
+                except Exception:
+                    continue
+            return None
+
+        overall = _int_or_none("overall", "ovr", "OVR", "rating", "overall_rating")
+        potential = _int_or_none("potential", "pot", "POT", "potential_rating")
+
         profile = {
             "name": player.get("name"),
             "age": player.get("age"),
             "position": player.get("detailed_position") or player.get("position"),
-            "overall": player.get("overall"),
-            "ovr": player.get("overall"),
-            "potential": player.get("potential"),
-            "pot": player.get("potential"),
+            "overall": overall if overall is not None else 0,
+            "ovr": overall if overall is not None else 0,
+            "potential": potential if potential is not None else 0,
+            "pot": potential if potential is not None else 0,
             "nationality": player.get("nationality"),
             "height_cm": player.get("height_cm"),
+            "club_status": "free_agent" if int(player.get("team_api_id") or 0) == 9000001 else ("signed" if player.get("team_api_id") else None),
+            "current_wage": player.get("wage"),
+            "player_status": player.get("status"),
             "market_value": v.get("market_value"),
             "asking_fee": v.get("asking_fee"),
             "min_accept_fee": v.get("min_accept_fee"),

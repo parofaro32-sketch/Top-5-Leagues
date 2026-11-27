@@ -391,6 +391,41 @@ class TransfersCog(commands.Cog):
                 return t, s
         return None, None
 
+    async def _enrich_player_for_llm(self, player: dict[str, Any] | None, *, season_year: int | None = None) -> dict[str, Any]:
+        """Merge DB row so OVR/POT/name/age/position are present for LLM prompts."""
+        p = dict(player or {})
+        api_id = int(p.get("api_id") or 0)
+        if api_id <= 0:
+            return p
+        row = None
+        try:
+            if season_year is not None:
+                row = await self.bot.db.fetchone(
+                    "SELECT api_id,name,age,position,detailed_position,overall,potential,height_cm,weight_kg,nationality,market_value,wage,status,team_api_id,season FROM players WHERE api_id=? AND season=? LIMIT 1",
+                    (api_id, int(season_year)),
+                )
+            if not row:
+                row = await self.bot.db.fetchone(
+                    "SELECT api_id,name,age,position,detailed_position,overall,potential,height_cm,weight_kg,nationality,market_value,wage,status,team_api_id,season FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1",
+                    (api_id,),
+                )
+        except Exception:
+            logger.exception("Failed to enrich player for LLM api_id=%s", api_id)
+            row = None
+        if row:
+            d = dict(row)
+            # DB is source of truth for identity/stats; keep any non-None fields already present.
+            merged = {**d, **{k: v for k, v in p.items() if v is not None}}
+            p = merged
+        # Normalize OVR/POT to ints
+        for k in ("overall", "potential"):
+            try:
+                if p.get(k) is not None and str(p.get(k)).strip() != "":
+                    p[k] = int(round(float(p.get(k))))
+            except Exception:
+                pass
+        return p
+
     def _parse_int_money(self, v: Any) -> int | None:
         if v is None:
             return None
@@ -464,6 +499,7 @@ class TransfersCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed("Invalid Fee", "Enter a valid fee like `25000000`, `25M`, or `€25M`."), ephemeral=True)
                 return
 
+            player = await self._enrich_player_for_llm(player, season_year=season_year)
             val = self.market.value_player(player)
 
             decision = None
@@ -790,39 +826,7 @@ class TransfersCog(commands.Cog):
             if years is None:
                 missing.append("contract length (e.g. 4 years)")
 
-            # LLM fallback for missing fields (only fills gaps; deterministic parse takes precedence)
-            if missing:
-                try:
-                    llm = getattr(self.bot, "llm_service", None)
-                    if llm and getattr(llm, "enabled", False):
-                        llm_terms = await llm.parse_contract_terms_llm(
-                            raw_msg,
-                            context={
-                                "demand": demand,
-                                "known": {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years},
-                                "missing": list(missing),
-                            },
-                        )
-                        if isinstance(llm_terms, dict):
-                            if (wage is None or int(wage) <= 0) and llm_terms.get("wage") is not None:
-                                wage = int(llm_terms["wage"])
-                            if role is None and llm_terms.get("role"):
-                                role = str(llm_terms["role"])
-                            if bonus is None and llm_terms.get("signing_bonus") is not None:
-                                bonus = int(llm_terms["signing_bonus"])
-                            if years is None and llm_terms.get("contract_years") is not None:
-                                years = int(llm_terms["contract_years"])
-                            # Recompute missing
-                            missing = []
-                            if wage is None or int(wage) <= 0:
-                                missing.append("weekly wage (e.g. 200k/wk, 300k per week)")
-                            if role is None:
-                                missing.append("role (Crucial/Important/Rotation/Sporadic/Prospect)")
-                            if years is None:
-                                missing.append("contract length (e.g. 4 years)")
-                except Exception:
-                    logger.exception("LLM contract term fallback failed")
-
+            # Missing fields are fine - the LLM negotiation call interprets user_message directly.
             # Never block on parsing - LLM handles natural language understanding.
             # Fill missing fields from the manager's last offer/counter/demand as baseline; user_message carries intent.
             offered_is_explicit = (len(missing) == 0)
@@ -867,29 +871,12 @@ class TransfersCog(commands.Cog):
             season_year = int((await self.bot.season_service.get_season(str(offer.get("season_id")) or "") or {}).get("season_year") or 2026)
             player_api_id = int(offer.get("player_api_id") or 0)
             player = await self.market.get_player(player_api_id, season_year) or {}
-            # Merge any DB row for this player (any season) to ensure real OVR/POT
-            try:
-                p2 = await self.bot.db.fetchone(
-                    "SELECT api_id,name,age,position,detailed_position,overall,potential,height_cm,weight_kg,nationality,market_value,wage,team_api_id,season FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1",
-                    (player_api_id,),
-                )
-                if p2:
-                    p2d = dict(p2)
-                    player = {**p2d, **{k: v for k, v in (player or {}).items() if v is not None}}
-            except Exception:
-                logger.exception("Failed to load player DB row for negotiation player_api_id=%s", player_api_id)
-            # Last resort: keep name/id, but never fake OVR/POT
+            # Ensure real player data (OVR/POT/name/age/position) is present for LLM.
+            player = await self._enrich_player_for_llm(player, season_year=season_year)
             if not player:
                 player = {"api_id": player_api_id, "name": offer.get("player_name")}
             player.setdefault("name", offer.get("player_name"))
             player.setdefault("api_id", player_api_id)
-            # Normalize OVR/POT to ints when present
-            for k in ("overall", "potential"):
-                try:
-                    if player.get(k) is not None and str(player.get(k)).strip() != "":
-                        player[k] = int(round(float(player.get(k))))
-                except Exception:
-                    pass
 
             offered = {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years}
 
@@ -1586,6 +1573,7 @@ class TransfersCog(commands.Cog):
                 if used >= 2:
                     await interaction.followup.send(embed=error_embed("Bot Transfer Limit Reached", f"**{buying_team_name}** has used {used}/2 bot transfers this season. You hit max bot transfers available."), ephemeral=True)
                     return
+            player = await self._enrich_player_for_llm(player, season_year=season_year)
             val = self.market.value_player(player)
 
             # /contractnego is fee-agreed: go straight to contract negotiation.
@@ -1787,6 +1775,7 @@ class TransfersCog(commands.Cog):
                 )
                 return
 
+            player = await self._enrich_player_for_llm(player, season_year=season_year)
             val = self.market.value_player(player)
             demand = self.market.contract_demand(val, player)
             now = utc_now_iso()
@@ -1812,7 +1801,7 @@ class TransfersCog(commands.Cog):
 
             opening_msg = None
             last_err = None
-            for _attempt in range(1):
+            for _attempt in range(2):
                 try:
                     opening_msg = await llm.generate_contract_opening(
                         player=player,
@@ -1831,12 +1820,12 @@ class TransfersCog(commands.Cog):
                     logger.exception("LLM free agent opening failed attempt=%s player=%s", _attempt + 1, player.get("name"))
 
             if not opening_msg:
+                last_err = last_err or getattr(llm, "last_error", None) or "empty_opening"
+                logger.warning("LLM free agent opening failed (no deterministic fallback) player=%s err=%s", player.get("name"), last_err)
                 await self.bot.db.execute(
                     "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
                     (utc_now_iso(), int(offer_id)),
                 )
-                last_err = last_err or getattr(llm, "last_error", None) or "empty_opening"
-                logger.warning("LLM free agent opening failed (no deterministic fallback) player=%s err=%s", player.get("name"), last_err)
                 await interaction.followup.send(
                     embed=error_embed(
                         "LLM Negotiation Failed",
@@ -1845,6 +1834,8 @@ class TransfersCog(commands.Cog):
                     ephemeral=True,
                 )
                 return
+
+            opening_msg = _clean_llm_user_text(opening_msg) or opening_msg
 
             view = ContractNegView(self, int(offer_id))
             p = player
