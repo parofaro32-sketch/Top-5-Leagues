@@ -163,6 +163,8 @@ class LLMService:
                     logger.info("LLM chat succeeded with fallback model=%s", m)
                 return text
             logger.warning("LLM chat returned no text model=%s", m)
+            # Don't try other models for content/parse issues; it's not a model-availability problem.
+            return None
 
         if last_error:
             logger.warning("LLM chat exhausted candidates; last_error=%s", last_error)
@@ -202,44 +204,63 @@ class LLMService:
     ) -> dict[str, Any] | None:
         """Request a JSON object response. Returns parsed dict or None."""
         # Try with response_format first; fallback to plain if provider rejects it
-        text = await self.chat(
+        def _try_parse(s: str) -> dict[str, Any] | None:
+            if not s:
+                return None
+            try:
+                obj = json.loads(s)
+                return obj if isinstance(obj, dict) else None
+            except Exception:
+                pass
+            try:
+                repaired = re.sub(r",\s*([}\]])", r"\1", s)
+                obj = json.loads(repaired)
+                return obj if isinstance(obj, dict) else None
+            except Exception:
+                pass
+            return None
+
+        def _parse_text(raw_text: str | None) -> dict[str, Any] | None:
+            t = str(raw_text or "").strip()
+            if not t:
+                return None
+            if t.startswith("```"):
+                t = t.strip("`")
+                nl = t.find("\n")
+                if nl != -1 and t[:nl].strip().lower() in {"json", "javascript", "js"}:
+                    t = t[nl + 1 :].strip()
+            parsed = _try_parse(t)
+            if parsed is not None:
+                return parsed
+            start = t.find("{")
+            end = t.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                return _try_parse(t[start : end + 1])
+            return None
+
+        text1 = await self.chat(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
             model=model,
             response_format={"type": "json_object"},
         )
-        if text is None:
-            text = await self.chat(
-                messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                model=model,
-            )
-        if not text:
-            return None
-        # Strip code fences if present
-        t = text.strip()
-        if t.startswith("```"):
-            t = t.strip("`")
-            # remove optional language tag
-            nl = t.find("\n")
-            if nl != -1 and t[:nl].strip().lower() in {"json", "javascript", "js"}:
-                t = t[nl + 1 :].strip()
-        # Find JSON object
-        try:
-            return json.loads(t)
-        except Exception:
-            pass
-        # Try to extract first {...}
-        try:
-            start = t.find("{")
-            end = t.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                return json.loads(t[start : end + 1])
-        except Exception:
-            pass
-        logger.warning("LLM chat_json could not parse JSON: %s", t[:300])
+        parsed = _parse_text(text1)
+        if parsed is not None:
+            return parsed
+
+        text2 = await self.chat(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+        )
+        parsed = _parse_text(text2)
+        if parsed is not None:
+            return parsed
+
+        last_t = str(text2 or text1 or "").strip()
+        logger.warning("LLM chat_json could not parse JSON: %s", last_t[:300])
         return None
 
     async def parse_contract_terms_llm(self, text: str, *, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -438,7 +459,22 @@ class LLMService:
             max_tokens=700,
         )
         if not isinstance(data, dict):
+            data = await self.chat_json(
+                [
+                    {"role": "system", "content": sys + " Return ONLY valid JSON. No markdown, no extra text."},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.2,
+                max_tokens=700,
+            )
+        if not isinstance(data, dict):
             return None
+        if not any(k in data for k in ("accepted", "accept", "message", "response", "walked_away", "walkedAway")):
+            for k in ("decision", "result", "negotiation", "output", "data"):
+                v = data.get(k)
+                if isinstance(v, dict):
+                    data = v
+                    break
 
         def _pick(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
             for k in keys:
@@ -569,7 +605,22 @@ class LLMService:
             max_tokens=850,
         )
         if not isinstance(data, dict):
+            data = await self.chat_json(
+                [
+                    {"role": "system", "content": sys + " Return ONLY valid JSON. No markdown, no extra text."},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.2,
+                max_tokens=850,
+            )
+        if not isinstance(data, dict):
             return None
+        if not any(k in data for k in ("accepted", "accept", "message", "response", "walked_away", "walkedAway")):
+            for k in ("decision", "result", "negotiation", "output", "data"):
+                v = data.get(k)
+                if isinstance(v, dict):
+                    data = v
+                    break
 
         def _pick(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
             for k in keys:
@@ -647,6 +698,121 @@ class LLMService:
             "counter": counter,
             "message": msg[:1900],
         }
+
+    async def generate_contract_opening(
+        self,
+        *,
+        player: dict[str, Any],
+        demand: dict[str, Any],
+        valuation: dict[str, Any] | None = None,
+        buying_team_name: str | None = None,
+        selling_team_name: str | None = None,
+        is_free_agent: bool = False,
+        scenario: str | None = None,
+    ) -> str | None:
+        """LLM-generated opening contract negotiation message (uses prompt #2 or #3 persona)."""
+        if not self.enabled:
+            return None
+
+        profile = self._player_profile(player, valuation)
+        player_name = str(player.get("name") or "The player")
+        buying = str(buying_team_name or "the club")
+        selling = str(selling_team_name or "the selling club")
+        bar = self._pressure_bar(0, 10)
+
+        sc = (scenario or "").strip().lower()
+        if not sc:
+            sc = "free_agent" if is_free_agent else "contract_after_fee_agreed"
+
+        if sc == "free_agent":
+            persona = (
+                f"You are {player_name}'s agent representing him as a high-profile free agent. "
+                f"Following extensive talks, {buying} has emerged as the leading destination, and you are sitting down to negotiate a contract. "
+                f"I am {buying}'s manager and you are {player_name}'s agent. "
+                "IMPORTANT: Use our database/player profile to keep his attributes, overall rating, potential, and current market value in mind during the negotiation. "
+                "You can leverage these exact stats and numbers to justify his wage demands, and his previous wage/value to anchor his true worth as a free agent. "
+                "IMPORTANT INSTRUCTION: While negotiating the contract, a dynamic bar showing negotiation pressure must be displayed at the start of your message "
+                "(e.g., [Negotiation Pressure: ██░░░░░░░░ 20%]). "
+                "If it reaches a high value due to lowball offers or stalling, the player's camp should walk away or threaten to sign elsewhere. "
+                "THE ROLEPLAY MUST BE EXTREMELY REALISTIC, FIRM, AND STRICT."
+            )
+        else:
+            persona = (
+                f"You are {player_name}'s agent. {selling} has accepted a move to {buying}. "
+                f"I am {buying}'s manager and you are {player_name}'s agent negotiating the contract. "
+                "IMPORTANT: Use the database/player profile and use his potential and overall and stats in mind during negotiation. "
+                "Use the stats like POT, OVR etc while also keeping in mind market value during negotiation so you know the player's worth. "
+                "IMPORTANT INSTRUCTION: While negotiating contract, a bar showing negotiation pressure must be shown. "
+                "If it reaches a high value, the player's camp should end negotiation. "
+                "The roleplay must be extremely realistic, firm, and strict."
+            )
+
+        sys = (
+            persona + " "
+            "This is the OPENING message of the contract negotiation. Do not mention being an AI. "
+            "Return ONLY a JSON object with keys: message (string). "
+            "The message must start with the negotiation pressure bar [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
+            "Clearly state the opening demands with exact numbers: weekly wage, role, signing bonus, contract years. "
+            "Use the provided demand values exactly. Reference the player's OVR/POT/market value. "
+            "Be realistic, firm, and strict. 2-5 short paragraphs."
+        )
+        user = json.dumps({
+            "scenario": sc,
+            "player": profile,
+            "selling_club": selling,
+            "buying_club": buying,
+            "demand": demand,
+            "pressure": 0,
+            "max_pressure": 10,
+            "pressure_bar": bar,
+            "is_free_agent": bool(is_free_agent),
+        }, ensure_ascii=False)
+
+        data = await self.chat_json(
+            [{"role": "system", "content": sys}, {"role": "user", "content": user}],
+            temperature=0.7,
+            max_tokens=700,
+        )
+        if not isinstance(data, dict):
+            return None
+
+        def _pick(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
+            for k in keys:
+                if k in d and d.get(k) is not None:
+                    return d.get(k)
+            return default
+
+        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
+        if not msg:
+            # If the model returned the whole thing as a plain string somehow not caught, fail
+            return None
+        if "[Negotiation Pressure:" not in msg:
+            msg = f"{bar}\n{msg}"
+        else:
+            lines = msg.splitlines()
+            if lines and "[Negotiation Pressure:" in lines[0]:
+                lines[0] = bar
+                msg = "\n".join(lines)
+
+        # Ensure key demand numbers appear
+        wage = self._coerce_int(demand.get("wage"), 0)
+        bonus = self._coerce_int(demand.get("signing_bonus"), 0)
+        years = self._coerce_int(demand.get("contract_years"), 0)
+        wage_fmt = self._money(wage)
+        bonus_fmt = self._money(bonus)
+        missing_bits = []
+        if wage > 0 and str(wage) not in msg.replace(",", "") and wage_fmt not in msg:
+            missing_bits.append(f"{wage_fmt}/wk")
+        if bonus > 0 and str(bonus) not in msg.replace(",", "") and bonus_fmt not in msg:
+            missing_bits.append(f"{bonus_fmt} signing bonus")
+        if years > 0 and str(years) not in msg:
+            missing_bits.append(f"{years} years")
+        if missing_bits or (demand.get("role") and str(demand.get("role")) not in msg):
+            msg += (
+                f"\n\n**Opening demands:** {self._money(wage)}/wk • {demand.get('role')} role • "
+                f"{self._money(bonus)} signing bonus • {int(years)} years."
+            )
+        return msg[:1900]
 
     # Backwards-compatible aliases used by older call sites
     async def generate_fee_negotiation_message(self, **kwargs):

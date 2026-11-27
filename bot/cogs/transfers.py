@@ -46,7 +46,17 @@ class ContractOfferModal(discord.ui.Modal, title="Contract Offer (Natural Langua
         self.offer_id = offer_id
 
     async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.handle_contract_modal_submit(interaction, self)
+        try:
+            await self.cog.handle_contract_modal_submit(interaction, self)
+        except Exception:
+            logger.exception("ContractOfferModal.on_submit failed offer_id=%s", self.offer_id)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=error_embed("Negotiation Error", "I couldn't process that offer. Please try again."), ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=error_embed("Negotiation Error", "I couldn't process that offer. Please try again."), ephemeral=True)
+            except Exception:
+                pass
 
 
 class ContractNegView(discord.ui.View):
@@ -387,7 +397,7 @@ class TransfersCog(commands.Cog):
                 await interaction.followup.send(
                     embed=error_embed(
                         "LLM Negotiation Failed",
-                        "I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer.",
+                        f"I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer. ({str(last_err)[:120]})",
                     ),
                     ephemeral=True,
                 )
@@ -425,12 +435,8 @@ class TransfersCog(commands.Cog):
             llm_fee_msg = str(decision.get("reason") or "").strip() or None
 
             if not decision["accept"]:
-                reason_text = llm_fee_msg or (
-                    f"{_fee_bar}\n\n"
-                    f"**{selling_team_name}** (bot manager) response for **{player.get('name')}**:\n\n{decision['reason']}\n\n"
-                    f"Your offer: {fmt_money(offer_fee)} • Club valuation: {fmt_money(val.market_value)} • Suggested fair fee: {fmt_money(val.fair_fee)}"
-                )
-                await interaction.followup.send(embed=error_embed("Offer Rejected", reason_text), ephemeral=True)
+                reason_text = llm_fee_msg or _fee_bar
+                await interaction.followup.send(embed=error_embed("Offer Rejected", reason_text[:3900]), ephemeral=True)
                 return
 
             # accepted -> start contract negotiation
@@ -440,36 +446,38 @@ class TransfersCog(commands.Cog):
                 (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "fee_pressure": _fee_pressure}), utc_now_iso(), int(offer_id)),
             )
             view = ContractNegView(self, int(offer_id))
-            bar = negotiation_pressure_bar(0, 10)
             p = player
+            contract_opening = None
+            try:
+                if llm and getattr(llm, "enabled", False):
+                    for _attempt in range(2):
+                        contract_opening = await llm.generate_contract_opening(
+                            player=player,
+                            demand=demand,
+                            valuation=val.__dict__,
+                            buying_team_name=str(buying_team_name),
+                            selling_team_name=str(selling_team_name),
+                            is_free_agent=False,
+                            scenario="contract_after_fee_agreed",
+                        )
+                        if contract_opening:
+                            break
+            except Exception:
+                logger.exception("LLM contract opening failed (botoffer) offer_id=%s", offer_id)
+
+            parts = []
             if llm_fee_msg:
-                accept_desc = (
-                    f"{llm_fee_msg}\n\n"
-                    f"**Fee agreed:** {fmt_money(offer_fee)}\n\n"
-                    f"{bar}\n"
-                    f"**Contract negotiation (agent):**\n"
-                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                    f"• Requested role: **{demand['role']}**\n"
-                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                    f"• Contract length: **{demand['contract_years']} years**\n\n"
-                    f"Submit a serious contract offer using the button below. Lowballing, stalling, or disrespecting the player's value will increase pressure and can end the negotiation."
-                )
+                parts.append(llm_fee_msg)
+                parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
+            if contract_opening:
+                parts.append(contract_opening)
             else:
-                accept_desc = (
-                    f"{_fee_bar}\n\n"
-                    f"**{selling_team_name} (bot manager):** {decision['reason']}\n\n"
-                    f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** "
-                    f"({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'}).\n"
-                    f"We are now moving to contract terms. I am representing the player's interests and I will be firm but fair.\n\n"
-                    f"{bar}\n"
-                    f"**Opening contract demands:**\n"
-                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                    f"• Requested role: **{demand['role']}**\n"
-                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                    f"• Contract length: **{demand['contract_years']} years**\n\n"
-                    f"Submit a serious contract offer using the button below. Lowballing, stalling, or disrespecting the player's value will increase pressure and can end the negotiation."
+                parts.append(
+                    "Contract negotiation is ready. Submit your contract offer using the button below."
                 )
-            embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc)
+            parts.append("Submit your contract offer using the button below.")
+            accept_desc = "\n\n".join(parts)
+            embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc[:3900])
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
             logger.exception("botoffer command failed")
@@ -479,8 +487,9 @@ class TransfersCog(commands.Cog):
                 pass
 
     async def handle_contract_modal_submit(self, interaction: discord.Interaction, modal: ContractOfferModal):
-        await interaction.response.defer(ephemeral=True)
         try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
             offer = await self.get_offer(modal.offer_id)
             if not offer:
                 await interaction.followup.send(embed=error_embed("Not Found", "Negotiation not found."), ephemeral=True)
@@ -758,7 +767,7 @@ class TransfersCog(commands.Cog):
                 await interaction.followup.send(
                     embed=error_embed(
                         "LLM Negotiation Failed",
-                        "I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer.",
+                        f"I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer. ({str(last_err)[:120]})",
                     ),
                     ephemeral=True,
                 )
@@ -1335,7 +1344,7 @@ class TransfersCog(commands.Cog):
                     await interaction.followup.send(
                         embed=error_embed(
                             "LLM Negotiation Failed",
-                            "I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer.",
+                            f"I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer. ({str(last_err)[:120]})",
                         ),
                         ephemeral=True,
                     )
@@ -1387,37 +1396,38 @@ class TransfersCog(commands.Cog):
                 (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot, "fee_pressure": _fee_pressure}), utc_now_iso(), int(offer_id)),
             )
             view = ContractNegView(self, int(offer_id))
-            bar = negotiation_pressure_bar(0, 10)
             p = player
-            seller_label = f"**{selling_team_name} (bot manager)**" if is_bot else f"**{selling_team_name} manager**"
+            contract_opening = None
+            try:
+                if llm and getattr(llm, "enabled", False):
+                    for _attempt in range(2):
+                        contract_opening = await llm.generate_contract_opening(
+                            player=player,
+                            demand=demand,
+                            valuation=val.__dict__,
+                            buying_team_name=str(buying_team_name),
+                            selling_team_name=str(selling_team_name),
+                            is_free_agent=False,
+                            scenario="contract_after_fee_agreed",
+                        )
+                        if contract_opening:
+                            break
+            except Exception:
+                logger.exception("LLM contract opening failed (contractnego) offer_id=%s", offer_id)
+
+            parts = []
             if llm_fee_msg:
-                accept_desc = (
-                    f"{llm_fee_msg}\n\n"
-                    f"**Fee agreed:** {fmt_money(offer_fee)}\n\n"
-                    f"{bar}\n"
-                    f"**Contract negotiation (agent):**\n"
-                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                    f"• Requested role: **{demand['role']}**\n"
-                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                    f"• Contract length: **{demand['contract_years']} years**\n\n"
-                    f"Submit a realistic offer. This negotiation is strict - pressure will rise on lowball offers or stalling, and at high pressure talks will end."
-                )
+                parts.append(llm_fee_msg)
+                parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
+            elif decision.get("manager_agreed"):
+                parts.append(f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT).")
+            if contract_opening:
+                parts.append(contract_opening)
             else:
-                accept_desc = (
-                    f"{_fee_bar}\n\n"
-                    f"{seller_label}: {decision['reason']}\n\n"
-                    f"**Player:** {p.get('name')} ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT, age {p.get('age') or '?'})\n"
-                    f"**Agreed fee:** {fmt_money(offer_fee)}\n\n"
-                    f"I am representing the player in this contract negotiation. The demands below are based on the player's quality, age, and market standing.\n\n"
-                    f"{bar}\n"
-                    f"**Opening contract demands:**\n"
-                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                    f"• Requested role: **{demand['role']}**\n"
-                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                    f"• Contract length: **{demand['contract_years']} years**\n\n"
-                    f"Submit a realistic offer. This negotiation is strict - pressure will rise on lowball offers or stalling, and at high pressure talks will end."
-                )
-            embed = success_embed("Fee Accepted — Contract Negotiation", accept_desc)
+                parts.append("Contract negotiation is ready. Submit your contract offer using the button below.")
+            parts.append("Submit your contract offer using the button below.")
+            accept_desc = "\n\n".join(parts)
+            embed = success_embed("Fee Accepted — Contract Negotiation", accept_desc[:3900])
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
             logger.exception("contractnego command failed")
@@ -1475,6 +1485,17 @@ class TransfersCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed("Not A Free Agent", f"**{player.get('name')}** is not currently a free agent."), ephemeral=True)
                 return
 
+            llm = getattr(self.bot, "llm_service", None)
+            if not (llm and getattr(llm, "enabled", False)):
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Required",
+                        "Free agent contract negotiation is configured to use LLM only, but the LLM is not enabled on this bot. Set `LLM_API_KEY` on the host and restart the bot.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
             val = self.market.value_player(player)
             demand = self.market.contract_demand(val, player)
             now = utc_now_iso()
@@ -1498,25 +1519,49 @@ class TransfersCog(commands.Cog):
             )
             offer_id = cur.lastrowid
 
+            opening_msg = None
+            last_err = None
+            for _attempt in range(2):
+                try:
+                    opening_msg = await llm.generate_contract_opening(
+                        player=player,
+                        demand=demand,
+                        valuation=val.__dict__,
+                        buying_team_name=str(buying_team_name),
+                        selling_team_name="Free Agents",
+                        is_free_agent=True,
+                        scenario="free_agent",
+                    )
+                    if opening_msg:
+                        break
+                    last_err = "empty_opening"
+                except Exception as e:
+                    last_err = str(e)
+                    logger.exception("LLM free agent opening failed attempt=%s player=%s", _attempt + 1, player.get("name"))
+
+            if not opening_msg:
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
+                    (utc_now_iso(), int(offer_id)),
+                )
+                logger.warning("LLM free agent opening failed (no deterministic fallback) player=%s err=%s", player.get("name"), last_err)
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Negotiation Failed",
+                        f"I couldn't get a valid LLM opening message right now. No deterministic negotiation message was sent. Please try the command again. ({str(last_err)[:120]})",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
             view = ContractNegView(self, int(offer_id))
-            bar = negotiation_pressure_bar(0, 10)
             p = player
             embed = success_embed(
                 "Free Agent Contract Negotiation",
                 (
-                    f"{bar}\n\n"
-                    f"I am representing **{p.get('name')}** as a high-profile free agent. Following talks, **{buying_team_name}** is a potential destination, but this will be handled strictly and professionally.\n\n"
-                    f"**Player profile (database):** {int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT • "
-                    f"{p.get('detailed_position') or p.get('position') or '?'} • Age {p.get('age') or '?'} • Height {int(p.get('height_cm') or 0) or '?'}cm\n"
-                    f"**Estimated market value:** {fmt_money(val.market_value)}\n\n"
-                    f"**Opening demands:**\n"
-                    f"• Weekly wage: **{fmt_money(demand['wage'])}/wk**\n"
-                    f"• Requested role: **{demand['role']}**\n"
-                    f"• Signing bonus: **{fmt_money(demand['signing_bonus'])}**\n"
-                    f"• Contract length: **{demand['contract_years']} years**\n\n"
-                    f"Only <@{interaction.user.id}> may negotiate this deal. Submit a natural-language offer (e.g. `180k per week, important role, 2M signing bonus, 4 years`).\n"
-                    f"Lowball offers or stalling will raise pressure. At high pressure, {p.get('name')}'s camp will walk away and explore other clubs."
-                ),
+                    f"{opening_msg}\n\n"
+                    f"Only <@{interaction.user.id}> may negotiate this deal. Submit your contract offer using the button below."
+                )[:3900],
             )
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
