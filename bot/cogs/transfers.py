@@ -93,6 +93,124 @@ class AskAboutView(discord.ui.View):
         return  # handled by on_interaction
 
 
+def _clean_llm_user_text(text: Any, *, max_len: int = 3500) -> str:
+    """Sanitize LLM output before showing to users.
+
+    Removes code fences/JSON blobs and extracts a readable message when the model
+    returns JSON or JSON-like text.
+    """
+    if text is None:
+        return ""
+    s = str(text).strip()
+    if not s:
+        return ""
+
+    # Strip markdown fences
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s)
+        s = s.strip()
+
+    def _try_parse_json(candidate: str) -> Any:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            return None
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+        # trailing comma repair
+        try:
+            repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+            return json.loads(repaired)
+        except Exception:
+            return None
+
+    def _extract_from_obj(obj: Any) -> str | None:
+        if isinstance(obj, dict):
+            for k in ("message", "response", "reply", "text", "content", "reason"):
+                v = obj.get(k)
+                if isinstance(v, str) and v.strip():
+                    inner = _clean_llm_user_text(v, max_len=max_len)
+                    if inner:
+                        return inner
+            # Build a readable fallback from known fields (no raw JSON)
+            parts: list[str] = []
+            counter = obj.get("counter") if isinstance(obj.get("counter"), dict) else None
+            agreed = obj.get("agreed_terms") if isinstance(obj.get("agreed_terms"), dict) else None
+            accepted = obj.get("accepted")
+            walked = obj.get("walked_away") or obj.get("walkedAway")
+            if walked is True:
+                parts.append("The player's camp has walked away from negotiations.")
+            elif accepted is True:
+                parts.append("The offer has been accepted.")
+            elif counter:
+                parts.append("The player's camp has made a counter-offer.")
+            if counter:
+                parts.append(
+                    f"Counter: {fmt_money(counter.get('wage') or 0)}/wk, {counter.get('role') or 'Rotation'} role, "
+                    f"{fmt_money(counter.get('signing_bonus') or 0)} signing bonus, {int(counter.get('contract_years') or 0)} years."
+                )
+            if agreed:
+                parts.append(
+                    f"Agreed terms: {fmt_money(agreed.get('wage') or 0)}/wk, {agreed.get('role') or 'Rotation'} role, "
+                    f"{fmt_money(agreed.get('signing_bonus') or 0)} signing bonus, {int(agreed.get('contract_years') or 0)} years."
+                )
+            if parts:
+                return "\n".join(parts)
+            return None
+        if isinstance(obj, list):
+            for item in obj:
+                got = _extract_from_obj(item)
+                if got:
+                    return got
+        return None
+
+    # If entire string is JSON (or contains a JSON object), extract readable message
+    parsed = _try_parse_json(s)
+    if parsed is not None:
+        extracted = _extract_from_obj(parsed)
+        if extracted:
+            s = extracted
+        else:
+            # Don't dump raw JSON
+            s = ""
+    else:
+        # If message contains an embedded JSON object, try to extract from it
+        if "{" in s and "}" in s:
+            m = re.search(r"\{[\s\S]*\}", s)
+            if m:
+                obj = _try_parse_json(m.group(0))
+                if isinstance(obj, dict):
+                    extracted = _extract_from_obj(obj)
+                    if extracted:
+                        # Keep any non-JSON prefix/suffix if useful
+                        prefix = s[:m.start()].strip()
+                        suffix = s[m.end():].strip()
+                        # Only keep prefix/suffix if they look like human text, not JSON fragments
+                        if prefix and not prefix.startswith("{") and not prefix.startswith("["):
+                            s = (prefix + "\n\n" + extracted).strip()
+                        elif suffix and not suffix.startswith("{") and not suffix.startswith("["):
+                            s = (extracted + "\n\n" + suffix).strip()
+                        else:
+                            s = extracted
+
+    # Remove stray JSON-like lines/blocks that still slipped through
+    s = re.sub(r"```(?:json)?\s*[\s\S]*?```", "", s, flags=re.IGNORECASE).strip()
+    # If the remaining text is basically a JSON object, drop it
+    if s.startswith("{") and s.endswith("}"):
+        maybe = _try_parse_json(s)
+        if isinstance(maybe, (dict, list)):
+            extracted = _extract_from_obj(maybe)
+            s = extracted or ""
+
+    # Collapse excessive blank lines
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    if len(s) > max_len:
+        s = s[: max_len - 3].rstrip() + "..."
+    return s
+
+
 class TransfersCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -427,7 +545,7 @@ class TransfersCog(commands.Cog):
                                 _p = None
                         _walk = bool(re.search(r"\b(walk(?:ing)? away|talks? (?:are )?over|deal is off|no deal|end(?:ing)? (?:the )?negotiat)\b", _msg, re.IGNORECASE))
                         _acc = bool(re.search(r"\b(we (?:can )?accept|accept(?:ed)? (?:the|your) (?:offer|fee|bid)|deal(?: is)? accepted|we have a deal|agreed to (?:the|your) (?:offer|fee|bid))\b", _msg, re.IGNORECASE)) and not _walk
-                        decision = {"accept": _acc, "walked_away": _walk, "reason": _msg, "pressure": _p if _p is not None else 0, "llm": True}
+                        decision = {"accept": _acc, "walked_away": _walk, "reason": _clean_llm_user_text(_msg) or _msg, "pressure": _p if _p is not None else 0, "llm": True}
                         logger.info("LLM fee negotiation recovered via plain chat fallback (botoffer) player=%s", player.get("name"))
                 except Exception:
                     logger.exception("LLM fee negotiation plain chat fallback failed (botoffer) player=%s", player.get("name"))
@@ -473,7 +591,7 @@ class TransfersCog(commands.Cog):
             )
             offer_id = cur.lastrowid
 
-            llm_fee_msg = str(decision.get("reason") or "").strip() or None
+            llm_fee_msg = _clean_llm_user_text(decision.get("reason") or "") or None
 
             if not decision["accept"]:
                 reason_text = llm_fee_msg or _fee_bar
@@ -556,6 +674,7 @@ class TransfersCog(commands.Cog):
                 except Exception:
                     logger.exception("LLM contract opening plain fallback failed (botoffer) offer_id=%s", offer_id)
 
+            contract_opening = _clean_llm_user_text(contract_opening) if contract_opening else None
             if not contract_opening:
                 _oe = last_open_err or getattr(llm, "last_error", None) or "empty_opening"
                 await interaction.followup.send(
@@ -571,7 +690,7 @@ class TransfersCog(commands.Cog):
             if llm_fee_msg:
                 parts.append(llm_fee_msg)
                 parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
-            parts.append(contract_opening)
+            parts.append(_clean_llm_user_text(contract_opening))
             parts.append("Submit your contract offer using the button below.")
             accept_desc = "\n\n".join(parts)
             embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc[:3900])
@@ -901,7 +1020,7 @@ class TransfersCog(commands.Cog):
                             "walked_away": _walk,
                             "pressure": _p if _p is not None else previous_pressure,
                             "counter": (None if (_acc or _walk) else dict(demand or {})),
-                            "message": _msg,
+                            "message": _clean_llm_user_text(_msg) or _msg,
                         }
                         logger.info("LLM contract negotiation recovered via plain chat fallback offer_id=%s", offer.get("id"))
                 except Exception:
@@ -959,16 +1078,13 @@ class TransfersCog(commands.Cog):
             result["pressure"] = pressure
             bar = negotiation_pressure_bar(pressure, 10)
             result["pressure_bar"] = bar
-            msg_out = str(result.get("message") or "").strip()
-            if not msg_out:
-                msg_out = f"{bar}\nNegotiation response unavailable."
-            elif "[Negotiation Pressure:" not in msg_out:
-                msg_out = f"{bar}\n{msg_out}"
-            else:
-                lines = msg_out.splitlines()
-                if lines and "[Negotiation Pressure:" in lines[0]:
-                    lines[0] = bar
-                    msg_out = "\n".join(lines)
+            raw_msg_out = str(result.get("message") or "").strip()
+            cleaned_msg = _clean_llm_user_text(raw_msg_out)
+            # Strip any leading pressure bar line from cleaned text; we'll re-add the canonical bar
+            cleaned_msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]\s*", "", cleaned_msg, flags=re.IGNORECASE).strip()
+            if not cleaned_msg:
+                cleaned_msg = "Negotiation response unavailable."
+            msg_out = f"{bar}\n{cleaned_msg}"
             result["message"] = msg_out[:1900]
 
             meta["contract_round"] = round_no
@@ -1490,101 +1606,20 @@ class TransfersCog(commands.Cog):
                     return
             val = self.market.value_player(player)
 
-            decision = None
-            if not is_bot:
-                # Manager-to-manager: fee is already agreed, no bot valuation refusal.
-                decision = {
-                    "accept": True,
-                    "reason": f"Manager-to-manager agreement confirmed. The fee of {fmt_money(offer_fee)} for {player.get('name')} ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT) has been accepted by the clubs. Moving straight to contract negotiation.",
-                    "manager_agreed": True,
-                    "llm": False,
-                    "pressure": 0,
-                }
-            else:
-
-                last_err = None
-                for _attempt in range(1):
-                    try:
-                        llm_decision = await llm.negotiate_fee(
-                            player=player,
-                            valuation=val.__dict__,
-                            offer_fee=int(offer_fee),
-                            buying_team_name=str(buying_team_name),
-                            selling_team_name=str(selling_team_name),
-                            round_no=1,
-                            previous_pressure=0,
-                            max_pressure=10,
-                        )
-                        if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
-                            decision = {
-                                "accept": bool(llm_decision.get("accepted")),
-                                "walked_away": bool(llm_decision.get("walked_away")),
-                                "reason": str(llm_decision.get("message") or "").strip(),
-                                "pressure": int(llm_decision.get("pressure") or 0),
-                                "llm": True,
-                            }
-                            if decision["pressure"] >= 10:
-                                decision["walked_away"] = True
-                                decision["accept"] = False
-                            if decision["walked_away"]:
-                                decision["accept"] = False
-                            break
-                        last_err = "empty_or_invalid_decision"
-                    except Exception as e:
-                        last_err = str(e)
-                        logger.exception("LLM fee negotiation decision failed (contractnego) attempt=%s player=%s", _attempt + 1, player.get("name"))
-
-                if not isinstance(decision, dict):
-                    logger.warning("LLM fee negotiation returned no structured result; trying plain chat fallback (contractnego) player=%s err=%s", player.get("name"), last_err)
-                    try:
-                        plain_msg = await llm.chat(
-                            [
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        f"You are the manager of {selling_team_name} in a football manager game. "
-                                        f"{buying_team_name} have approached you to buy {player.get('name') or 'the player'}. "
-                                        f"I am acting as {buying_team_name}'s manager, while you are {selling_team_name}'s manager negotiating the transfer fee. "
-                                        "IMPORTANT: Use the player's OVR/POT/market value in mind. Show a negotiation pressure bar at the start of your message. "
-                                        "MUST BE EXTREMELY REALISTIC AND BE STRICT. Clearly accept or reject the fee."
-                                    ),
-                                },
-                                {"role": "user", "content": json.dumps({
-                                    "player": {"name": player.get("name"), "overall": player.get("overall"), "potential": player.get("potential"), "age": player.get("age")},
-                                    "offer_fee": int(offer_fee), "offer_display": fmt_money(offer_fee),
-                                    "market_value": val.market_value, "asking_fee": val.asking_fee, "min_accept_fee": val.min_accept_fee,
-                                }, ensure_ascii=False)},
-                            ],
-                            temperature=0.6,
-                            max_tokens=800,
-                        )
-                        if isinstance(plain_msg, str) and plain_msg.strip():
-                            _msg = plain_msg.strip()
-                            _p = None
-                            _m = re.search(r"\[Negotiation Pressure:\s*[█░#\-\s]*\s*(\d{1,3})%\s*\]", _msg, re.IGNORECASE)
-                            if _m:
-                                try:
-                                    _p = max(0, min(10, int(round(max(0, min(100, int(_m.group(1)))) / 10.0))))
-                                except Exception:
-                                    _p = None
-                            _walk = bool(re.search(r"\b(walk(?:ing)? away|talks? (?:are )?over|deal is off|no deal|end(?:ing)? (?:the )?negotiat)\b", _msg, re.IGNORECASE))
-                            _acc = bool(re.search(r"\b(we (?:can )?accept|accept(?:ed)? (?:the|your) (?:offer|fee|bid)|deal(?: is)? accepted|we have a deal|agreed to (?:the|your) (?:offer|fee|bid))\b", _msg, re.IGNORECASE)) and not _walk
-                            decision = {"accept": _acc, "walked_away": _walk, "reason": _msg, "pressure": _p if _p is not None else 0, "llm": True}
-                            logger.info("LLM fee negotiation recovered via plain chat fallback (contractnego) player=%s", player.get("name"))
-                    except Exception:
-                        logger.exception("LLM fee negotiation plain chat fallback failed (contractnego) player=%s", player.get("name"))
-
-                if not isinstance(decision, dict):
-                    last_err = last_err or getattr(llm, "last_error", None) or "empty_or_invalid_decision"
-                    logger.warning("LLM fee negotiation failed after all fallbacks (contractnego) player=%s err=%s", player.get("name"), last_err)
-                    await interaction.followup.send(
-                        embed=error_embed(
-                            "LLM Negotiation Failed",
-                            f"I couldn't get a valid LLM negotiation decision right now. Please retry your offer. ({str(last_err)[:160]})",
-                        ),
-                        ephemeral=True,
-                    )
-                    return
+            # /contractnego is fee-agreed: go straight to contract negotiation.
+            # For human-managed clubs this is manager-to-manager agreed; for bot clubs we still
+            # move directly into contract talks (fee stage is not a rejection gate here).
+            decision = {
+                "accept": True,
+                "reason": (
+                    f"Fee agreed at {fmt_money(offer_fee)} for {player.get('name')} "
+                    f"({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT). "
+                    "Moving straight to contract negotiation."
+                ),
+                "manager_agreed": not is_bot,
+                "llm": False,
+                "pressure": 0,
+            }
 
             _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
             if "pressure" in decision:
@@ -1615,12 +1650,13 @@ class TransfersCog(commands.Cog):
             )
             offer_id = cur.lastrowid
 
-            llm_fee_msg = str(decision.get("reason") or "").strip() or None
+            llm_fee_msg = _clean_llm_user_text(decision.get("reason") or "") or None
 
             if not decision["accept"]:
-                reason_text = llm_fee_msg or (
+                _reason_clean = llm_fee_msg or _clean_llm_user_text(decision.get("reason") or "") or "The club rejected the offer."
+                reason_text = (
                     f"{_fee_bar}\n\n"
-                    f"**{selling_team_name}** response for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT):\n\n{decision['reason']}\n\n"
+                    f"**{selling_team_name}** response for **{player.get('name')}** ({int(player.get('overall') or 0)} OVR, {int(player.get('potential') or 0)} POT):\n\n{_reason_clean}\n\n"
                     f"Your offer: {fmt_money(offer_fee)} • Valuation: {fmt_money(val.market_value)}"
                 )
                 await interaction.followup.send(embed=error_embed("Club Offer Rejected", reason_text), ephemeral=True)
@@ -1703,6 +1739,7 @@ class TransfersCog(commands.Cog):
                 except Exception:
                     logger.exception("LLM contract opening plain fallback failed (contractnego) offer_id=%s", offer_id)
 
+            contract_opening = _clean_llm_user_text(contract_opening) if contract_opening else None
             if not contract_opening:
                 _oe = last_open_err or getattr(llm, "last_error", None) or "empty_opening"
                 await interaction.followup.send(
@@ -1720,7 +1757,7 @@ class TransfersCog(commands.Cog):
                 parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
             elif decision.get("manager_agreed"):
                 parts.append(f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT).")
-            parts.append(contract_opening)
+            parts.append(_clean_llm_user_text(contract_opening))
             parts.append("Submit your contract offer using the button below.")
             accept_desc = "\n\n".join(parts)
             embed = success_embed("Fee Accepted — Contract Negotiation", accept_desc[:3900])

@@ -691,7 +691,7 @@ class LLMService:
                     return d
             # Plain text response - use it as the message. The caller can infer defaults.
             # Strip any leading/trailing markdown fences leftover
-            clean = t.strip()
+            clean = LLMService._clean_user_message_text(t) or t.strip()
             if len(clean) >= 10:
                 return {"message": clean[:4000], "_salvaged_plain": True}
             return None
@@ -783,6 +783,73 @@ class LLMService:
         filled = max(0, min(10, int(round((p / max(1, max_pressure)) * 10))))
         bar = "█" * filled + "░" * (10 - filled)
         return f"[Negotiation Pressure: {bar} {pct}%]"
+
+    @staticmethod
+    def _clean_user_message_text(text: Any) -> str:
+        """Remove JSON/code-fence artifacts from user-facing LLM messages."""
+        if text is None:
+            return ""
+        s = str(text).strip()
+        if not s:
+            return ""
+        # Strip markdown fences
+        if s.startswith("```"):
+            s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s)
+            s = re.sub(r"\s*```$", "", s).strip()
+
+        def _try_parse(candidate: str) -> Any:
+            candidate = (candidate or "").strip()
+            if not candidate:
+                return None
+            try:
+                return json.loads(candidate)
+            except Exception:
+                pass
+            try:
+                repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+                return json.loads(repaired)
+            except Exception:
+                return None
+
+        def _extract(obj: Any) -> str | None:
+            if isinstance(obj, dict):
+                for k in ("message", "response", "reply", "text", "content", "reason"):
+                    v = obj.get(k)
+                    if isinstance(v, str) and v.strip():
+                        inner = LLMService._clean_user_message_text(v)
+                        if inner:
+                            return inner
+                return None
+            if isinstance(obj, list):
+                for it in obj:
+                    got = _extract(it)
+                    if got:
+                        return got
+            return None
+
+        parsed = _try_parse(s)
+        if parsed is not None:
+            extracted = _extract(parsed)
+            return extracted or ""
+        # If embedded JSON object exists, try extracting message from it
+        if "{" in s and "}" in s:
+            m = re.search(r"\{[\s\S]*\}", s)
+            if m:
+                obj = _try_parse(m.group(0))
+                if isinstance(obj, dict):
+                    extracted = _extract(obj)
+                    if extracted:
+                        prefix = s[:m.start()].strip()
+                        suffix = s[m.end():].strip()
+                        if prefix and not prefix.startswith(("{", "[")):
+                            return (prefix + "\n\n" + extracted).strip()
+                        if suffix and not suffix.startswith(("{", "[")):
+                            return (extracted + "\n\n" + suffix).strip()
+                        return extracted
+        # Drop if it still looks like raw JSON
+        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+            return ""
+        return s
 
     @staticmethod
     def _money(n: Any) -> str:
@@ -996,7 +1063,8 @@ class LLMService:
                 max_tokens=700,
             )
             if isinstance(plain, str) and plain.strip():
-                data = {"message": plain.strip(), "_salvaged_plain": True}
+                cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
+                data = {"message": cleaned_plain, "_salvaged_plain": True}
         if not isinstance(data, dict):
             return None
 
@@ -1014,7 +1082,7 @@ class LLMService:
                     return d.get(k)
             return default
 
-        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
+        msg = self._clean_user_message_text(_pick(data, "message", "response", "reply", "text", default="") or "")
 
         # Infer from message when fields are missing or salvaged
         has_accepted_key = any(k in data for k in ("accepted", "accept", "is_accepted", "isAccepted"))
@@ -1188,7 +1256,8 @@ class LLMService:
                 max_tokens=700,
             )
             if isinstance(plain, str) and plain.strip():
-                data = {"message": plain.strip(), "_salvaged_plain": True}
+                cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
+                data = {"message": cleaned_plain, "_salvaged_plain": True}
 
         if not isinstance(data, dict):
             return None
@@ -1205,7 +1274,7 @@ class LLMService:
                     return d.get(k)
             return default
 
-        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
+        msg = self._clean_user_message_text(_pick(data, "message", "response", "reply", "text", default="") or "")
 
         has_accepted_key = any(k in data for k in ("accepted", "accept", "is_accepted", "isAccepted"))
         has_walked_key = any(k in data for k in ("walked_away", "walkedAway", "walk_away", "walkaway"))
@@ -1405,7 +1474,7 @@ class LLMService:
                     if k in d and d.get(k) is not None:
                         return d.get(k)
                 return default
-            msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
+            msg = self._clean_user_message_text(_pick(data, "message", "response", "reply", "text", default="") or "")
 
         if not msg:
             # Last resort: ask for plain text opening
@@ -1428,7 +1497,7 @@ class LLMService:
                 max_tokens=900,
             )
             if isinstance(plain, str) and plain.strip():
-                msg = plain.strip()
+                msg = self._clean_user_message_text(plain.strip()) or plain.strip()
 
         if not msg:
             return None
