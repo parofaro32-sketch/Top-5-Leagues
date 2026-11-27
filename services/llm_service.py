@@ -320,7 +320,9 @@ class LLMService:
             "age": player.get("age"),
             "position": player.get("detailed_position") or player.get("position"),
             "overall": player.get("overall"),
+            "ovr": player.get("overall"),
             "potential": player.get("potential"),
+            "pot": player.get("potential"),
             "nationality": player.get("nationality"),
             "height_cm": player.get("height_cm"),
             "market_value": v.get("market_value"),
@@ -438,9 +440,18 @@ class LLMService:
         if not isinstance(data, dict):
             return None
 
-        pressure = max(prev_p, min(int(max_pressure), self._coerce_int(data.get("pressure"), prev_p)))
-        walked_away = self._coerce_bool(data.get("walked_away"), False)
-        accepted = self._coerce_bool(data.get("accepted"), False)
+        def _pick(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
+            for k in keys:
+                if k in d and d.get(k) is not None:
+                    return d.get(k)
+            return default
+
+        pressure = max(
+            prev_p,
+            min(int(max_pressure), self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)),
+        )
+        walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
+        accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
         if pressure >= int(max_pressure):
             walked_away = True
             accepted = False
@@ -449,7 +460,7 @@ class LLMService:
         if accepted:
             walked_away = False
 
-        msg = str(data.get("message") or "").strip()
+        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
         if not msg:
             return None
         bar = self._pressure_bar(pressure, max_pressure)
@@ -560,9 +571,18 @@ class LLMService:
         if not isinstance(data, dict):
             return None
 
-        pressure = max(prev_p, min(int(max_pressure), self._coerce_int(data.get("pressure"), prev_p)))
-        walked_away = self._coerce_bool(data.get("walked_away"), False)
-        accepted = self._coerce_bool(data.get("accepted"), False)
+        def _pick(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
+            for k in keys:
+                if k in d and d.get(k) is not None:
+                    return d.get(k)
+            return default
+
+        pressure = max(
+            prev_p,
+            min(int(max_pressure), self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)),
+        )
+        walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
+        accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
         if pressure >= int(max_pressure):
             walked_away = True
             accepted = False
@@ -573,17 +593,21 @@ class LLMService:
 
         counter = None
         if not accepted and not walked_away:
-            counter = self._sanitize_contract_counter(data.get("counter"), fallback=demand)
+            raw_counter = _pick(data, "counter", "counter_offer", "counterOffer", "counter_demand", "counterDemand", default=None)
+            counter = self._sanitize_contract_counter(raw_counter, fallback=demand)
             if counter is None:
                 # Try to be lenient: if model gave partial counter, fill from demand
-                raw_counter = data.get("counter") if isinstance(data.get("counter"), dict) else {}
+                rc = raw_counter if isinstance(raw_counter, dict) else {}
                 merged = dict(demand or {})
-                merged.update({k: v for k, v in raw_counter.items() if v is not None})
+                merged.update({k: v for k, v in rc.items() if v is not None})
                 counter = self._sanitize_contract_counter(merged, fallback=demand)
             if counter is None:
-                return None
+                # Last resort: keep LLM's decision to counter, fill from demand
+                counter = self._sanitize_contract_counter(demand, fallback={
+                    "wage": 100000, "role": "Rotation", "signing_bonus": 0, "contract_years": 3
+                })
 
-        msg = str(data.get("message") or "").strip()
+        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
         if not msg:
             return None
         bar = self._pressure_bar(pressure, max_pressure)

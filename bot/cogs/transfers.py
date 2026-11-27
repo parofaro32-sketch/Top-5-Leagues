@@ -340,7 +340,18 @@ class TransfersCog(commands.Cog):
 
             decision = None
             llm = getattr(self.bot, "llm_service", None)
-            if llm and getattr(llm, "enabled", False):
+            if not (llm and getattr(llm, "enabled", False)):
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Required",
+                        "Bot fee negotiation is configured to use LLM only, but the LLM is not enabled on this bot. Set `LLM_API_KEY` on the host and restart the bot.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            last_err = None
+            for _attempt in range(2):
                 try:
                     llm_decision = await llm.negotiate_fee(
                         player=player,
@@ -365,15 +376,22 @@ class TransfersCog(commands.Cog):
                             decision["accept"] = False
                         if decision["walked_away"]:
                             decision["accept"] = False
-                except Exception:
-                    logger.exception("LLM fee negotiation decision failed (botoffer)")
+                        break
+                    last_err = "empty_or_invalid_decision"
+                except Exception as e:
+                    last_err = str(e)
+                    logger.exception("LLM fee negotiation decision failed (botoffer) attempt=%s player=%s", _attempt + 1, player.get("name"))
 
             if not isinstance(decision, dict):
-                # Safety fallback when LLM is unavailable/invalid
-                decision = self.market.evaluate_bot_offer(val, offer_fee, player)
-                decision = dict(decision)
-                decision["llm"] = False
-                logger.warning("Fee negotiation used deterministic fallback (LLM unavailable/invalid) botoffer player=%s", player.get("name"))
+                logger.warning("LLM fee negotiation failed (no deterministic fallback) botoffer player=%s err=%s", player.get("name"), last_err)
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Negotiation Failed",
+                        "I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer.",
+                    ),
+                    ephemeral=True,
+                )
+                return
 
             _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
             if "pressure" in decision:
@@ -671,19 +689,48 @@ class TransfersCog(commands.Cog):
             is_free_agent = bool(meta.get("is_free_agent")) or str(offer.get("kind") or "") == "free_agent_contract" or int(offer.get("selling_team_api_id") or 0) == 9000001
 
             season_year = int((await self.bot.season_service.get_season(str(offer.get("season_id")) or "") or {}).get("season_year") or 2026)
-            player = await self.market.get_player(int(offer.get("player_api_id") or 0), season_year) or {"name": offer.get("player_name"), "overall": valuation.get("market_value", 0) and 75, "potential": 75}
-            # ensure ovr/pot
-            if not player.get("overall") or not player.get("potential"):
-                p2 = await self.bot.db.fetchone("SELECT overall,potential,name,age,position,detailed_position,height_cm FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1", (int(offer.get("player_api_id") or 0),))
+            player_api_id = int(offer.get("player_api_id") or 0)
+            player = await self.market.get_player(player_api_id, season_year) or {}
+            # Merge any DB row for this player (any season) to ensure real OVR/POT
+            try:
+                p2 = await self.bot.db.fetchone(
+                    "SELECT api_id,name,age,position,detailed_position,overall,potential,height_cm,weight_kg,nationality,market_value,wage,team_api_id,season FROM players WHERE api_id=? ORDER BY season DESC, updated_at DESC LIMIT 1",
+                    (player_api_id,),
+                )
                 if p2:
-                    d2 = dict(p2)
-                    player = {**d2, **{k: v for k, v in player.items() if v is not None}}
+                    p2d = dict(p2)
+                    player = {**p2d, **{k: v for k, v in (player or {}).items() if v is not None}}
+            except Exception:
+                logger.exception("Failed to load player DB row for negotiation player_api_id=%s", player_api_id)
+            # Last resort: keep name/id, but never fake OVR/POT
+            if not player:
+                player = {"api_id": player_api_id, "name": offer.get("player_name")}
+            player.setdefault("name", offer.get("player_name"))
+            player.setdefault("api_id", player_api_id)
+            # Normalize OVR/POT to ints when present
+            for k in ("overall", "potential"):
+                try:
+                    if player.get(k) is not None and str(player.get(k)).strip() != "":
+                        player[k] = int(round(float(player.get(k))))
+                except Exception:
+                    pass
 
             offered = {"wage": wage, "role": role, "signing_bonus": bonus, "contract_years": years}
 
             result = None
             llm = getattr(self.bot, "llm_service", None)
-            if llm and getattr(llm, "enabled", False):
+            if not (llm and getattr(llm, "enabled", False)):
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Required",
+                        "Contract negotiation is configured to use LLM only, but the LLM is not enabled on this bot. Set `LLM_API_KEY` on the host and restart the bot.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            last_err = None
+            for _attempt in range(2):
                 try:
                     llm_decision = await llm.negotiate_contract(
                         player=player,
@@ -700,33 +747,22 @@ class TransfersCog(commands.Cog):
                     )
                     if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
                         result = dict(llm_decision)
-                except Exception:
-                    logger.exception("LLM contract negotiation decision failed")
+                        break
+                    last_err = "empty_or_invalid_decision"
+                except Exception as e:
+                    last_err = str(e)
+                    logger.exception("LLM contract negotiation decision failed attempt=%s offer_id=%s", _attempt + 1, offer.get("id"))
 
             if not isinstance(result, dict):
-                # Safety fallback when LLM is unavailable/invalid
-                pressure = int(previous_pressure)
-                demand_wage = int(demand.get("wage") or 0)
-                wage_ratio = (wage / max(1, demand_wage)) if demand_wage else 1.0
-                if wage_ratio < 0.75:
-                    pressure += 3
-                elif wage_ratio < 0.85:
-                    pressure += 2
-                elif wage_ratio < 0.93:
-                    pressure += 1
-                role_rank = {"Crucial": 0, "Important": 1, "Rotation": 2, "Sporadic": 3, "Prospect": 4}
-                offered_role = normalize_role(role) or "Rotation"
-                demand_role = str(demand.get("role") or "Rotation")
-                role_gap = role_rank.get(offered_role, 2) - role_rank.get(demand_role, 2)
-                if role_gap > 0:
-                    pressure += 1
-                if round_no >= 3:
-                    pressure += 1
-                if round_no >= 5:
-                    pressure += 1
-                pressure = max(0, min(10, int(pressure)))
-                result = self.market.evaluate_contract_offer(demand, offered, player, round_no, pressure, is_free_agent=is_free_agent)
-                logger.warning("Contract negotiation used deterministic fallback (LLM unavailable/invalid) offer_id=%s", offer.get("id"))
+                logger.warning("LLM contract negotiation failed (no deterministic fallback) offer_id=%s err=%s", offer.get("id"), last_err)
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Negotiation Failed",
+                        "I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer.",
+                    ),
+                    ephemeral=True,
+                )
+                return
 
             pressure = max(0, min(10, int(result.get("pressure", previous_pressure) or 0)))
             if bool(result.get("walked_away")) or pressure >= 10:
@@ -1252,7 +1288,18 @@ class TransfersCog(commands.Cog):
                 }
             else:
                 llm = getattr(self.bot, "llm_service", None)
-                if llm and getattr(llm, "enabled", False):
+                if not (llm and getattr(llm, "enabled", False)):
+                    await interaction.followup.send(
+                        embed=error_embed(
+                            "LLM Required",
+                            "Bot fee negotiation is configured to use LLM only, but the LLM is not enabled on this bot. Set `LLM_API_KEY` on the host and restart the bot.",
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+
+                last_err = None
+                for _attempt in range(2):
                     try:
                         llm_decision = await llm.negotiate_fee(
                             player=player,
@@ -1277,15 +1324,22 @@ class TransfersCog(commands.Cog):
                                 decision["accept"] = False
                             if decision["walked_away"]:
                                 decision["accept"] = False
-                    except Exception:
-                        logger.exception("LLM fee negotiation decision failed (contractnego)")
+                            break
+                        last_err = "empty_or_invalid_decision"
+                    except Exception as e:
+                        last_err = str(e)
+                        logger.exception("LLM fee negotiation decision failed (contractnego) attempt=%s player=%s", _attempt + 1, player.get("name"))
 
                 if not isinstance(decision, dict):
-                    # Safety fallback when LLM is unavailable/invalid
-                    decision = self.market.evaluate_bot_offer(val, offer_fee, player)
-                    decision = dict(decision)
-                    decision["llm"] = False
-                    logger.warning("Fee negotiation used deterministic fallback (LLM unavailable/invalid) contractnego player=%s", player.get("name"))
+                    logger.warning("LLM fee negotiation failed (no deterministic fallback) contractnego player=%s err=%s", player.get("name"), last_err)
+                    await interaction.followup.send(
+                        embed=error_embed(
+                            "LLM Negotiation Failed",
+                            "I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer.",
+                        ),
+                        ephemeral=True,
+                    )
+                    return
 
             _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
             if "pressure" in decision:
