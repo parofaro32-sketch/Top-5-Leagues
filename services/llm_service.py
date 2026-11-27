@@ -1342,6 +1342,12 @@ class LLMService:
         if pressure >= int(max_pressure):
             walked_away = True
             accepted = False
+        # User rule: allow contract negotiation to continue until pressure reaches 100%.
+        if walked_away and pressure < int(max_pressure):
+            walked_away = False
+            # Do not end early; keep pressure below 100%.
+            pressure = min(max(int(pressure), int(prev_p)), int(max_pressure) - 1)
+            accepted = False
         if walked_away:
             accepted = False
         if accepted:

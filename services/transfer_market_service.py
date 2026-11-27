@@ -251,32 +251,66 @@ class TransferMarketService:
         if best is not None and best_sc >= 0.34:
             return best
 
-        # Difflib fallback on normalized names
+        # Difflib fallback on normalized names (strict for short/single-token queries to avoid wrong-player matches)
         if qn:
             names = [_norm(p.get("name")) for p in players]
-            candidates: list[tuple[float, int]] = []
+            candidates: list[tuple[float, int, float, float]] = []  # (score, idx, full_ratio, best_token_ratio)
+            q_tokens = qn.split()
+            single_token_query = len(q_tokens) == 1
+            qcol = re.sub(r"[^a-z0-9]+", "", qn)
             for i, pn in enumerate(names):
                 if not pn:
                     continue
-                ratios = [difflib.SequenceMatcher(None, qn, pn).ratio()]
+                full_ratio = difflib.SequenceMatcher(None, qn, pn).ratio()
+                ratios = [full_ratio]
+                best_token_ratio = 0.0
+                exact_token_match = False
                 for tok in pn.split():
+                    if len(tok) < 2:
+                        continue
+                    tr = difflib.SequenceMatcher(None, qn, tok).ratio()
+                    if tr > best_token_ratio:
+                        best_token_ratio = tr
+                    if single_token_query and qn == tok:
+                        exact_token_match = True
                     if len(tok) >= 3:
-                        ratios.append(difflib.SequenceMatcher(None, qn, tok).ratio())
-                qcol = re.sub(r"[^a-z0-9]+", "", qn)
+                        ratios.append(tr)
                 pcol = re.sub(r"[^a-z0-9]+", "", pn)
-                if qcol and pcol:
-                    ratios.append(difflib.SequenceMatcher(None, qcol, pcol).ratio())
+                col_ratio = difflib.SequenceMatcher(None, qcol, pcol).ratio() if qcol and pcol else 0.0
+                if col_ratio:
+                    ratios.append(col_ratio)
                 sc = max(ratios) if ratios else 0.0
+
+                # Guard: single-token short queries like "Alison" must not fuzzy-match "Alisson" via token ratio alone.
+                if single_token_query and not exact_token_match:
+                    qt = qn
+                    # If it's close but not exact to a name token, require near-perfect match.
+                    if best_token_ratio >= 0.80 and best_token_ratio < 0.96:
+                        # allow only when full/collapsed form is also very strong
+                        if full_ratio < 0.90 and col_ratio < 0.92:
+                            sc = min(sc, 0.57)
+                    # very short queries (<=4) need stronger evidence
+                    if len(qt) <= 4 and best_token_ratio < 0.98 and full_ratio < 0.92:
+                        sc = min(sc, 0.57)
                 if sc > 0:
-                    candidates.append((sc, i))
+                    candidates.append((sc, i, full_ratio, best_token_ratio))
             candidates.sort(reverse=True)
             if candidates:
-                top_sc, top_i = candidates[0]
+                top_sc, top_i, top_full, top_tok = candidates[0]
                 second_sc = candidates[1][0] if len(candidates) > 1 else 0.0
-                if top_sc >= 0.72 or (top_sc >= 0.58 and (top_sc - second_sc) >= 0.08):
-                    return players[top_i]
-                if top_sc >= 0.62 and len(candidates) == 1:
-                    return players[top_i]
+                # Single-token queries: stricter acceptance to avoid wrong-player picks.
+                if single_token_query:
+                    if top_sc >= 0.93:
+                        return players[top_i]
+                    if top_sc >= 0.82 and (top_sc - second_sc) >= 0.10 and (top_full >= 0.60 or top_tok >= 0.96):
+                        return players[top_i]
+                    if top_sc >= 0.70 and (top_sc - second_sc) >= 0.18 and top_full >= 0.72:
+                        return players[top_i]
+                else:
+                    if top_sc >= 0.72 or (top_sc >= 0.58 and (top_sc - second_sc) >= 0.08):
+                        return players[top_i]
+                    if top_sc >= 0.62 and len(candidates) == 1:
+                        return players[top_i]
         return None
 
     @staticmethod
