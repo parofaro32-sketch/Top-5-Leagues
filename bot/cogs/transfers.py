@@ -361,7 +361,7 @@ class TransfersCog(commands.Cog):
                 return
 
             last_err = None
-            for _attempt in range(2):
+            for _attempt in range(1):
                 try:
                     llm_decision = await llm.negotiate_fee(
                         player=player,
@@ -393,11 +393,52 @@ class TransfersCog(commands.Cog):
                     logger.exception("LLM fee negotiation decision failed (botoffer) attempt=%s player=%s", _attempt + 1, player.get("name"))
 
             if not isinstance(decision, dict):
-                logger.warning("LLM fee negotiation failed (no deterministic fallback) botoffer player=%s err=%s", player.get("name"), last_err)
+                logger.warning("LLM fee negotiation returned no structured result; trying plain chat fallback (botoffer) player=%s err=%s", player.get("name"), last_err)
+                try:
+                    plain_msg = await llm.chat(
+                        [
+                            {
+                                "role": "system",
+                                "content": (
+                                    f"You are the manager of {selling_team_name} in a football manager game. "
+                                    f"{buying_team_name} have approached you to buy {player.get('name') or 'the player'}. "
+                                    f"I am acting as {buying_team_name}'s manager, while you are {selling_team_name}'s manager negotiating the transfer fee. "
+                                    "IMPORTANT: Use the player's OVR/POT/market value in mind. Show a negotiation pressure bar at the start of your message. "
+                                    "MUST BE EXTREMELY REALISTIC AND BE STRICT. Clearly accept or reject the fee."
+                                ),
+                            },
+                            {"role": "user", "content": json.dumps({
+                                "player": {"name": player.get("name"), "overall": player.get("overall"), "potential": player.get("potential"), "age": player.get("age")},
+                                "offer_fee": int(offer_fee), "offer_display": fmt_money(offer_fee),
+                                "market_value": val.market_value, "asking_fee": val.asking_fee, "min_accept_fee": val.min_accept_fee,
+                            }, ensure_ascii=False)},
+                        ],
+                        temperature=0.6,
+                        max_tokens=800,
+                    )
+                    if isinstance(plain_msg, str) and plain_msg.strip():
+                        _msg = plain_msg.strip()
+                        _p = None
+                        _m = re.search(r"\[Negotiation Pressure:\s*[█░#\-\s]*\s*(\d{1,3})%\s*\]", _msg, re.IGNORECASE)
+                        if _m:
+                            try:
+                                _p = max(0, min(10, int(round(max(0, min(100, int(_m.group(1)))) / 10.0))))
+                            except Exception:
+                                _p = None
+                        _walk = bool(re.search(r"\b(walk(?:ing)? away|talks? (?:are )?over|deal is off|no deal|end(?:ing)? (?:the )?negotiat)\b", _msg, re.IGNORECASE))
+                        _acc = bool(re.search(r"\b(we (?:can )?accept|accept(?:ed)? (?:the|your) (?:offer|fee|bid)|deal(?: is)? accepted|we have a deal|agreed to (?:the|your) (?:offer|fee|bid))\b", _msg, re.IGNORECASE)) and not _walk
+                        decision = {"accept": _acc, "walked_away": _walk, "reason": _msg, "pressure": _p if _p is not None else 0, "llm": True}
+                        logger.info("LLM fee negotiation recovered via plain chat fallback (botoffer) player=%s", player.get("name"))
+                except Exception:
+                    logger.exception("LLM fee negotiation plain chat fallback failed (botoffer) player=%s", player.get("name"))
+
+            if not isinstance(decision, dict):
+                last_err = last_err or getattr(llm, "last_error", None) or "empty_or_invalid_decision"
+                logger.warning("LLM fee negotiation failed after all fallbacks (botoffer) player=%s err=%s", player.get("name"), last_err)
                 await interaction.followup.send(
                     embed=error_embed(
                         "LLM Negotiation Failed",
-                        f"I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer. ({str(last_err)[:120]})",
+                        f"I couldn't get a valid LLM negotiation decision right now. Please retry your offer. ({str(last_err)[:160]})",
                     ),
                     ephemeral=True,
                 )
@@ -448,33 +489,89 @@ class TransfersCog(commands.Cog):
             view = ContractNegView(self, int(offer_id))
             p = player
             contract_opening = None
-            try:
-                if llm and getattr(llm, "enabled", False):
-                    for _attempt in range(2):
-                        contract_opening = await llm.generate_contract_opening(
-                            player=player,
-                            demand=demand,
-                            valuation=val.__dict__,
-                            buying_team_name=str(buying_team_name),
-                            selling_team_name=str(selling_team_name),
-                            is_free_agent=False,
-                            scenario="contract_after_fee_agreed",
+            last_open_err = None
+            for _attempt in range(2):
+                try:
+                    contract_opening = await llm.generate_contract_opening(
+                        player=player,
+                        demand=demand,
+                        valuation=val.__dict__,
+                        buying_team_name=str(buying_team_name),
+                        selling_team_name=str(selling_team_name),
+                        is_free_agent=False,
+                        scenario="contract_after_fee_agreed",
+                    )
+                    if contract_opening:
+                        break
+                    last_open_err = "empty_opening"
+                except Exception as e:
+                    last_open_err = str(e)
+                    logger.exception("LLM contract opening failed (botoffer) attempt=%s offer_id=%s", _attempt + 1, offer_id)
+
+            if not contract_opening:
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
+                    (utc_now_iso(), int(offer_id)),
+                )
+                logger.warning("LLM contract opening failed (botoffer, no deterministic fallback) offer_id=%s err=%s", offer_id, last_open_err)
+                try:
+                    fallback_open = await llm.chat(
+                        [
+                            {
+                                "role": "system",
+                                "content": (
+                                    f"You are {p.get('name')}'s agent. The fee is agreed between {selling_team_name} and {buying_team_name}. "
+                                    f"I am {buying_team_name}'s manager and you are {p.get('name')}'s agent negotiating the contract. "
+                                    "IMPORTANT: Use the player's OVR/POT/market value in mind during negotiation. "
+                                    "IMPORTANT INSTRUCTION: While negotiating contract, a bar showing negotiation pressure must be shown. "
+                                    "If it reaches a high value, the player's camp should end negotiation. "
+                                    "The roleplay must be extremely realistic, firm, and strict. "
+                                    "Start with [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
+                                    f"State opening demands clearly: {fmt_money(int(demand.get('wage') or 0))}/wk, {demand.get('role')} role, "
+                                    f"{fmt_money(int(demand.get('signing_bonus') or 0))} signing bonus, {int(demand.get('contract_years') or 0)} years. "
+                                    "2-4 short paragraphs. Return only the message text."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": json.dumps({
+                                    "player": {"name": p.get("name"), "overall": p.get("overall"), "potential": p.get("potential"), "age": p.get("age")},
+                                    "demand": demand,
+                                    "buying_club": buying_team_name,
+                                    "selling_club": selling_team_name,
+                                }, ensure_ascii=False),
+                            },
+                        ],
+                        temperature=0.6,
+                        max_tokens=900,
+                    )
+                    if isinstance(fallback_open, str) and fallback_open.strip():
+                        contract_opening = fallback_open.strip()
+                        if "[Negotiation Pressure:" not in contract_opening:
+                            contract_opening = f"{negotiation_pressure_bar(0, 10)}\n{contract_opening}"
+                        await self.bot.db.execute(
+                            "UPDATE transfer_offers SET status='negotiating', stage='contract', updated_at=? WHERE id=?",
+                            (utc_now_iso(), int(offer_id)),
                         )
-                        if contract_opening:
-                            break
-            except Exception:
-                logger.exception("LLM contract opening failed (botoffer) offer_id=%s", offer_id)
+                except Exception:
+                    logger.exception("LLM contract opening plain fallback failed (botoffer) offer_id=%s", offer_id)
+
+            if not contract_opening:
+                _oe = last_open_err or getattr(llm, "last_error", None) or "empty_opening"
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Negotiation Failed",
+                        f"I couldn't generate the contract opening message right now. Please try again. ({str(_oe)[:160]})",
+                    ),
+                    ephemeral=True,
+                )
+                return
 
             parts = []
             if llm_fee_msg:
                 parts.append(llm_fee_msg)
                 parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
-            if contract_opening:
-                parts.append(contract_opening)
-            else:
-                parts.append(
-                    "Contract negotiation is ready. Submit your contract offer using the button below."
-                )
+            parts.append(contract_opening)
             parts.append("Submit your contract offer using the button below.")
             accept_desc = "\n\n".join(parts)
             embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc[:3900])
@@ -739,7 +836,7 @@ class TransfersCog(commands.Cog):
                 return
 
             last_err = None
-            for _attempt in range(2):
+            for _attempt in range(1):
                 try:
                     llm_decision = await llm.negotiate_contract(
                         player=player,
@@ -763,11 +860,64 @@ class TransfersCog(commands.Cog):
                     logger.exception("LLM contract negotiation decision failed attempt=%s offer_id=%s", _attempt + 1, offer.get("id"))
 
             if not isinstance(result, dict):
-                logger.warning("LLM contract negotiation failed (no deterministic fallback) offer_id=%s err=%s", offer.get("id"), last_err)
+                # Last-ditch: plain LLM chat fallback (still LLM, no deterministic decision)
+                logger.warning("LLM contract negotiation returned no structured result; trying plain chat fallback offer_id=%s err=%s", offer.get("id"), last_err)
+                try:
+                    _sc = "free_agent" if is_free_agent else "contract_after_fee_agreed"
+                    if _sc == "free_agent":
+                        _persona = (
+                            f"You are {player.get('name') or 'the player'}'s agent representing him as a high-profile free agent. "
+                            f"I am {offer.get('buying_team_name') or 'the club'}'s manager and you are the player's agent. "
+                            "Use the player's OVR/POT/market value in mind. Show a negotiation pressure bar at the start of your message. "
+                            "Be extremely realistic, firm, and strict. If pressure reaches high value, walk away or threaten to sign elsewhere."
+                        )
+                    else:
+                        _persona = (
+                            f"You are {player.get('name') or 'the player'}'s agent. The fee is agreed between clubs. "
+                            f"I am {offer.get('buying_team_name') or 'the club'}'s manager and you are the player's agent negotiating the contract. "
+                            "Use the player's OVR/POT/market value in mind. Show a negotiation pressure bar at the start of your message. "
+                            "Be extremely realistic, firm, and strict. If pressure reaches high value, end negotiation."
+                        )
+                    plain_msg = await llm.chat(
+                        [
+                            {"role": "system", "content": _persona + " Reply with 2-4 short paragraphs. Start with [Negotiation Pressure: ...%]. Clearly accept, counter with exact numbers, or walk away."},
+                            {"role": "user", "content": json.dumps({
+                                "player": {"name": player.get("name"), "overall": player.get("overall"), "potential": player.get("potential"), "age": player.get("age"), "position": player.get("detailed_position") or player.get("position")},
+                                "demand": demand, "offered": offered, "previous_pressure": previous_pressure, "round": round_no,
+                            }, ensure_ascii=False)},
+                        ],
+                        temperature=0.6,
+                        max_tokens=900,
+                    )
+                    if isinstance(plain_msg, str) and plain_msg.strip():
+                        _msg = plain_msg.strip()
+                        _p = None
+                        _m = re.search(r"\[Negotiation Pressure:\s*[█░#\-\s]*\s*(\d{1,3})%\s*\]", _msg, re.IGNORECASE)
+                        if _m:
+                            try:
+                                _p = max(0, min(10, int(round(max(0, min(100, int(_m.group(1)))) / 10.0))))
+                            except Exception:
+                                _p = None
+                        _walk = bool(re.search(r"\b(walk(?:ing)? away|talks? (?:are )?over|deal is off|no deal|negotiations? (?:have )?collapsed|end(?:ing)? (?:the )?negotiat)\b", _msg, re.IGNORECASE))
+                        _acc = bool(re.search(r"\b(we (?:can )?accept|accept(?:ed)? (?:the|your) (?:offer|terms)|deal(?: is)? accepted|we have a deal|agreed to (?:the|your) (?:offer|terms))\b", _msg, re.IGNORECASE)) and not _walk
+                        result = {
+                            "accepted": _acc,
+                            "walked_away": _walk,
+                            "pressure": _p if _p is not None else previous_pressure,
+                            "counter": (None if (_acc or _walk) else dict(demand or {})),
+                            "message": _msg,
+                        }
+                        logger.info("LLM contract negotiation recovered via plain chat fallback offer_id=%s", offer.get("id"))
+                except Exception:
+                    logger.exception("LLM contract negotiation plain chat fallback failed offer_id=%s", offer.get("id"))
+
+            if not isinstance(result, dict):
+                last_err = last_err or getattr(llm, "last_error", None) or "empty_or_invalid_decision"
+                logger.warning("LLM contract negotiation failed after all fallbacks offer_id=%s err=%s", offer.get("id"), last_err)
                 await interaction.followup.send(
                     embed=error_embed(
                         "LLM Negotiation Failed",
-                        f"I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer. ({str(last_err)[:120]})",
+                        f"I couldn't get a valid LLM negotiation decision right now. Please retry your offer. ({str(last_err)[:160]})",
                     ),
                     ephemeral=True,
                 )
@@ -782,10 +932,49 @@ class TransfersCog(commands.Cog):
             if bool(result.get("accepted")):
                 result["walked_away"] = False
                 result["counter"] = None
+            # Ensure counter is sane when it's a counter offer
+            if not result.get("accepted") and not result.get("walked_away"):
+                raw_counter = result.get("counter")
+                sanitized = None
+                try:
+                    if llm and hasattr(llm, "_sanitize_contract_counter"):
+                        sanitized = llm._sanitize_contract_counter(raw_counter, fallback=demand)
+                        if sanitized is None and isinstance(raw_counter, dict):
+                            merged = dict(demand or {})
+                            merged.update({k: v for k, v in raw_counter.items() if v is not None})
+                            sanitized = llm._sanitize_contract_counter(merged, fallback=demand)
+                    if sanitized is None and isinstance(raw_counter, dict):
+                        # minimal inline sanitize
+                        from services.transfer_market_service import normalize_role
+                        _w = int(raw_counter.get("wage") or demand.get("wage") or 100000)
+                        _b = int(raw_counter.get("signing_bonus") or demand.get("signing_bonus") or 0)
+                        _y = int(raw_counter.get("contract_years") or demand.get("contract_years") or 3)
+                        _r = normalize_role(str(raw_counter.get("role") or demand.get("role") or "Rotation")) or "Rotation"
+                        sanitized = {"wage": max(1000, _w), "role": _r, "signing_bonus": max(0, _b), "contract_years": max(1, min(5, _y))}
+                except Exception:
+                    sanitized = None
+                if sanitized is None:
+                    sanitized = {
+                        "wage": int(demand.get("wage") or 100000),
+                        "role": str(demand.get("role") or "Rotation"),
+                        "signing_bonus": int(demand.get("signing_bonus") or 0),
+                        "contract_years": int(demand.get("contract_years") or 3),
+                    }
+                result["counter"] = sanitized
             result["pressure"] = pressure
-            result["pressure_bar"] = negotiation_pressure_bar(pressure, 10)
-            if not str(result.get("message") or "").strip():
-                result["message"] = negotiation_pressure_bar(pressure, 10) + "\nNegotiation response unavailable."
+            bar = negotiation_pressure_bar(pressure, 10)
+            result["pressure_bar"] = bar
+            msg_out = str(result.get("message") or "").strip()
+            if not msg_out:
+                msg_out = f"{bar}\nNegotiation response unavailable."
+            elif "[Negotiation Pressure:" not in msg_out:
+                msg_out = f"{bar}\n{msg_out}"
+            else:
+                lines = msg_out.splitlines()
+                if lines and "[Negotiation Pressure:" in lines[0]:
+                    lines[0] = bar
+                    msg_out = "\n".join(lines)
+            result["message"] = msg_out[:1900]
 
             meta["contract_round"] = round_no
             meta["pressure"] = pressure
@@ -858,9 +1047,13 @@ class TransfersCog(commands.Cog):
         except Exception:
             logger.exception("handle_contract_modal_submit failed offer_id=%s", getattr(modal, "offer_id", None))
             try:
-                await interaction.followup.send(embed=error_embed("Negotiation Error", "I couldn't process that contract offer. Please try again with a clear offer like `200k/wk, important role, 2M signing bonus, 4 years`."), ephemeral=True)
+                err_embed = error_embed("Negotiation Error", "I couldn't process that contract offer. Please try again with a clear offer like `200k/wk, important role, 2M signing bonus, 4 years`.")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=err_embed, ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=err_embed, ephemeral=True)
             except Exception:
-                pass
+                logger.exception("Failed to send negotiation error followup offer_id=%s", getattr(modal, "offer_id", None))
 
     async def _finalize_agreed_offer(self, offer: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
         season_id = offer.get("season_id")
@@ -1278,6 +1471,16 @@ class TransfersCog(commands.Cog):
             # If selling team is human-managed, the managers have agreed the fee between themselves -
             # go straight to contract negotiation with NO fee refusal.
             is_bot = selling_team.get("manager_user_id") is None
+            llm = getattr(self.bot, "llm_service", None)
+            if not (llm and getattr(llm, "enabled", False)):
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Required",
+                        "Contract negotiation is configured to use LLM only, but the LLM is not enabled on this bot. Set `LLM_API_KEY` on the host and restart the bot.",
+                    ),
+                    ephemeral=True,
+                )
+                return
             if is_bot:
                 used = await self.market.get_bot_transfer_count(season_id, buying_team_id)
                 if used >= 2:
@@ -1296,19 +1499,9 @@ class TransfersCog(commands.Cog):
                     "pressure": 0,
                 }
             else:
-                llm = getattr(self.bot, "llm_service", None)
-                if not (llm and getattr(llm, "enabled", False)):
-                    await interaction.followup.send(
-                        embed=error_embed(
-                            "LLM Required",
-                            "Bot fee negotiation is configured to use LLM only, but the LLM is not enabled on this bot. Set `LLM_API_KEY` on the host and restart the bot.",
-                        ),
-                        ephemeral=True,
-                    )
-                    return
 
                 last_err = None
-                for _attempt in range(2):
+                for _attempt in range(1):
                     try:
                         llm_decision = await llm.negotiate_fee(
                             player=player,
@@ -1340,11 +1533,52 @@ class TransfersCog(commands.Cog):
                         logger.exception("LLM fee negotiation decision failed (contractnego) attempt=%s player=%s", _attempt + 1, player.get("name"))
 
                 if not isinstance(decision, dict):
-                    logger.warning("LLM fee negotiation failed (no deterministic fallback) contractnego player=%s err=%s", player.get("name"), last_err)
+                    logger.warning("LLM fee negotiation returned no structured result; trying plain chat fallback (contractnego) player=%s err=%s", player.get("name"), last_err)
+                    try:
+                        plain_msg = await llm.chat(
+                            [
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        f"You are the manager of {selling_team_name} in a football manager game. "
+                                        f"{buying_team_name} have approached you to buy {player.get('name') or 'the player'}. "
+                                        f"I am acting as {buying_team_name}'s manager, while you are {selling_team_name}'s manager negotiating the transfer fee. "
+                                        "IMPORTANT: Use the player's OVR/POT/market value in mind. Show a negotiation pressure bar at the start of your message. "
+                                        "MUST BE EXTREMELY REALISTIC AND BE STRICT. Clearly accept or reject the fee."
+                                    ),
+                                },
+                                {"role": "user", "content": json.dumps({
+                                    "player": {"name": player.get("name"), "overall": player.get("overall"), "potential": player.get("potential"), "age": player.get("age")},
+                                    "offer_fee": int(offer_fee), "offer_display": fmt_money(offer_fee),
+                                    "market_value": val.market_value, "asking_fee": val.asking_fee, "min_accept_fee": val.min_accept_fee,
+                                }, ensure_ascii=False)},
+                            ],
+                            temperature=0.6,
+                            max_tokens=800,
+                        )
+                        if isinstance(plain_msg, str) and plain_msg.strip():
+                            _msg = plain_msg.strip()
+                            _p = None
+                            _m = re.search(r"\[Negotiation Pressure:\s*[█░#\-\s]*\s*(\d{1,3})%\s*\]", _msg, re.IGNORECASE)
+                            if _m:
+                                try:
+                                    _p = max(0, min(10, int(round(max(0, min(100, int(_m.group(1)))) / 10.0))))
+                                except Exception:
+                                    _p = None
+                            _walk = bool(re.search(r"\b(walk(?:ing)? away|talks? (?:are )?over|deal is off|no deal|end(?:ing)? (?:the )?negotiat)\b", _msg, re.IGNORECASE))
+                            _acc = bool(re.search(r"\b(we (?:can )?accept|accept(?:ed)? (?:the|your) (?:offer|fee|bid)|deal(?: is)? accepted|we have a deal|agreed to (?:the|your) (?:offer|fee|bid))\b", _msg, re.IGNORECASE)) and not _walk
+                            decision = {"accept": _acc, "walked_away": _walk, "reason": _msg, "pressure": _p if _p is not None else 0, "llm": True}
+                            logger.info("LLM fee negotiation recovered via plain chat fallback (contractnego) player=%s", player.get("name"))
+                    except Exception:
+                        logger.exception("LLM fee negotiation plain chat fallback failed (contractnego) player=%s", player.get("name"))
+
+                if not isinstance(decision, dict):
+                    last_err = last_err or getattr(llm, "last_error", None) or "empty_or_invalid_decision"
+                    logger.warning("LLM fee negotiation failed after all fallbacks (contractnego) player=%s err=%s", player.get("name"), last_err)
                     await interaction.followup.send(
                         embed=error_embed(
                             "LLM Negotiation Failed",
-                            f"I couldn't get a valid LLM negotiation decision right now. No deterministic decision was made. Please retry your offer. ({str(last_err)[:120]})",
+                            f"I couldn't get a valid LLM negotiation decision right now. Please retry your offer. ({str(last_err)[:160]})",
                         ),
                         ephemeral=True,
                     )
@@ -1398,22 +1632,85 @@ class TransfersCog(commands.Cog):
             view = ContractNegView(self, int(offer_id))
             p = player
             contract_opening = None
-            try:
-                if llm and getattr(llm, "enabled", False):
-                    for _attempt in range(2):
-                        contract_opening = await llm.generate_contract_opening(
-                            player=player,
-                            demand=demand,
-                            valuation=val.__dict__,
-                            buying_team_name=str(buying_team_name),
-                            selling_team_name=str(selling_team_name),
-                            is_free_agent=False,
-                            scenario="contract_after_fee_agreed",
+            last_open_err = None
+            for _attempt in range(2):
+                try:
+                    contract_opening = await llm.generate_contract_opening(
+                        player=player,
+                        demand=demand,
+                        valuation=val.__dict__,
+                        buying_team_name=str(buying_team_name),
+                        selling_team_name=str(selling_team_name),
+                        is_free_agent=False,
+                        scenario="contract_after_fee_agreed",
+                    )
+                    if contract_opening:
+                        break
+                    last_open_err = "empty_opening"
+                except Exception as e:
+                    last_open_err = str(e)
+                    logger.exception("LLM contract opening failed (contractnego) attempt=%s offer_id=%s", _attempt + 1, offer_id)
+
+            if not contract_opening:
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
+                    (utc_now_iso(), int(offer_id)),
+                )
+                logger.warning("LLM contract opening failed (contractnego, no deterministic fallback) offer_id=%s err=%s", offer_id, last_open_err)
+                # Re-try once with a plain prompt as a last resort before giving up
+                try:
+                    fallback_open = await llm.chat(
+                        [
+                            {
+                                "role": "system",
+                                "content": (
+                                    f"You are {p.get('name')}'s agent. The fee is agreed between {selling_team_name} and {buying_team_name}. "
+                                    f"I am {buying_team_name}'s manager and you are {p.get('name')}'s agent negotiating the contract. "
+                                    "IMPORTANT: Use the player's OVR/POT/market value in mind during negotiation. "
+                                    "IMPORTANT INSTRUCTION: While negotiating contract, a bar showing negotiation pressure must be shown. "
+                                    "If it reaches a high value, the player's camp should end negotiation. "
+                                    "The roleplay must be extremely realistic, firm, and strict. "
+                                    "Start with [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
+                                    f"State opening demands clearly: {fmt_money(int(demand.get('wage') or 0))}/wk, {demand.get('role')} role, "
+                                    f"{fmt_money(int(demand.get('signing_bonus') or 0))} signing bonus, {int(demand.get('contract_years') or 0)} years. "
+                                    "2-4 short paragraphs. Return only the message text."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": json.dumps({
+                                    "player": {"name": p.get("name"), "overall": p.get("overall"), "potential": p.get("potential"), "age": p.get("age")},
+                                    "demand": demand,
+                                    "buying_club": buying_team_name,
+                                    "selling_club": selling_team_name,
+                                }, ensure_ascii=False),
+                            },
+                        ],
+                        temperature=0.6,
+                        max_tokens=900,
+                    )
+                    if isinstance(fallback_open, str) and fallback_open.strip():
+                        contract_opening = fallback_open.strip()
+                        if "[Negotiation Pressure:" not in contract_opening:
+                            contract_opening = f"{negotiation_pressure_bar(0, 10)}\n{contract_opening}"
+                        # Re-activate the offer since we got a usable opening
+                        await self.bot.db.execute(
+                            "UPDATE transfer_offers SET status='negotiating', stage='contract', updated_at=? WHERE id=?",
+                            (utc_now_iso(), int(offer_id)),
                         )
-                        if contract_opening:
-                            break
-            except Exception:
-                logger.exception("LLM contract opening failed (contractnego) offer_id=%s", offer_id)
+                except Exception:
+                    logger.exception("LLM contract opening plain fallback failed (contractnego) offer_id=%s", offer_id)
+
+            if not contract_opening:
+                _oe = last_open_err or getattr(llm, "last_error", None) or "empty_opening"
+                await interaction.followup.send(
+                    embed=error_embed(
+                        "LLM Negotiation Failed",
+                        f"I couldn't generate the contract opening message right now. Please try again. ({str(_oe)[:160]})",
+                    ),
+                    ephemeral=True,
+                )
+                return
 
             parts = []
             if llm_fee_msg:
@@ -1421,10 +1718,7 @@ class TransfersCog(commands.Cog):
                 parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
             elif decision.get("manager_agreed"):
                 parts.append(f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT).")
-            if contract_opening:
-                parts.append(contract_opening)
-            else:
-                parts.append("Contract negotiation is ready. Submit your contract offer using the button below.")
+            parts.append(contract_opening)
             parts.append("Submit your contract offer using the button below.")
             accept_desc = "\n\n".join(parts)
             embed = success_embed("Fee Accepted — Contract Negotiation", accept_desc[:3900])
@@ -1521,7 +1815,7 @@ class TransfersCog(commands.Cog):
 
             opening_msg = None
             last_err = None
-            for _attempt in range(2):
+            for _attempt in range(1):
                 try:
                     opening_msg = await llm.generate_contract_opening(
                         player=player,
@@ -1544,11 +1838,12 @@ class TransfersCog(commands.Cog):
                     "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
                     (utc_now_iso(), int(offer_id)),
                 )
+                last_err = last_err or getattr(llm, "last_error", None) or "empty_opening"
                 logger.warning("LLM free agent opening failed (no deterministic fallback) player=%s err=%s", player.get("name"), last_err)
                 await interaction.followup.send(
                     embed=error_embed(
                         "LLM Negotiation Failed",
-                        f"I couldn't get a valid LLM opening message right now. No deterministic negotiation message was sent. Please try the command again. ({str(last_err)[:120]})",
+                        f"I couldn't get a valid LLM opening message right now. Please try the command again. ({str(last_err)[:160]})",
                     ),
                     ephemeral=True,
                 )

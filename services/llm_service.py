@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ class LLMService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._session: aiohttp.ClientSession | None = None
+        self.last_error: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -95,13 +97,18 @@ class LLMService:
         response_format: dict[str, Any] | None = None,
     ) -> str | None:
         if not self.enabled:
+            self.last_error = "llm_disabled"
             return None
 
+        self.last_error = None
         session = await self._get_session()
         url = self._chat_url()
         headers = self._headers()
         models = self._candidate_models(model)
-        last_error = None
+        last_error: str | None = None
+
+        def _log_failure(status: int, m: str, raw: str) -> None:
+            logger.warning("LLM chat failed status=%s model=%s body=%s", status, m, (raw or "")[:500])
 
         for idx, m in enumerate(models):
             payload: dict[str, Any] = {
@@ -113,9 +120,13 @@ class LLMService:
             if response_format is not None:
                 payload["response_format"] = response_format
 
+            resp_status: int | None = None
+            raw = ""
+            data: dict[str, Any] | None = None
             try:
                 async with session.post(url, headers=headers, json=payload) as resp:
                     raw = await resp.text()
+                    resp_status = resp.status
                     if resp.status >= 400:
                         last_error = f"status={resp.status} body={raw[:500]}"
                         # Retry without response_format if provider rejects it
@@ -126,44 +137,105 @@ class LLMService:
                                 async with session.post(url, headers=headers, json=payload2) as resp2:
                                     raw2 = await resp2.text()
                                     if resp2.status < 400:
-                                        data = json.loads(raw2)
-                                        text = self._extract_chat_text(data)
-                                        if text:
-                                            if m != (model or self.settings.llm_model):
-                                                logger.info("LLM chat succeeded with fallback model=%s (response_format removed)", m)
-                                            return text
+                                        try:
+                                            data2 = json.loads(raw2)
+                                        except Exception:
+                                            data2 = None
+                                        if isinstance(data2, dict):
+                                            text2 = self._extract_chat_text(data2)
+                                            if text2:
+                                                if m != (model or self.settings.llm_model):
+                                                    logger.info("LLM chat succeeded with fallback model=%s (response_format removed)", m)
+                                                self.last_error = None
+                                                return text2
+                                            # 200 but no text - treat as soft failure, try next model
+                                            logger.warning("LLM chat returned no text after response_format retry model=%s raw=%s", m, raw2[:500])
+                                            last_error = f"status=200 no_text body={raw2[:300]}"
+                                            data = None
+                                            raw = raw2
+                                            resp_status = 200
+                                            # fall through to next model logic below
+                                            raise RuntimeError("_no_text_after_rf_retry")
                                     raw = raw2
                                     resp_status = resp2.status
+                                    last_error = f"status={resp2.status} body={raw2[:500]}"
+                            except RuntimeError as rexc:
+                                if str(rexc) == "_no_text_after_rf_retry":
+                                    # move to next model
+                                    if idx < len(models) - 1:
+                                        continue
+                                    return None
+                                raise
                             except Exception:
-                                resp_status = resp.status
-                        else:
-                            resp_status = resp.status
+                                # response_format retry failed unexpectedly; keep original status
+                                pass
 
-                        if self._is_model_error(resp_status, raw) and idx < len(models) - 1:
-                            logger.warning("LLM model failed (%s), trying fallback model; model=%s body=%s", resp_status, m, raw[:300])
+                        # Decide whether to continue to next model
+                        if resp_status in {401, 403}:
+                            _log_failure(resp_status, m, raw)
+                            return None
+                        if resp_status == 429:
+                            _log_failure(resp_status, m, raw)
+                            if idx < len(models) - 1:
+                                await asyncio.sleep(0.8)
+                                continue
+                            return None
+                        if resp_status >= 500:
+                            _log_failure(resp_status, m, raw)
+                            if idx < len(models) - 1:
+                                await asyncio.sleep(0.4)
+                                continue
+                            return None
+                        if self._is_model_error(resp_status or 0, raw):
+                            _log_failure(resp_status or 0, m, raw)
+                            if idx < len(models) - 1:
+                                continue
+                            return None
+                        # Other 4xx - log and try next model (might be param-specific)
+                        _log_failure(resp_status or 0, m, raw)
+                        if idx < len(models) - 1:
                             continue
+                        return None
 
-                        logger.warning("LLM chat failed status=%s model=%s body=%s", resp_status, m, raw[:500])
-                        # For auth/rate/other non-model errors, don't spam fallbacks
-                        if resp_status in {401, 403, 429}:
-                            return None
-                        # For other errors, try next model only if it might be model related; otherwise stop
-                        if not self._is_model_error(resp_status, raw):
-                            return None
-                        continue
-                    data = json.loads(raw)
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        last_error = f"status=200 invalid_json body={raw[:300]}"
+                        logger.warning("LLM chat 200 but invalid JSON body model=%s body=%s", m, raw[:500])
+                        if idx < len(models) - 1:
+                            continue
+                        return None
             except Exception as e:
                 last_error = str(e)
                 logger.exception("LLM chat request failed model=%s", m)
-                continue
+                if idx < len(models) - 1:
+                    continue
+                return None
+
+            if not isinstance(data, dict):
+                if idx < len(models) - 1:
+                    continue
+                return None
 
             text = self._extract_chat_text(data)
             if text:
                 if idx > 0:
                     logger.info("LLM chat succeeded with fallback model=%s", m)
+                self.last_error = None
                 return text
-            logger.warning("LLM chat returned no text model=%s", m)
-            # Don't try other models for content/parse issues; it's not a model-availability problem.
+
+            # No extractable text - could be thinking-token exhaustion or safety filter.
+            finish_reason = None
+            try:
+                choices = data.get("choices") or []
+                if choices:
+                    finish_reason = (choices[0] or {}).get("finish_reason")
+            except Exception:
+                finish_reason = None
+            logger.warning("LLM chat returned no text model=%s finish_reason=%s raw=%s", m, finish_reason, str(raw)[:500])
+            last_error = f"status=200 no_text finish_reason={finish_reason} body={str(raw)[:300]}"
+            if idx < len(models) - 1:
+                continue
             return None
 
         if last_error:
@@ -174,22 +246,57 @@ class LLMService:
     def _extract_chat_text(data: dict[str, Any]) -> str | None:
         try:
             choices = data.get("choices") or []
-            if not choices:
-                return None
-            msg = choices[0].get("message") or {}
-            content = msg.get("content")
-            if isinstance(content, str):
-                text = content.strip()
-                return text or None
-            if isinstance(content, list):
-                parts = []
-                for p in content:
+            if choices:
+                choice = choices[0] or {}
+                msg = choice.get("message") or choice.get("delta") or {}
+                content = msg.get("content")
+
+                if isinstance(content, str):
+                    text = content.strip()
+                    if text:
+                        return text
+
+                if isinstance(content, list):
+                    parts: list[str] = []
+                    for p in content:
+                        if isinstance(p, str):
+                            parts.append(p)
+                        elif isinstance(p, dict):
+                            # OpenAI-compatible content parts
+                            for key in ("text", "output_text", "content"):
+                                v = p.get(key)
+                                if isinstance(v, str) and v:
+                                    parts.append(v)
+                                    break
+                    text = "".join(parts).strip()
+                    if text:
+                        return text
+
+                # Some providers put text in other fields. Avoid reasoning_content unless it
+                # clearly contains JSON/message (thinking traces poison JSON parsing).
+                for k in ("text", "output_text"):
+                    v = msg.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip()
+                rc = msg.get("reasoning_content")
+                if isinstance(rc, str) and rc.strip():
+                    rct = rc.strip()
+                    if "{" in rct or "[Negotiation Pressure:" in rct:
+                        return rct
+
+            # Native Gemini response fallback (just in case)
+            candidates = data.get("candidates") or []
+            if candidates:
+                cand = candidates[0] or {}
+                content = cand.get("content") or {}
+                parts = content.get("parts") or []
+                out = []
+                for p in parts:
                     if isinstance(p, dict) and isinstance(p.get("text"), str):
-                        parts.append(p["text"])
-                    elif isinstance(p, str):
-                        parts.append(p)
-                text = "".join(parts).strip()
-                return text or None
+                        out.append(p["text"])
+                text = "".join(out).strip()
+                if text:
+                    return text
         except Exception:
             logger.exception("LLM chat response parse failed")
         return None
@@ -202,40 +309,102 @@ class LLMService:
         max_tokens: int = 900,
         model: str | None = None,
     ) -> dict[str, Any] | None:
-        """Request a JSON object response. Returns parsed dict or None."""
-        # Try with response_format first; fallback to plain if provider rejects it
+        """Request a JSON object response. Returns parsed dict or None.
+
+        Robustness: tries response_format then plain. If the model returns plain text that
+        is not JSON, salvages it as {"message": text} so callers can still use the LLM reply.
+        """
+        def _strip_fences(t: str) -> str:
+            t = str(t or "").strip()
+            if t.startswith("```"):
+                t = t.strip("`")
+                nl = t.find("\n")
+                if nl != -1 and t[:nl].strip().lower() in {"json", "javascript", "js"}:
+                    t = t[nl + 1 :].strip()
+            return t.strip()
+
         def _try_parse(s: str) -> dict[str, Any] | None:
             if not s:
                 return None
+            s = s.strip()
             try:
                 obj = json.loads(s)
                 return obj if isinstance(obj, dict) else None
             except Exception:
                 pass
+            # Repair trailing commas
             try:
                 repaired = re.sub(r",\s*([}\]])", r"\1", s)
                 obj = json.loads(repaired)
                 return obj if isinstance(obj, dict) else None
             except Exception:
                 pass
+            # Repair truncated JSON by closing open brackets/braces
+            try:
+                repaired = re.sub(r",\s*([}\]])", r"\1", s)
+                # Trim trailing incomplete string/value
+                repaired2 = re.sub(r',\s*"[^"]*"?\s*:?\s*"?[^"{}\[\]]*$', '', repaired)
+                opens = repaired2.count("{") - repaired2.count("}")
+                open_br = repaired2.count("[") - repaired2.count("]")
+                if opens > 0 or open_br > 0:
+                    repaired2 = repaired2.rstrip().rstrip(",")
+                    repaired2 += "]" * max(0, open_br) + "}" * max(0, opens)
+                    obj = json.loads(repaired2)
+                    return obj if isinstance(obj, dict) else None
+            except Exception:
+                pass
             return None
 
         def _parse_text(raw_text: str | None) -> dict[str, Any] | None:
-            t = str(raw_text or "").strip()
+            t = _strip_fences(str(raw_text or ""))
             if not t:
                 return None
-            if t.startswith("```"):
-                t = t.strip("`")
-                nl = t.find("\n")
-                if nl != -1 and t[:nl].strip().lower() in {"json", "javascript", "js"}:
-                    t = t[nl + 1 :].strip()
             parsed = _try_parse(t)
             if parsed is not None:
                 return parsed
             start = t.find("{")
             end = t.rfind("}")
             if start != -1 and end != -1 and end > start:
-                return _try_parse(t[start : end + 1])
+                parsed = _try_parse(t[start : end + 1])
+                if parsed is not None:
+                    return parsed
+            return None
+
+        def _salvage_plain(raw_text: str | None) -> dict[str, Any] | None:
+            t = _strip_fences(str(raw_text or ""))
+            if not t:
+                return None
+            # If it looks like JSON-ish but failed to parse, try to extract a "message" field
+            m = re.search(r'"message"\s*:\s*"((?:[^"\\]|\\.)*)"', t, re.DOTALL | re.IGNORECASE)
+            if m:
+                try:
+                    msg = json.loads('"' + m.group(1) + '"')
+                except Exception:
+                    msg = m.group(1).replace('\\"', '"').replace('\\n', '\n')
+                if isinstance(msg, str) and msg.strip():
+                    d: dict[str, Any] = {"message": msg.strip()}
+                    # try to pull other fields
+                    for k in ("accepted", "walked_away", "pressure"):
+                        km = re.search(rf'"{k}"\s*:\s*(true|false|null|-?\d+)', t, re.IGNORECASE)
+                        if km:
+                            val = km.group(1).lower()
+                            if val == "true":
+                                d[k] = True
+                            elif val == "false":
+                                d[k] = False
+                            elif val == "null":
+                                d[k] = None
+                            else:
+                                try:
+                                    d[k] = int(val)
+                                except Exception:
+                                    pass
+                    return d
+            # Plain text response - use it as the message. The caller can infer defaults.
+            # Strip any leading/trailing markdown fences leftover
+            clean = t.strip()
+            if len(clean) >= 10:
+                return {"message": clean[:4000], "_salvaged_plain": True}
             return None
 
         text1 = await self.chat(
@@ -248,6 +417,10 @@ class LLMService:
         parsed = _parse_text(text1)
         if parsed is not None:
             return parsed
+        salvaged1 = _salvage_plain(text1)
+        if isinstance(salvaged1, dict) and salvaged1.get("message"):
+            logger.info("LLM chat_json salvaged plain-text response from first call (len=%s)", len(str(salvaged1.get("message") or "")))
+            return salvaged1
 
         text2 = await self.chat(
             messages,
@@ -258,9 +431,13 @@ class LLMService:
         parsed = _parse_text(text2)
         if parsed is not None:
             return parsed
+        salvaged2 = _salvage_plain(text2)
+        if isinstance(salvaged2, dict) and salvaged2.get("message"):
+            logger.info("LLM chat_json salvaged plain-text response from second call (len=%s)", len(str(salvaged2.get("message") or "")))
+            return salvaged2
 
         last_t = str(text2 or text1 or "").strip()
-        logger.warning("LLM chat_json could not parse JSON: %s", last_t[:300])
+        logger.warning("LLM chat_json could not parse or salvage: %s", last_t[:300])
         return None
 
     async def parse_contract_terms_llm(self, text: str, *, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -403,6 +580,58 @@ class LLMService:
         years = max(1, min(years, 5))
         return {"wage": int(wage), "role": role, "signing_bonus": int(bonus), "contract_years": int(years)}
 
+    @staticmethod
+    def _infer_pressure_from_text(text: str, *, previous: int = 0, max_pressure: int = 10) -> int | None:
+        t = str(text or "")
+        m = re.search(r"\[Negotiation Pressure:\s*[█░\#\-\s]*\s*(\d{1,3})%\s*\]", t, re.IGNORECASE)
+        if m:
+            try:
+                pct = max(0, min(100, int(m.group(1))))
+                return max(0, min(int(max_pressure), int(round((pct / 100.0) * int(max_pressure)))))
+            except Exception:
+                pass
+        # "pressure: 7/10", "pressure 70%"
+        m2 = re.search(r"pressure\D{0,12}(\d{1,2})\s*/\s*(\d{1,2})", t, re.IGNORECASE)
+        if m2:
+            try:
+                p = int(m2.group(1)); mx = int(m2.group(2) or 10)
+                if mx > 0:
+                    return max(0, min(int(max_pressure), int(round((p / mx) * int(max_pressure)))))
+            except Exception:
+                pass
+        m3 = re.search(r"pressure\D{0,12}(\d{1,3})\s*%", t, re.IGNORECASE)
+        if m3:
+            try:
+                pct = max(0, min(100, int(m3.group(1))))
+                return max(0, min(int(max_pressure), int(round((pct / 100.0) * int(max_pressure)))))
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _infer_walkaway_from_text(text: str) -> bool:
+        t = str(text or "").lower()
+        patterns = [
+            r"\bwalk(?:ing)? away\b", r"\bend(?:ing)? (?:the )?negotiat", r"\btalks? (?:are )?over\b",
+            r"\bdeal is off\b", r"\bno deal\b", r"\bpull(?:ing)? out\b", r"\bleav(?:e|ing) the table\b",
+            r"\bnot negotiating any further\b", r"\bnegotiations? (?:have )?collapsed\b",
+        ]
+        return any(re.search(p, t) for p in patterns)
+
+    @staticmethod
+    def _infer_accept_from_text(text: str) -> bool:
+        t = str(text or "").lower()
+        # Avoid false positives like "cannot accept"
+        if re.search(r"\b(can(?:not|'t)|won't|will not|unable to|refuse to|do not|don't)\b.{0,20}\baccept\b", t):
+            return False
+        patterns = [
+            r"\bwe (?:can )?accept\b", r"\bi (?:can )?accept\b", r"\bwe(?:'re| are) happy to accept\b",
+            r"\bdeal(?: is)? accepted\b", r"\baccepted? (?:the|your) (?:offer|fee|bid|terms)\b",
+            r"\bwe have a deal\b", r"\bagree(?:d)? to (?:the|your) (?:offer|fee|bid|terms)\b",
+            r"\bfee is accepted\b", r"\boffer is accepted\b",
+        ]
+        return any(re.search(p, t) for p in patterns)
+
     async def negotiate_fee(
         self,
         *,
@@ -456,7 +685,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=700,
+            max_tokens=1600,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -465,10 +694,24 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=700,
+                max_tokens=1600,
             )
         if not isinstance(data, dict):
+            # Last resort: plain chat and salvage text as message
+            plain = await self.chat(
+                [
+                    {"role": "system", "content": sys.replace("Return ONLY a JSON object with keys: accepted (boolean), walked_away (boolean), pressure (integer 0-10), message (string). ", "")},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.5,
+                max_tokens=900,
+            )
+            if isinstance(plain, str) and plain.strip():
+                data = {"message": plain.strip(), "_salvaged_plain": True}
+        if not isinstance(data, dict):
             return None
+
+        # Unnest common wrappers
         if not any(k in data for k in ("accepted", "accept", "message", "response", "walked_away", "walkedAway")):
             for k in ("decision", "result", "negotiation", "output", "data"):
                 v = data.get(k)
@@ -482,12 +725,30 @@ class LLMService:
                     return d.get(k)
             return default
 
-        pressure = max(
-            prev_p,
-            min(int(max_pressure), self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)),
-        )
-        walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
-        accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
+        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
+
+        # Infer from message when fields are missing or salvaged
+        has_accepted_key = any(k in data for k in ("accepted", "accept", "is_accepted", "isAccepted"))
+        has_walked_key = any(k in data for k in ("walked_away", "walkedAway", "walk_away", "walkaway"))
+        has_pressure_key = any(k in data for k in ("pressure", "pressure_level", "pressure_pct"))
+
+        inferred_pressure = self._infer_pressure_from_text(msg, previous=prev_p, max_pressure=max_pressure)
+        if not has_pressure_key and inferred_pressure is not None:
+            pressure_raw = inferred_pressure
+        else:
+            pressure_raw = self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)
+        pressure = max(prev_p, min(int(max_pressure), int(pressure_raw)))
+
+        if has_walked_key:
+            walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
+        else:
+            walked_away = self._infer_walkaway_from_text(msg)
+
+        if has_accepted_key:
+            accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
+        else:
+            accepted = self._infer_accept_from_text(msg) if not walked_away else False
+
         if pressure >= int(max_pressure):
             walked_away = True
             accepted = False
@@ -496,14 +757,20 @@ class LLMService:
         if accepted:
             walked_away = False
 
-        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
         if not msg:
-            return None
+            # Build a minimal message if the model gave us a decision but no text
+            bar_tmp = self._pressure_bar(pressure, max_pressure)
+            if accepted:
+                msg = f"{bar_tmp}\nWe accept your offer of {self._money(offer_fee)} for {player.get('name') or 'the player'}."
+            elif walked_away:
+                msg = f"{bar_tmp}\nNegotiations are over. We are walking away from this deal."
+            else:
+                msg = f"{bar_tmp}\nWe reject your offer of {self._money(offer_fee)}. It does not meet our valuation."
+
         bar = self._pressure_bar(pressure, max_pressure)
         if "[Negotiation Pressure:" not in msg:
             msg = f"{bar}\n{msg}"
         else:
-            # normalize first-line bar to actual pressure to avoid inconsistencies
             lines = msg.splitlines()
             if lines and "[Negotiation Pressure:" in lines[0]:
                 lines[0] = bar
@@ -602,7 +869,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=850,
+            max_tokens=1600,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -611,8 +878,21 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=850,
+                max_tokens=1600,
             )
+        if not isinstance(data, dict):
+            # Last resort: plain chat and salvage
+            plain = await self.chat(
+                [
+                    {"role": "system", "content": sys.replace("Return ONLY a JSON object with keys: accepted (boolean), walked_away (boolean), pressure (integer 0-10), counter (object|null with wage integer euros/week, role one of Crucial/Important/Rotation/Sporadic/Prospect, signing_bonus integer euros, contract_years integer 1-5), message (string). ", "")},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.5,
+                max_tokens=1000,
+            )
+            if isinstance(plain, str) and plain.strip():
+                data = {"message": plain.strip(), "_salvaged_plain": True}
+
         if not isinstance(data, dict):
             return None
         if not any(k in data for k in ("accepted", "accept", "message", "response", "walked_away", "walkedAway")):
@@ -628,12 +908,29 @@ class LLMService:
                     return d.get(k)
             return default
 
-        pressure = max(
-            prev_p,
-            min(int(max_pressure), self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)),
-        )
-        walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
-        accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
+        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
+
+        has_accepted_key = any(k in data for k in ("accepted", "accept", "is_accepted", "isAccepted"))
+        has_walked_key = any(k in data for k in ("walked_away", "walkedAway", "walk_away", "walkaway"))
+        has_pressure_key = any(k in data for k in ("pressure", "pressure_level", "pressure_pct"))
+
+        inferred_pressure = self._infer_pressure_from_text(msg, previous=prev_p, max_pressure=max_pressure)
+        if not has_pressure_key and inferred_pressure is not None:
+            pressure_raw = inferred_pressure
+        else:
+            pressure_raw = self._coerce_int(_pick(data, "pressure", "pressure_level", "pressure_pct", default=prev_p), prev_p)
+        pressure = max(prev_p, min(int(max_pressure), int(pressure_raw)))
+
+        if has_walked_key:
+            walked_away = self._coerce_bool(_pick(data, "walked_away", "walkedAway", "walk_away", "walkaway", default=False), False)
+        else:
+            walked_away = self._infer_walkaway_from_text(msg)
+
+        if has_accepted_key:
+            accepted = self._coerce_bool(_pick(data, "accepted", "accept", "is_accepted", "isAccepted", default=False), False)
+        else:
+            accepted = self._infer_accept_from_text(msg) if not walked_away else False
+
         if pressure >= int(max_pressure):
             walked_away = True
             accepted = False
@@ -647,7 +944,6 @@ class LLMService:
             raw_counter = _pick(data, "counter", "counter_offer", "counterOffer", "counter_demand", "counterDemand", default=None)
             counter = self._sanitize_contract_counter(raw_counter, fallback=demand)
             if counter is None:
-                # Try to be lenient: if model gave partial counter, fill from demand
                 rc = raw_counter if isinstance(raw_counter, dict) else {}
                 merged = dict(demand or {})
                 merged.update({k: v for k, v in rc.items() if v is not None})
@@ -658,9 +954,25 @@ class LLMService:
                     "wage": 100000, "role": "Rotation", "signing_bonus": 0, "contract_years": 3
                 })
 
-        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
         if not msg:
-            return None
+            bar_tmp = self._pressure_bar(pressure, max_pressure)
+            if accepted:
+                msg = (
+                    f"{bar_tmp}\nWe accept your offer: {self._money(offered.get('wage'))}/wk, "
+                    f"{offered.get('role')}, {self._money(offered.get('signing_bonus'))} signing bonus, "
+                    f"{int(offered.get('contract_years') or 0)} years."
+                )
+            elif walked_away:
+                msg = f"{bar_tmp}\nNegotiations are over. The player's camp is walking away."
+            elif counter:
+                msg = (
+                    f"{bar_tmp}\nYour offer is not acceptable. Our counter-demand is "
+                    f"{self._money(counter.get('wage'))}/wk, {counter.get('role')}, "
+                    f"{self._money(counter.get('signing_bonus'))} signing bonus, {int(counter.get('contract_years') or 0)} years."
+                )
+            else:
+                msg = f"{bar_tmp}\nYour offer is not acceptable. We need improved terms."
+
         bar = self._pressure_bar(pressure, max_pressure)
         if "[Negotiation Pressure:" not in msg:
             msg = f"{bar}\n{msg}"
@@ -674,7 +986,6 @@ class LLMService:
         if accepted:
             offered_wage = self._money(offered.get("wage"))
             if offered_wage not in msg and str(self._coerce_int(offered.get("wage"), 0)) not in msg.replace(",", ""):
-                # Append explicit agreed terms to prevent ambiguity
                 msg += (
                     f"\n\n**Agreed terms:** {self._money(offered.get('wage'))}/wk, {offered.get('role')}, "
                     f"{self._money(offered.get('signing_bonus'))} signing bonus, {int(offered.get('contract_years') or 0)} years."
@@ -771,21 +1082,53 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=700,
+            max_tokens=1600,
         )
         if not isinstance(data, dict):
-            return None
+            data = await self.chat_json(
+                [
+                    {"role": "system", "content": sys + " Return ONLY valid JSON. No markdown, no extra text."},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.2,
+                max_tokens=1600,
+            )
 
-        def _pick(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
-            for k in keys:
-                if k in d and d.get(k) is not None:
-                    return d.get(k)
-            return default
+        msg = ""
+        if isinstance(data, dict):
+            def _pick(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
+                for k in keys:
+                    if k in d and d.get(k) is not None:
+                        return d.get(k)
+                return default
+            msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
 
-        msg = str(_pick(data, "message", "response", "reply", "text", default="") or "").strip()
         if not msg:
-            # If the model returned the whole thing as a plain string somehow not caught, fail
+            # Last resort: ask for plain text opening
+            plain = await self.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            persona + " "
+                            "This is the OPENING message of the contract negotiation. Do not mention being an AI. "
+                            f"Start with the negotiation pressure bar [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
+                            "Clearly state opening demands with exact numbers: weekly wage, role, signing bonus, contract years. "
+                            "Use the provided demand values exactly. Reference the player's OVR/POT/market value. "
+                            "Be realistic, firm, and strict. 2-5 short paragraphs. Return only the message text."
+                        ),
+                    },
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.6,
+                max_tokens=900,
+            )
+            if isinstance(plain, str) and plain.strip():
+                msg = plain.strip()
+
+        if not msg:
             return None
+
         if "[Negotiation Pressure:" not in msg:
             msg = f"{bar}\n{msg}"
         else:
