@@ -786,7 +786,10 @@ class LLMService:
 
     @staticmethod
     def _clean_user_message_text(text: Any) -> str:
-        """Remove JSON/code-fence artifacts from user-facing LLM messages."""
+        """Remove JSON/code-fence artifacts from user-facing LLM messages.
+
+        Never return an empty string when there is recoverable human-readable content.
+        """
         if text is None:
             return ""
         s = str(text).strip()
@@ -813,12 +816,37 @@ class LLMService:
 
         def _extract(obj: Any) -> str | None:
             if isinstance(obj, dict):
+                # Prefer explicit text fields
                 for k in ("message", "response", "reply", "text", "content", "reason"):
                     v = obj.get(k)
                     if isinstance(v, str) and v.strip():
                         inner = LLMService._clean_user_message_text(v)
                         if inner:
                             return inner
+                # Readable fallback from structured negotiation fields (no raw JSON)
+                parts: list[str] = []
+                accepted = obj.get("accepted")
+                walked = obj.get("walked_away") if "walked_away" in obj else obj.get("walkedAway")
+                counter = obj.get("counter") if isinstance(obj.get("counter"), dict) else None
+                agreed = obj.get("agreed_terms") if isinstance(obj.get("agreed_terms"), dict) else None
+                if walked is True:
+                    parts.append("The player's camp has walked away from negotiations.")
+                elif accepted is True:
+                    parts.append("The offer has been accepted.")
+                elif counter:
+                    parts.append("The player's camp has made a counter-offer.")
+                if counter:
+                    parts.append(
+                        f"Counter: {LLMService._money(counter.get('wage') or 0)}/wk, {counter.get('role') or 'Rotation'} role, "
+                        f"{LLMService._money(counter.get('signing_bonus') or 0)} signing bonus, {int(counter.get('contract_years') or 0)} years."
+                    )
+                if agreed:
+                    parts.append(
+                        f"Agreed terms: {LLMService._money(agreed.get('wage') or 0)}/wk, {agreed.get('role') or 'Rotation'} role, "
+                        f"{LLMService._money(agreed.get('signing_bonus') or 0)} signing bonus, {int(agreed.get('contract_years') or 0)} years."
+                    )
+                if parts:
+                    return "\n".join(parts)
                 return None
             if isinstance(obj, list):
                 for it in obj:
@@ -830,7 +858,14 @@ class LLMService:
         parsed = _try_parse(s)
         if parsed is not None:
             extracted = _extract(parsed)
-            return extracted or ""
+            if extracted:
+                return extracted
+            # Last resort: don't leak raw JSON; return a compact human-readable summary
+            if isinstance(parsed, dict):
+                keys = ", ".join(list(parsed.keys())[:8])
+                return f"Negotiation update received ({keys})." if keys else "Negotiation update received."
+            return "Negotiation update received."
+
         # If embedded JSON object exists, try extracting message from it
         if "{" in s and "}" in s:
             m = re.search(r"\{[\s\S]*\}", s)
@@ -846,9 +881,16 @@ class LLMService:
                         if suffix and not suffix.startswith(("{", "[")):
                             return (extracted + "\n\n" + suffix).strip()
                         return extracted
-        # Drop if it still looks like raw JSON
+                # JSON blob present but unreadable as message - strip the blob and keep surrounding text
+                prefix = s[:m.start()].strip()
+                suffix = s[m.end():].strip()
+                surrounding = "\n\n".join([p for p in [prefix, suffix] if p and not p.startswith(("{", "["))]).strip()
+                if surrounding:
+                    return surrounding
+
+        # If it still looks like raw JSON, avoid leaking it
         if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
-            return ""
+            return "Negotiation update received."
         return s
 
     @staticmethod
@@ -1041,7 +1083,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=1100,
+            max_tokens=1300,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -1050,7 +1092,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=1100,
+                max_tokens=1300,
             )
         if not isinstance(data, dict):
             # Last resort: plain chat and salvage text as message
@@ -1060,7 +1102,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.5,
-                max_tokens=700,
+                max_tokens=800,
             )
             if isinstance(plain, str) and plain.strip():
                 cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
@@ -1234,7 +1276,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=1100,
+            max_tokens=1300,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -1243,7 +1285,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=1100,
+                max_tokens=1300,
             )
         if not isinstance(data, dict):
             # Last resort: plain chat and salvage
@@ -1253,7 +1295,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.5,
-                max_tokens=700,
+                max_tokens=800,
             )
             if isinstance(plain, str) and plain.strip():
                 cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
@@ -1455,7 +1497,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=1100,
+            max_tokens=1300,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -1464,7 +1506,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=1100,
+                max_tokens=1300,
             )
 
         msg = ""
@@ -1494,7 +1536,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.6,
-                max_tokens=900,
+                max_tokens=1000,
             )
             if isinstance(plain, str) and plain.strip():
                 msg = self._clean_user_message_text(plain.strip()) or plain.strip()
