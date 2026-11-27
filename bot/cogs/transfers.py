@@ -105,6 +105,9 @@ def _clean_llm_user_text(text: Any, *, max_len: int = 3500) -> str:
     if not s:
         return ""
 
+    # Scrub internal prompt/format markers that should never reach users
+    s = re.sub(r"(?im)^\s*(RESPONSE FORMAT\s*\(system\)\s*:|NEGOTIATION CONTEXT\s*\(JSON\)\s*:|MANAGER MESSAGE\s*:)\s*", "", s)
+
     # Strip markdown fences
     if s.startswith("```"):
         s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s)
@@ -652,9 +655,13 @@ class TransfersCog(commands.Cog):
 
             # accepted -> start contract negotiation
             demand = self.market.contract_demand(val, player)
+            contract_meta = {
+                "valuation": val.__dict__, "decision": decision, "demand": demand,
+                "contract_round": 0, "pressure": 0, "fee_pressure": _fee_pressure,
+            }
             await self.bot.db.execute(
                 "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
-                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "fee_pressure": _fee_pressure}), utc_now_iso(), int(offer_id)),
+                (json.dumps(contract_meta), utc_now_iso(), int(offer_id)),
             )
             view = ContractNegView(self, int(offer_id))
             p = player
@@ -716,11 +723,18 @@ class TransfersCog(commands.Cog):
                 )
                 return
 
+            # Seed conversation history for contract stage
+            contract_meta["history"] = [{"role": "assistant", "content": contract_opening[:3000]}]
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps(contract_meta), utc_now_iso(), int(offer_id)),
+            )
+
             parts = []
             if llm_fee_msg:
                 parts.append(llm_fee_msg)
                 parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
-            parts.append(_clean_llm_user_text(contract_opening))
+            parts.append(contract_opening)
             parts.append("Submit your contract offer using the button below.")
             accept_desc = "\n\n".join(parts)
             embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc[:3900])
@@ -924,6 +938,7 @@ class TransfersCog(commands.Cog):
                         scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
                         user_message=raw_msg,
                         offered_is_explicit=bool(offered_is_explicit),
+                        history=meta.get("history") or [],
                     )
                     if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
                         result = dict(llm_decision)
@@ -951,6 +966,7 @@ class TransfersCog(commands.Cog):
                         scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
                         user_message=raw_msg,
                         offered_is_explicit=bool(offered_is_explicit),
+                        history=meta.get("history") or [],
                     )
                     if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
                         result = dict(llm_decision)
@@ -1034,7 +1050,7 @@ class TransfersCog(commands.Cog):
             if not cleaned_msg:
                 cleaned_msg = "Negotiation response unavailable."
             msg_out = f"{bar}\n{cleaned_msg}"
-            result["message"] = msg_out[:1900]
+            result["message"] = msg_out[:3500]
 
             meta["contract_round"] = round_no
             meta["pressure"] = pressure
@@ -1060,10 +1076,24 @@ class TransfersCog(commands.Cog):
                     _msg_now = "The player's camp is frustrated, but negotiations remain open. Improve your terms."
                 if "walk away" in _msg_now.lower() or "negotiations are over" in _msg_now.lower():
                     _msg_now = re.sub(r"(?i)\b(walk(?:ing)? away|negotiations? (?:are )?over|talks? (?:are )?over|deal is off)\b[^.!\n]*[.!]?", "talks are close to breaking point, but they are still willing to hear an improved offer.", _msg_now)
-                result["message"] = f"{result['pressure_bar']}\n{_msg_now}"[:1900]
+                result["message"] = f"{result['pressure_bar']}\n{_msg_now}"[:3500]
                 bar = result["pressure_bar"]
                 meta["pressure"] = _p_now
                 meta["last_counter"] = result.get("counter")
+
+            # Persist conversation history for follow-up turns
+            hist = meta.get("history")
+            if not isinstance(hist, list):
+                hist = []
+            user_turn = str(raw_msg or "").strip()
+            if user_turn:
+                hist.append({"role": "user", "content": user_turn[:1500]})
+            assistant_turn = str(result.get("message") or "").strip()
+            if assistant_turn:
+                hist.append({"role": "assistant", "content": assistant_turn[:3000]})
+            if len(hist) > 20:
+                hist = hist[-20:]
+            meta["history"] = hist
 
             if result.get("manager_ended"):
                 meta["ended_reason"] = "manager_ended"
@@ -1648,9 +1678,13 @@ class TransfersCog(commands.Cog):
                 return
 
             demand = self.market.contract_demand(val, player)
+            contract_meta = {
+                "valuation": val.__dict__, "decision": decision, "demand": demand,
+                "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot, "fee_pressure": _fee_pressure,
+            }
             await self.bot.db.execute(
                 "UPDATE transfer_offers SET status='negotiating', stage='contract', meta_json=?, updated_at=? WHERE id=?",
-                (json.dumps({"valuation": val.__dict__, "decision": decision, "demand": demand, "contract_round": 0, "pressure": 0, "selling_is_bot": is_bot, "fee_pressure": _fee_pressure}), utc_now_iso(), int(offer_id)),
+                (json.dumps(contract_meta), utc_now_iso(), int(offer_id)),
             )
             view = ContractNegView(self, int(offer_id))
             p = player
@@ -1712,13 +1746,20 @@ class TransfersCog(commands.Cog):
                 )
                 return
 
+            # Seed conversation history for contract stage
+            contract_meta["history"] = [{"role": "assistant", "content": contract_opening[:3000]}]
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps(contract_meta), utc_now_iso(), int(offer_id)),
+            )
+
             parts = []
             if llm_fee_msg:
                 parts.append(llm_fee_msg)
                 parts.append(f"**Fee agreed:** {fmt_money(offer_fee)}")
             elif decision.get("manager_agreed"):
                 parts.append(f"Fee agreed: **{fmt_money(offer_fee)}** for **{p.get('name')}** ({int(p.get('overall') or 0)} OVR / {int(p.get('potential') or 0)} POT).")
-            parts.append(_clean_llm_user_text(contract_opening))
+            parts.append(contract_opening)
             parts.append("Submit your contract offer using the button below.")
             accept_desc = "\n\n".join(parts)
             embed = success_embed("Fee Accepted — Contract Negotiation", accept_desc[:3900])
@@ -1858,6 +1899,17 @@ class TransfersCog(commands.Cog):
                 )
                 await interaction.followup.send(embed=error_embed("LLM Negotiation Failed", "I couldn't get a valid negotiation opening message. Please try again."), ephemeral=True)
                 return
+
+            # Seed conversation history with the opening message
+            hist = meta.get("history")
+            if not isinstance(hist, list):
+                hist = []
+            hist.append({"role": "assistant", "content": opening_msg[:3000]})
+            meta["history"] = hist[-20:]
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps(meta), utc_now_iso(), int(offer_id)),
+            )
 
             view = ContractNegView(self, int(offer_id))
             p = player

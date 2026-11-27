@@ -878,6 +878,8 @@ class LLMService:
         s = str(text).strip()
         if not s:
             return ""
+        # Scrub internal prompt/format markers that should never reach users
+        s = re.sub(r"(?im)^\s*(RESPONSE FORMAT\s*\(system\)\s*:|NEGOTIATION CONTEXT\s*\(JSON\)\s*:|MANAGER MESSAGE\s*:)\s*", "", s)
         # Strip markdown fences
         if s.startswith("```"):
             s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s)
@@ -1129,7 +1131,8 @@ class LLMService:
         prev_p = max(0, min(int(previous_pressure), int(max_pressure)))
         bar_hint = self._pressure_bar(prev_p, max_pressure)
 
-        sys = (
+        # === Original persona prompt (recovered from git commit 1d41750). Keep verbatim. ===
+        persona = (
             f"You are the manager of {selling_team_name} in a football manager game. "
             f"{buying_team_name} have approached you to buy {player.get('name') or 'the player'}. "
             f"I am acting as {buying_team_name}'s manager, while you are {selling_team_name}'s manager negotiating the transfer fee. "
@@ -1137,19 +1140,26 @@ class LLMService:
             "You can use the exact numbers during negotiation while keeping in mind the player's market value and worth. "
             "IMPORTANT INSTRUCTION: While negotiating, a bar showing negotiation pressure must be shown. "
             "If it reaches a high value, the manager should end negotiation. MUST BE EXTREMELY REALISTIC AND BE STRICT. "
-            "You decide whether to accept or reject the fee. Do not mention being an AI. "
-            "CRITICAL: Output ONLY the final JSON object. Never include internal reasoning, planning, analysis, chain-of-thought, or descriptions of what you are doing. "
-            "The 'message' field must contain only the in-character negotiation reply shown to the manager. "
-            "Return ONLY a JSON object with keys: "
-            "accepted (boolean), walked_away (boolean), pressure (integer 0-10), message (string). "
-            "Rules: pressure must be >= previous_pressure unless there is a strong reason, and never above 10. "
+            "You MUST respect the provided decision: if accepted is false, do not accept; if accepted is true, accept clearly. "
+            "Do not change the offered fee number. Do not mention being an AI. "
+            "Reply in plain text, 2-4 short paragraphs max. Start your message with the pressure bar on its own line. "
+            "Be firm, realistic, and reference the player's OVR/POT/value when relevant."
+        )
+
+        # Response format is separate from the original persona prompt (not inside it).
+        format_sys = (
+            "RESPONSE FORMAT (system): Return ONLY a JSON object so the game can process the negotiation state. "
+            "Keys: accepted (boolean), walked_away (boolean), pressure (integer 0-10), message (string). "
+            "The 'message' must be the detailed in-character negotiation reply (follow the persona above fully). "
+            "Do NOT include internal reasoning, planning, chain-of-thought, or prompt instructions in 'message'. "
+            "Rules: pressure must be >= previous_pressure unless strong reason, never above 10. "
             "If pressure >= 10 or walked_away is true, accepted must be false and negotiations are over. "
             "If accepted is true, walked_away must be false and message must clearly accept the fee. "
             "If accepted is false, message must clearly reject and explain why realistically/strictly. "
-            "message must start with the negotiation pressure bar in the format [Negotiation Pressure: ███░░░░░░░ XX%]. "
-            "message should be 2-4 short paragraphs, firm and realistic, referencing OVR/POT/value."
+            "message must start with the negotiation pressure bar [Negotiation Pressure: ███░░░░░░░ XX%]."
         )
-        user = json.dumps({
+
+        context = {
             "scenario": "bot_club_fee_negotiation",
             "selling_club": selling_team_name,
             "buying_club": buying_team_name,
@@ -1160,37 +1170,37 @@ class LLMService:
             "max_pressure": int(max_pressure),
             "previous_pressure_bar": bar_hint,
             "round_no": int(round_no),
-        }, ensure_ascii=False)
-
-        data = await self.chat_json(
-            [{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.7,
-            max_tokens=1300,
+        }
+        user_content = (
+            "NEGOTIATION CONTEXT (JSON):\n"
+            + json.dumps(context, ensure_ascii=False)
         )
+
+        msgs = [
+            {"role": "system", "content": persona},
+            {"role": "system", "content": format_sys},
+            {"role": "user", "content": user_content},
+        ]
+
+        data = await self.chat_json(msgs, temperature=0.7, max_tokens=1300)
         _le = str(self.last_error or "").lower()
         if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
             return None
         if not isinstance(data, dict):
-            data = await self.chat_json(
-                [
-                    {"role": "system", "content": sys + " Return ONLY valid JSON. No markdown, no extra text."},
-                    {"role": "user", "content": user},
-                ],
-                temperature=0.2,
-                max_tokens=1300,
-            )
+            retry_msgs = list(msgs) + [{"role": "system", "content": "Return ONLY valid JSON. No markdown, no extra text."}]
+            data = await self.chat_json(retry_msgs, temperature=0.2, max_tokens=1300)
         _le = str(self.last_error or "").lower()
         if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
             return None
         if not isinstance(data, dict):
-            # Last resort: plain chat and salvage text as message
+            # Last resort: plain chat
             plain = await self.chat(
                 [
-                    {"role": "system", "content": sys.replace("Return ONLY a JSON object with keys: accepted (boolean), walked_away (boolean), pressure (integer 0-10), message (string). ", "") + " Output only the final in-character negotiation message. No reasoning, no planning, no chain-of-thought."},
-                    {"role": "user", "content": user},
+                    {"role": "system", "content": persona},
+                    {"role": "user", "content": user_content + "\n\nReply with only the in-character negotiation message. No JSON, no reasoning."},
                 ],
                 temperature=0.5,
-                max_tokens=800,
+                max_tokens=900,
             )
             if isinstance(plain, str) and plain.strip():
                 cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
@@ -1238,7 +1248,6 @@ class LLMService:
             walked_away = False
 
         if not msg:
-            # Build a minimal message if the model gave us a decision but no text
             bar_tmp = self._pressure_bar(pressure, max_pressure)
             if accepted:
                 msg = f"{bar_tmp}\nWe accept your offer of {self._money(offer_fee)} for {player.get('name') or 'the player'}."
@@ -1261,7 +1270,7 @@ class LLMService:
             "walked_away": bool(walked_away),
             "pressure": int(pressure),
             "pressure_bar": bar,
-            "message": msg[:1900],
+            "message": msg[:3500],
         }
 
     async def negotiate_contract(
@@ -1280,6 +1289,7 @@ class LLMService:
         scenario: str | None = None,
         user_message: str | None = None,
         offered_is_explicit: bool = True,
+        history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """LLM-driven contract negotiation decision (prompts #2/#3). Returns validated dict or None."""
         if not self.enabled:
@@ -1296,6 +1306,7 @@ class LLMService:
         if not sc:
             sc = "free_agent" if is_free_agent else "contract_after_fee_agreed"
 
+        # === Original persona prompts (recovered from git commit 1d41750). Keep verbatim. ===
         if sc == "free_agent":
             persona = (
                 f"You are {player_name}'s agent representing him as a high-profile free agent. "
@@ -1306,7 +1317,12 @@ class LLMService:
                 "IMPORTANT INSTRUCTION: While negotiating the contract, a dynamic bar showing negotiation pressure must be displayed at the start of your message "
                 "(e.g., [Negotiation Pressure: ██░░░░░░░░ 20%]). "
                 "If it reaches a high value due to lowball offers or stalling, the player's camp should walk away or threaten to sign elsewhere. "
-                "THE ROLEPLAY MUST BE EXTREMELY REALISTIC, FIRM, AND STRICT."
+                "THE ROLEPLAY MUST BE EXTREMELY REALISTIC, FIRM, AND STRICT. "
+                "You MUST respect the provided decision and counter terms exactly. Do not change numbers, do not accept if accepted is false, do not invent deals. "
+                "Do not mention being an AI. Reply in plain text, 2-5 short paragraphs max. Start with the pressure bar on its own line. "
+                "If counter is provided, clearly state the counter-demand with exact numbers. "
+                "If accepted, clearly confirm agreement and state the agreed terms exactly. "
+                "If walked away, clearly state negotiations are over and the player will explore other options."
             )
         else:
             persona = (
@@ -1316,34 +1332,32 @@ class LLMService:
                 "Use the stats like POT, OVR etc while also keeping in mind market value during negotiation so you know the player's worth. "
                 "IMPORTANT INSTRUCTION: While negotiating contract, a bar showing negotiation pressure must be shown. "
                 "If it reaches a high value, the player's camp should end negotiation. "
-                "The roleplay must be extremely realistic, firm, and strict."
+                "The roleplay must be extremely realistic, firm, and strict. "
+                "You MUST respect the provided decision and counter terms exactly. Do not change numbers, do not accept if accepted is false, do not invent deals. "
+                "Do not mention being an AI. Reply in plain text, 2-5 short paragraphs max. Start with the pressure bar on its own line. "
+                "If counter is provided, clearly state the counter-demand with exact numbers. "
+                "If accepted, clearly confirm agreement and state the agreed terms exactly. "
+                "If walked away, clearly state negotiations are over."
             )
 
-        sys = (
-            persona + " "
-            "You decide the negotiation outcome. Do not mention being an AI. "
-            "CRITICAL: Output ONLY the final JSON object. Never include internal reasoning, planning, analysis, chain-of-thought, or descriptions of what you are doing. "
-            "The 'message' field must contain only the in-character negotiation reply shown to the manager. "
-            "Return ONLY a JSON object with keys: "
-            "accepted (boolean), walked_away (boolean), manager_ended (boolean), pressure (integer 0-10), "
+        # Response format is separate from the original persona prompt (not inside it).
+        format_sys = (
+            "RESPONSE FORMAT (system): Return ONLY a JSON object so the game can process the negotiation state. "
+            "Keys: accepted (boolean), walked_away (boolean), manager_ended (boolean), pressure (integer 0-10), "
             "counter (object|null with wage integer euros/week, role one of Crucial/Important/Rotation/Sporadic/Prospect, signing_bonus integer euros, contract_years integer 1-5), "
             "agreed_terms (object|null with wage, role, signing_bonus, contract_years - set when accepted is true, otherwise null), "
             "message (string). "
-            "Rules: pressure must be >= previous_pressure unless there is strong reason, never above 10. "
-            "If the manager/user clearly ends negotiations, declines to continue, says no deal / not interested / stop / cancel, or refuses to proceed, set manager_ended=true, accepted=false, walked_away=false, counter=null, agreed_terms=null, and write a polite in-character closing message. "
-            "If pressure >= 10 or walked_away is true, accepted must be false, counter must be null, agreed_terms must be null, and message must clearly end negotiations. "
-            "If accepted is true, walked_away must be false, manager_ended must be false, counter must be null, agreed_terms must contain the exact agreed terms, and message must clearly confirm agreement. "
-            "If accepted is false and walked_away is false and manager_ended is false, counter must be present and message must clearly state your response/counter-demand with exact numbers. "
-            "message must start with the negotiation pressure bar in the format [Negotiation Pressure: ███░░░░░░░ XX%]. "
-            "message should be 2-5 short paragraphs. Be realistic and strict; use OVR/POT/market value in reasoning. "
-            "IMPORTANT: The user's message is provided as user_message. Interpret it as natural language, even if informal, partial, conversational, or vague. "
-            "Examples: 'can we lower salary to like 100k', 'what about 150k', 'make it 3 years', 'throw in a bigger bonus', 'ok deal', 'no deal sorry', 'can you lower all aspects?'. "
-            "If the user asks you to lower/reduce/improve terms or be more flexible (even without exact numbers), respond in character by lowering the relevant demands and return a concrete counter with reduced numbers - do not reply with a generic 'your offer is not acceptable' without a concrete improved counter. "
-            "If offered_is_explicit is false, the manager did not submit concrete numeric terms; treat user_message as the primary intent and do not assume offered numbers are a firm new offer. "
-            "Never refuse to understand; always reply in character as the agent/manager persona."
+            "The 'message' must be the detailed in-character negotiation reply (follow the persona above fully). "
+            "Do NOT include internal reasoning, planning, chain-of-thought, or prompt instructions in 'message'. "
+            "Rules: pressure must be >= previous_pressure unless strong reason, never above 10. "
+            "If the manager clearly ends negotiations / declines to continue / says no deal / stop / cancel, set manager_ended=true, accepted=false, walked_away=false, counter=null, agreed_terms=null. "
+            "If pressure >= 10 or walked_away is true, accepted must be false, counter/agreed_terms must be null, message must clearly end negotiations. "
+            "If accepted is true, walked_away/manager_ended must be false, counter must be null, agreed_terms must contain the exact agreed terms. "
+            "If not accepted/walked_away/manager_ended, counter must be present with exact numbers and message must clearly state the counter-demand. "
+            "message must start with the negotiation pressure bar [Negotiation Pressure: ███░░░░░░░ XX%]."
         )
 
-        user = json.dumps({
+        context = {
             "scenario": sc,
             "player": profile,
             "selling_club": selling,
@@ -1351,44 +1365,62 @@ class LLMService:
             "demand": demand,
             "offered": offered,
             "offered_is_explicit": bool(offered_is_explicit),
-            "user_message": str(user_message or "").strip(),
             "previous_pressure": prev_p,
             "max_pressure": int(max_pressure),
             "previous_pressure_bar": bar_hint,
             "round_no": int(round_no),
             "is_free_agent": bool(is_free_agent),
-        }, ensure_ascii=False)
-
-        data = await self.chat_json(
-            [{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.7,
-            max_tokens=1300,
+        }
+        current_user_msg = str(user_message or "").strip()
+        user_content = (
+            "NEGOTIATION CONTEXT (JSON):\n"
+            + json.dumps(context, ensure_ascii=False)
+            + "\n\nMANAGER MESSAGE:\n"
+            + (current_user_msg if current_user_msg else "(no message provided)")
         )
+
+        # Build message list with conversation history
+        msgs: list[dict[str, str]] = [
+            {"role": "system", "content": persona},
+            {"role": "system", "content": format_sys},
+        ]
+        # Include prior turns (capped)
+        if isinstance(history, list):
+            trimmed = history[-12:]
+            for h in trimmed:
+                if not isinstance(h, dict):
+                    continue
+                role = str(h.get("role") or "").strip().lower()
+                content = str(h.get("content") or "").strip()
+                if role in ("user", "assistant") and content:
+                    msgs.append({"role": role, "content": content[:3000]})
+        msgs.append({"role": "user", "content": user_content})
+
+        data = await self.chat_json(msgs, temperature=0.7, max_tokens=1600)
         _le = str(self.last_error or "").lower()
         if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
             return None
         if not isinstance(data, dict):
-            data = await self.chat_json(
-                [
-                    {"role": "system", "content": sys + " Return ONLY valid JSON. No markdown, no extra text."},
-                    {"role": "user", "content": user},
-                ],
-                temperature=0.2,
-                max_tokens=1300,
-            )
+            # Retry with stricter format reminder (separate from persona)
+            retry_msgs = list(msgs)
+            retry_msgs.append({"role": "system", "content": "Return ONLY valid JSON. No markdown, no extra text."})
+            data = await self.chat_json(retry_msgs, temperature=0.2, max_tokens=1600)
         _le = str(self.last_error or "").lower()
         if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
             return None
         if not isinstance(data, dict):
-            # Last resort: plain chat and salvage
-            plain = await self.chat(
-                [
-                    {"role": "system", "content": re.sub(r"Return ONLY a JSON object with keys:.*?message \(string\)\.\s*", "", sys, count=1, flags=re.DOTALL) + " Output only the final in-character negotiation message. No reasoning, no planning, no chain-of-thought."},
-                    {"role": "user", "content": user},
-                ],
-                temperature=0.5,
-                max_tokens=800,
-            )
+            # Last resort: plain chat, ask for the in-character message only
+            plain_msgs: list[dict[str, str]] = [{"role": "system", "content": persona}]
+            if isinstance(history, list):
+                for h in history[-12:]:
+                    if not isinstance(h, dict):
+                        continue
+                    role = str(h.get("role") or "").strip().lower()
+                    content = str(h.get("content") or "").strip()
+                    if role in ("user", "assistant") and content:
+                        plain_msgs.append({"role": role, "content": content[:3000]})
+            plain_msgs.append({"role": "user", "content": user_content + "\n\nReply with only the in-character negotiation message. No JSON, no reasoning."})
+            plain = await self.chat(plain_msgs, temperature=0.6, max_tokens=1200)
             if isinstance(plain, str) and plain.strip():
                 cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
                 if not self._looks_like_reasoning_leak(cleaned_plain):
@@ -1412,7 +1444,6 @@ class LLMService:
             return default
 
         msg = self._clean_user_message_text(_pick(data, "message", "response", "reply", "text", default="") or "")
-
         has_pressure_key = any(k in data for k in ("pressure", "pressure_level", "pressure_pct"))
         inferred_pressure = self._infer_pressure_from_text(msg, previous=prev_p, max_pressure=max_pressure)
         if not has_pressure_key and inferred_pressure is not None:
@@ -1523,7 +1554,7 @@ class LLMService:
             "pressure_bar": bar,
             "counter": counter,
             "agreed_terms": agreed_terms,
-            "message": msg[:1900],
+            "message": msg[:3500],
         }
 
     async def generate_contract_opening(
@@ -1551,6 +1582,7 @@ class LLMService:
         if not sc:
             sc = "free_agent" if is_free_agent else "contract_after_fee_agreed"
 
+        # === Original persona prompts (recovered from git commit 1d41750). Keep verbatim. ===
         if sc == "free_agent":
             persona = (
                 f"You are {player_name}'s agent representing him as a high-profile free agent. "
@@ -1561,7 +1593,12 @@ class LLMService:
                 "IMPORTANT INSTRUCTION: While negotiating the contract, a dynamic bar showing negotiation pressure must be displayed at the start of your message "
                 "(e.g., [Negotiation Pressure: ██░░░░░░░░ 20%]). "
                 "If it reaches a high value due to lowball offers or stalling, the player's camp should walk away or threaten to sign elsewhere. "
-                "THE ROLEPLAY MUST BE EXTREMELY REALISTIC, FIRM, AND STRICT."
+                "THE ROLEPLAY MUST BE EXTREMELY REALISTIC, FIRM, AND STRICT. "
+                "You MUST respect the provided decision and counter terms exactly. Do not change numbers, do not accept if accepted is false, do not invent deals. "
+                "Do not mention being an AI. Reply in plain text, 2-5 short paragraphs max. Start with the pressure bar on its own line. "
+                "If counter is provided, clearly state the counter-demand with exact numbers. "
+                "If accepted, clearly confirm agreement and state the agreed terms exactly. "
+                "If walked away, clearly state negotiations are over and the player will explore other options."
             )
         else:
             persona = (
@@ -1571,21 +1608,25 @@ class LLMService:
                 "Use the stats like POT, OVR etc while also keeping in mind market value during negotiation so you know the player's worth. "
                 "IMPORTANT INSTRUCTION: While negotiating contract, a bar showing negotiation pressure must be shown. "
                 "If it reaches a high value, the player's camp should end negotiation. "
-                "The roleplay must be extremely realistic, firm, and strict."
+                "The roleplay must be extremely realistic, firm, and strict. "
+                "You MUST respect the provided decision and counter terms exactly. Do not change numbers, do not accept if accepted is false, do not invent deals. "
+                "Do not mention being an AI. Reply in plain text, 2-5 short paragraphs max. Start with the pressure bar on its own line. "
+                "If counter is provided, clearly state the counter-demand with exact numbers. "
+                "If accepted, clearly confirm agreement and state the agreed terms exactly. "
+                "If walked away, clearly state negotiations are over."
             )
 
-        sys = (
-            persona + " "
-            "This is the OPENING message of the contract negotiation. Do not mention being an AI. "
-            "CRITICAL: Output ONLY the final JSON object. Never include internal reasoning, planning, analysis, chain-of-thought, or descriptions of what you are doing. "
-            "The 'message' field must contain only the in-character negotiation reply shown to the manager. "
-            "Return ONLY a JSON object with keys: message (string). "
+        format_sys = (
+            "RESPONSE FORMAT (system): This is the OPENING message of the negotiation. "
+            "Return ONLY a JSON object with key: message (string). "
+            "The 'message' must be the detailed in-character opening negotiation reply (follow the persona above fully). "
+            "Do NOT include internal reasoning, planning, chain-of-thought, or prompt instructions in 'message'. "
             "The message must start with the negotiation pressure bar [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
-            "Clearly state the opening demands with exact numbers: weekly wage, role, signing bonus, contract years. "
-            "Use the provided demand values exactly. Reference the player's OVR/POT/market value. "
-            "Be realistic, firm, and strict. 2-5 short paragraphs."
+            "Clearly state opening demands with exact numbers: weekly wage, role, signing bonus, contract years. "
+            "Use the provided demand values exactly. Reference the player's OVR/POT/market value."
         )
-        user = json.dumps({
+
+        context = {
             "scenario": sc,
             "player": profile,
             "selling_club": selling,
@@ -1595,25 +1636,22 @@ class LLMService:
             "max_pressure": 10,
             "pressure_bar": bar,
             "is_free_agent": bool(is_free_agent),
-        }, ensure_ascii=False)
+        }
+        user_content = "NEGOTIATION CONTEXT (JSON):\n" + json.dumps(context, ensure_ascii=False)
 
-        data = await self.chat_json(
-            [{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.7,
-            max_tokens=1300,
-        )
+        msgs = [
+            {"role": "system", "content": persona},
+            {"role": "system", "content": format_sys},
+            {"role": "user", "content": user_content},
+        ]
+
+        data = await self.chat_json(msgs, temperature=0.7, max_tokens=1400)
         _le = str(self.last_error or "").lower()
         if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
             return None
         if not isinstance(data, dict):
-            data = await self.chat_json(
-                [
-                    {"role": "system", "content": sys + " Return ONLY valid JSON. No markdown, no extra text."},
-                    {"role": "user", "content": user},
-                ],
-                temperature=0.2,
-                max_tokens=1300,
-            )
+            retry_msgs = list(msgs) + [{"role": "system", "content": "Return ONLY valid JSON. No markdown, no extra text."}]
+            data = await self.chat_json(retry_msgs, temperature=0.2, max_tokens=1400)
         _le = str(self.last_error or "").lower()
         if not isinstance(data, dict) and any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
             return None
@@ -1628,25 +1666,13 @@ class LLMService:
             msg = self._clean_user_message_text(_pick(data, "message", "response", "reply", "text", default="") or "")
 
         if not msg:
-            # Last resort: ask for plain text opening
             plain = await self.chat(
                 [
-                    {
-                        "role": "system",
-                        "content": (
-                            persona + " "
-                            "This is the OPENING message of the contract negotiation. Do not mention being an AI. "
-                            f"Start with the negotiation pressure bar [Negotiation Pressure: ░░░░░░░░░░ 0%]. "
-                            "Clearly state opening demands with exact numbers: weekly wage, role, signing bonus, contract years. "
-                            "Use the provided demand values exactly. Reference the player's OVR/POT/market value. "
-                            "Be realistic, firm, and strict. 2-5 short paragraphs. Return only the message text. "
-                            "No internal reasoning, planning, analysis, or chain-of-thought."
-                        ),
-                    },
-                    {"role": "user", "content": user},
+                    {"role": "system", "content": persona},
+                    {"role": "user", "content": user_content + "\n\nThis is the OPENING negotiation message. Reply with only the in-character opening negotiation message. No JSON, no reasoning."},
                 ],
                 temperature=0.6,
-                max_tokens=1000,
+                max_tokens=1200,
             )
             if isinstance(plain, str) and plain.strip():
                 cleaned_plain = self._clean_user_message_text(plain.strip()) or plain.strip()
@@ -1682,7 +1708,7 @@ class LLMService:
                 f"\n\n**Opening demands:** {self._money(wage)}/wk • {demand.get('role')} role • "
                 f"{self._money(bonus)} signing bonus • {int(years)} years."
             )
-        return msg[:1900]
+        return msg[:3500]
 
     # Backwards-compatible aliases used by older call sites
     async def generate_fee_negotiation_message(self, **kwargs):
