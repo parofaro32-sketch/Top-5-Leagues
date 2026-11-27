@@ -106,7 +106,8 @@ class FootballBot(commands.Bot):
             if self.settings.llm_api_keys:
                 providers.append(f"gemini:{self.settings.llm_model}")
             if getattr(self.settings, "openrouter_api_keys", None):
-                providers.append("openrouter")
+                or_models = getattr(self.settings, "openrouter_models", None) or ["nvidia/nemotron-3.5-lightning"]
+                providers.append(f"openrouter:{or_models[0]}")
             if getattr(self.settings, "groq_api_keys", None):
                 providers.append("groq")
             logger.info("LLM enabled providers=%s primary_model=%s base_url=%s", ",".join(providers) or "unknown", self.settings.llm_model, self.settings.llm_base_url)

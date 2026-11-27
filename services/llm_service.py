@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -31,6 +32,10 @@ class LLMService:
         self._key_index: int = 0
         # Per-provider state: {name: {"key_index": int, "cooldown_until": float}}
         self._provider_state: dict[str, dict[str, Any]] = {}
+        # Small response cache to limit token usage on identical low-temp prompts.
+        self._cache: dict[str, tuple[float, str]] = {}
+        self._cache_ttl_s: float = 120.0
+        self._cache_max: int = 64
 
     @property
     def enabled(self) -> bool:
@@ -150,9 +155,8 @@ class LLMService:
                 primary="",
                 configured=list(getattr(self.settings, "openrouter_models", None) or []),
                 defaults=[
-                    "meta-llama/llama-3.1-8b-instruct",
-                    "google/gemma-3-4b-it",
-                    "qwen/qwen-2.5-7b-instruct",
+                    "nvidia/nemotron-3.5-lightning",
+                    "nvidia/nemotron-3.5-super-vl",
                 ],
             )
             providers.append({
@@ -244,6 +248,26 @@ class LLMService:
             return None
 
         self.last_error = None
+        use_cache = float(temperature) <= 0.2
+        cache_key = ""
+        if use_cache:
+            try:
+                cache_payload = {
+                    "messages": messages,
+                    "temperature": float(temperature),
+                    "max_tokens": int(max_tokens),
+                    "model": str(model or ""),
+                    "response_format": response_format,
+                }
+                cache_key = hashlib.sha256(json.dumps(cache_payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+                now_ts = time.time()
+                hit = self._cache.get(cache_key)
+                if hit and (now_ts - float(hit[0])) <= self._cache_ttl_s:
+                    return hit[1]
+            except Exception:
+                use_cache = False
+                cache_key = ""
+
         session = await self._get_session()
         providers = self._providers()
         if not providers:
@@ -351,6 +375,15 @@ class LLMService:
                                                     if prov_idx > 0 or m != (requested_model or self.settings.llm_model):
                                                         logger.info("LLM chat succeeded provider=%s model=%s (response_format removed)", prov_name, m)
                                                     self.last_error = None
+                                                    if use_cache and cache_key:
+                                                        try:
+                                                            if len(self._cache) >= self._cache_max:
+                                                                # drop oldest
+                                                                oldest_k = min(self._cache.items(), key=lambda kv: kv[1][0])[0]
+                                                                self._cache.pop(oldest_k, None)
+                                                            self._cache[cache_key] = (time.time(), text2)
+                                                        except Exception:
+                                                            pass
                                                     return text2
                                             logger.warning("LLM chat returned no text after response_format retry provider=%s model=%s raw=%s", prov_name, m, raw2[:500])
                                             last_error = f"status=200 no_text provider={prov_name} body={raw2[:300]}"
@@ -463,6 +496,14 @@ class LLMService:
                     if prov_idx > 0 or i > 0 or rotations > 0:
                         logger.info("LLM chat succeeded provider=%s model=%s", prov_name, m)
                     self.last_error = None
+                    if use_cache and cache_key:
+                        try:
+                            if len(self._cache) >= self._cache_max:
+                                oldest_k = min(self._cache.items(), key=lambda kv: kv[1][0])[0]
+                                self._cache.pop(oldest_k, None)
+                            self._cache[cache_key] = (time.time(), text)
+                        except Exception:
+                            pass
                     return text
 
                 finish_reason = None
@@ -933,7 +974,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=1600,
+            max_tokens=1100,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -942,7 +983,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=1600,
+                max_tokens=1100,
             )
         if not isinstance(data, dict):
             # Last resort: plain chat and salvage text as message
@@ -952,7 +993,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.5,
-                max_tokens=900,
+                max_tokens=700,
             )
             if isinstance(plain, str) and plain.strip():
                 data = {"message": plain.strip(), "_salvaged_plain": True}
@@ -1125,7 +1166,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=1600,
+            max_tokens=1100,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -1134,7 +1175,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=1600,
+                max_tokens=1100,
             )
         if not isinstance(data, dict):
             # Last resort: plain chat and salvage
@@ -1144,7 +1185,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.5,
-                max_tokens=1000,
+                max_tokens=700,
             )
             if isinstance(plain, str) and plain.strip():
                 data = {"message": plain.strip(), "_salvaged_plain": True}
@@ -1345,7 +1386,7 @@ class LLMService:
         data = await self.chat_json(
             [{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.7,
-            max_tokens=1600,
+            max_tokens=1100,
         )
         if not isinstance(data, dict):
             data = await self.chat_json(
@@ -1354,7 +1395,7 @@ class LLMService:
                     {"role": "user", "content": user},
                 ],
                 temperature=0.2,
-                max_tokens=1600,
+                max_tokens=1100,
             )
 
         msg = ""
