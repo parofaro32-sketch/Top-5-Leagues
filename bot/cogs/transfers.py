@@ -748,28 +748,19 @@ class TransfersCog(commands.Cog):
                 except Exception:
                     logger.exception("LLM contract term fallback failed")
 
+            # Never block on parsing - LLM handles natural language understanding.
+            # Fill any missing fields from last counter / demand so we can always proceed.
             if missing and not meta.get("_agreement_accepted"):
-                understood = []
-                if wage is not None and int(wage) > 0:
-                    understood.append(f"Wage: {fmt_money(int(wage))}/wk")
-                if role is not None:
-                    understood.append(f"Role: {role}")
-                if bonus is not None:
-                    understood.append(f"Signing bonus: {fmt_money(int(bonus))}")
-                if years is not None:
-                    understood.append(f"Length: {int(years)} years")
-                understood_line = ("I understood: " + ", ".join(understood) + "\n\n") if understood else ""
-                await interaction.followup.send(
-                    embed=error_embed(
-                        "Clarify Your Offer",
-                        understood_line
-                        + "I couldn't clearly read: " + ", ".join(missing) + ".\n\n"
-                        + f"Your message: `{raw_msg[:300]}`\n\n"
-                        + "Reply in any natural format, for example: `200k a week, important role, 2m signing bonus, 4 years`."
-                    ),
-                    ephemeral=True,
-                )
-                return
+                _fill = meta.get("last_counter") or demand or {}
+                if wage is None or int(wage) <= 0:
+                    wage = int(_fill.get("wage") or demand.get("wage") or 100_000)
+                if role is None:
+                    role = str(_fill.get("role") or demand.get("role") or "Rotation")
+                if bonus is None:
+                    bonus = int(_fill.get("signing_bonus") or demand.get("signing_bonus") or 0)
+                if years is None:
+                    years = int(_fill.get("contract_years") or demand.get("contract_years") or 3)
+                meta["_llm_infer_terms"] = True
 
             # Safety for agreement-accepted path
             if wage is None or int(wage) <= 0:
@@ -850,6 +841,7 @@ class TransfersCog(commands.Cog):
                         selling_team_name=str(offer.get("selling_team_name") or ""),
                         valuation=valuation if isinstance(valuation, dict) else None,
                         scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
+                        user_message=raw_msg,
                     )
                     if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
                         result = dict(llm_decision)
@@ -880,10 +872,10 @@ class TransfersCog(commands.Cog):
                         )
                     plain_msg = await llm.chat(
                         [
-                            {"role": "system", "content": _persona + " Reply with 2-4 short paragraphs. Start with [Negotiation Pressure: ...%]. Clearly accept, counter with exact numbers, or walk away."},
+                            {"role": "system", "content": _persona + " Interpret the manager's user_message as natural language (even if partial/vague). Reply with 2-4 short paragraphs. Start with [Negotiation Pressure: ...%]. Clearly accept, counter with exact numbers, or walk away."},
                             {"role": "user", "content": json.dumps({
                                 "player": {"name": player.get("name"), "overall": player.get("overall"), "potential": player.get("potential"), "age": player.get("age"), "position": player.get("detailed_position") or player.get("position")},
-                                "demand": demand, "offered": offered, "previous_pressure": previous_pressure, "round": round_no,
+                                "demand": demand, "offered": offered, "user_message": str(raw_msg or "").strip(), "previous_pressure": previous_pressure, "round": round_no,
                             }, ensure_ascii=False)},
                         ],
                         temperature=0.6,
@@ -995,9 +987,16 @@ class TransfersCog(commands.Cog):
                 return
 
             if result.get("accepted"):
-                meta["agreed_contract"] = offered
+                agreed = result.get("agreed_terms") if isinstance(result.get("agreed_terms"), dict) else None
+                if not agreed:
+                    agreed = offered
+                # Ensure required keys
+                for _k, _fallback in (("wage", offered.get("wage")), ("role", offered.get("role")), ("signing_bonus", offered.get("signing_bonus")), ("contract_years", offered.get("contract_years"))):
+                    if agreed.get(_k) is None:
+                        agreed[_k] = _fallback
+                meta["agreed_contract"] = agreed
                 # finalize transfer before marking completed
-                fin = await self._finalize_agreed_offer(offer, offered)
+                fin = await self._finalize_agreed_offer(offer, agreed)
                 if fin.get("ok"):
                     meta["finalized_transfer"] = fin.get("transfer")
                     await self.bot.db.execute(

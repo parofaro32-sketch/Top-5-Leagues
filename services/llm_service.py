@@ -798,6 +798,7 @@ class LLMService:
         selling_team_name: str | None = None,
         valuation: dict[str, Any] | None = None,
         scenario: str | None = None,
+        user_message: str | None = None,
     ) -> dict[str, Any] | None:
         """LLM-driven contract negotiation decision (prompts #2/#3). Returns validated dict or None."""
         if not self.enabled:
@@ -843,13 +844,19 @@ class LLMService:
             "Return ONLY a JSON object with keys: "
             "accepted (boolean), walked_away (boolean), pressure (integer 0-10), "
             "counter (object|null with wage integer euros/week, role one of Crucial/Important/Rotation/Sporadic/Prospect, signing_bonus integer euros, contract_years integer 1-5), "
+            "agreed_terms (object|null with wage, role, signing_bonus, contract_years - set when accepted is true, otherwise null), "
             "message (string). "
             "Rules: pressure must be >= previous_pressure unless there is strong reason, never above 10. "
-            "If pressure >= 10 or walked_away is true, accepted must be false, counter must be null, and message must clearly end negotiations. "
-            "If accepted is true, walked_away must be false, counter must be null, and message must clearly confirm agreement with the exact offered terms. "
+            "If pressure >= 10 or walked_away is true, accepted must be false, counter must be null, agreed_terms must be null, and message must clearly end negotiations. "
+            "If accepted is true, walked_away must be false, counter must be null, agreed_terms must contain the exact agreed terms, and message must clearly confirm agreement. "
             "If accepted is false and walked_away is false, counter must be present and message must clearly state the counter-demand with exact numbers. "
             "message must start with the negotiation pressure bar in the format [Negotiation Pressure: ███░░░░░░░ XX%]. "
-            "message should be 2-5 short paragraphs. Be realistic and strict; use OVR/POT/market value in reasoning."
+            "message should be 2-5 short paragraphs. Be realistic and strict; use OVR/POT/market value in reasoning. "
+            "IMPORTANT: The user's message is provided as user_message. Interpret it as natural language, even if informal, partial, conversational, or vague "
+            "(e.g. 'can we lower salary to like 100k', 'what about 150k', 'make it 3 years', 'throw in a bigger bonus', 'ok deal'). "
+            "Use user_message together with the offered fields to understand what the manager is proposing. "
+            "If the message is a question, a vague proposal, or missing details, respond in character as the agent, explain what you need or make a firm counter - "
+            "but still return a valid JSON decision (counter or walked_away as appropriate). Never refuse to understand; always reply in character."
         )
 
         user = json.dumps({
@@ -859,6 +866,7 @@ class LLMService:
             "buying_club": buying,
             "demand": demand,
             "offered": offered,
+            "user_message": str(user_message or "").strip(),
             "previous_pressure": prev_p,
             "max_pressure": int(max_pressure),
             "previous_pressure_bar": bar_hint,
@@ -982,13 +990,19 @@ class LLMService:
                 lines[0] = bar
                 msg = "\n".join(lines)
 
-        # If accepted, ensure the message reflects offered terms (handler finalizes offered terms)
+        # Parse agreed terms if LLM accepted
+        agreed_terms = None
         if accepted:
-            offered_wage = self._money(offered.get("wage"))
-            if offered_wage not in msg and str(self._coerce_int(offered.get("wage"), 0)) not in msg.replace(",", ""):
+            raw_agreed = _pick(data, "agreed_terms", "agreedTerms", "agreed", "accepted_terms", "final_terms", default=None)
+            agreed_terms = self._sanitize_contract_counter(raw_agreed, fallback=offered)
+            if agreed_terms is None:
+                agreed_terms = self._sanitize_contract_counter(offered, fallback=demand)
+            offered_wage = self._money((agreed_terms or offered).get("wage"))
+            if offered_wage not in msg and str(self._coerce_int((agreed_terms or offered).get("wage"), 0)) not in msg.replace(",", ""):
+                _at = agreed_terms or offered
                 msg += (
-                    f"\n\n**Agreed terms:** {self._money(offered.get('wage'))}/wk, {offered.get('role')}, "
-                    f"{self._money(offered.get('signing_bonus'))} signing bonus, {int(offered.get('contract_years') or 0)} years."
+                    f"\n\n**Agreed terms:** {self._money(_at.get('wage'))}/wk, {_at.get('role')}, "
+                    f"{self._money(_at.get('signing_bonus'))} signing bonus, {int(_at.get('contract_years') or 0)} years."
                 )
 
         # If counter, ensure counter numbers appear
@@ -1007,6 +1021,7 @@ class LLMService:
             "pressure": int(pressure),
             "pressure_bar": bar,
             "counter": counter,
+            "agreed_terms": agreed_terms,
             "message": msg[:1900],
         }
 
