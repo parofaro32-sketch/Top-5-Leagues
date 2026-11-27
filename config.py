@@ -30,6 +30,7 @@ class Settings:
     llm_model: str
     llm_timeout: int
     llm_api_keys: list[str] = field(default_factory=list)
+    llm_models: list[str] = field(default_factory=list)
 
     @property
     def has_discord_token(self) -> bool:
@@ -78,6 +79,9 @@ def load_settings() -> Settings:
             llm_api_keys = [_single]
     llm_api_key = llm_api_keys[0] if llm_api_keys else ""
 
+    _llm_models_raw = os.getenv("LLM_MODELS", "") or os.getenv("LLM_MODEL_FALLBACKS", "")
+    llm_models = [m.strip() for m in _llm_models_raw.replace(";", ",").split(",") if m.strip()]
+
     return Settings(
         discord_bot_token=os.getenv("DISCORD_BOT_TOKEN", "").strip(),
         discord_guild_id=guild_id,
@@ -97,4 +101,5 @@ def load_settings() -> Settings:
         llm_base_url=os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai").strip().rstrip("/"),
         llm_model=os.getenv("LLM_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash",
         llm_timeout=int(os.getenv("LLM_TIMEOUT", "20")),
+        llm_models=llm_models,
     )

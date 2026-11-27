@@ -88,7 +88,8 @@ class LLMService:
 
     def _candidate_models(self, model: str | None) -> list[str]:
         primary = str(model or self.settings.llm_model or "").strip()
-        # Fallbacks for common Gemini OpenAI-compatible model IDs.
+        configured = [str(m or "").strip() for m in (getattr(self.settings, "llm_models", None) or []) if str(m or "").strip()]
+        # Built-in fallbacks for common Gemini OpenAI-compatible model IDs.
         fallbacks = [
             "gemini-3.8-flash",
             "gemini-3.8-flash-preview",
@@ -97,7 +98,7 @@ class LLMService:
             "gemini-2.0-flash-lite",
         ]
         out: list[str] = []
-        for m in [primary, *fallbacks]:
+        for m in [primary, *configured, *fallbacks]:
             m = str(m or "").strip()
             if m and m not in out:
                 out.append(m)
