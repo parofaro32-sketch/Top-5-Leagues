@@ -451,7 +451,7 @@ class TransfersCog(commands.Cog):
             return v
         return money_to_int(str(v))
 
-    @app_commands.command(name="botoffer", description="Make a transfer offer to a bot/unclaimed team (FC27-style)")
+    @app_commands.command(name="botnego", description="Make a transfer offer to a bot/unclaimed team (FC27-style)")
     @app_commands.describe(team_name="Bot team name (must be unclaimed)", player_name="Player name in that team", fee="Transfer fee (e.g. 25000000 or 25M)")
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def botoffer(self, interaction: discord.Interaction, team_name: str, player_name: str, fee: str, league: app_commands.Choice[str] | None = None):
@@ -495,7 +495,7 @@ class TransfersCog(commands.Cog):
             selling_team_id = int(selling_team.get("team_api_id"))
             selling_team_name = str(selling_team.get("team_name"))
             if selling_team.get("manager_user_id") is not None:
-                await interaction.followup.send(embed=error_embed("Not A Bot Team", f"**{selling_team_name}** is claimed by a manager. `/botoffer` is only for unclaimed bot teams. Use `/askaboutplayer` or `/contractnego`."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Not A Bot Team", f"**{selling_team_name}** is claimed by a manager. `/botnego` is only for unclaimed bot teams. Use `/askaboutplayer` or `/contractneg`."), ephemeral=True)
                 return
             if selling_team_id == buying_team_id:
                 await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot make an offer to your own team."), ephemeral=True)
@@ -562,11 +562,11 @@ class TransfersCog(commands.Cog):
                     last_err = "empty_or_invalid_decision"
                 except Exception as e:
                     last_err = str(e)
-                    logger.exception("LLM fee negotiation decision failed (botoffer) attempt=%s player=%s", _attempt + 1, player.get("name"))
+                    logger.exception("LLM fee negotiation decision failed (botnego) attempt=%s player=%s", _attempt + 1, player.get("name"))
 
             if not isinstance(decision, dict):
                 # Retry with the same Prompt #1 method (no ad-hoc prompt). negotiate_fee already has internal fallbacks.
-                logger.warning("LLM fee negotiation returned no structured result; retrying negotiate_fee (botoffer) player=%s err=%s", player.get("name"), last_err)
+                logger.warning("LLM fee negotiation returned no structured result; retrying negotiate_fee (botnego) player=%s err=%s", player.get("name"), last_err)
                 try:
                     llm_decision = await llm.negotiate_fee(
                         player=player,
@@ -593,11 +593,11 @@ class TransfersCog(commands.Cog):
                             decision["accept"] = False
                 except Exception as e:
                     last_err = str(e)
-                    logger.exception("LLM fee negotiation retry failed (botoffer) player=%s", player.get("name"))
+                    logger.exception("LLM fee negotiation retry failed (botnego) player=%s", player.get("name"))
 
             if not isinstance(decision, dict):
                 last_err = last_err or getattr(llm, "last_error", None) or "empty_or_invalid_decision"
-                logger.warning("LLM fee negotiation failed after all fallbacks (botoffer) player=%s err=%s", player.get("name"), last_err)
+                logger.warning("LLM fee negotiation failed after all fallbacks (botnego) player=%s err=%s", player.get("name"), last_err)
                 await interaction.followup.send(
                     embed=error_embed(
                         "LLM Negotiation Failed",
@@ -628,14 +628,47 @@ class TransfersCog(commands.Cog):
             decision["pressure"] = _fee_pressure
             decision["pressure_bar"] = _fee_bar
 
-            # /botoffer must always proceed to contract negotiation (no fee-stage refusal that ends the flow).
-            # We still use the LLM bot-nego (Prompt #1) message for realism, but the flow continues.
-            if not decision.get("accept") or decision.get("walked_away"):
-                decision["forced_proceed_to_contract"] = True
-            decision["accept"] = True
-            decision["walked_away"] = False
+            # Enforce minimum acceptable fee (DB/valuation is source of truth).
+            min_accept_fee = int(getattr(val, "min_accept_fee", 0) or 0)
+            if min_accept_fee <= 0:
+                min_accept_fee = int(getattr(val, "market_value", 0) or 0)
+            fee_too_low = bool(min_accept_fee > 0 and int(offer_fee) < int(min_accept_fee))
+            llm_rejected = bool(decision.get("walked_away")) or (not bool(decision.get("accept")))
 
             now = utc_now_iso()
+            if fee_too_low or llm_rejected:
+                decision["accept"] = False
+                # Respect LLM walkaway if it happened; otherwise it's a rejection/refusal.
+                decision["walked_away"] = bool(decision.get("walked_away")) and not fee_too_low
+                decision["forced_proceed_to_contract"] = False
+                status = "rejected"
+                llm_fee_msg = _clean_llm_user_text(decision.get("reason") or "") or None
+                if fee_too_low:
+                    refusal = (
+                        f"{_fee_bar}\n\n"
+                        f"**{selling_team_name}** refuse to sell **{player.get('name')}** for {fmt_money(offer_fee)}. "
+                        f"That offer is below the minimum acceptable fee of {fmt_money(min_accept_fee)} "
+                        f"(market value {fmt_money(getattr(val, 'market_value', 0) or 0)})."
+                    )
+                    if llm_rejected and llm_fee_msg:
+                        refusal = llm_fee_msg + "\n\n" + refusal
+                    llm_fee_msg = refusal
+                if not llm_fee_msg:
+                    llm_fee_msg = f"{_fee_bar}\n\n**{selling_team_name}** rejected the offer for **{player.get('name')}**."
+                await self.bot.db.execute(
+                    """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?, 'club_offer',0,0,?, ?,?)""",
+                    (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "fee_pressure": _fee_pressure, "min_accept_fee": min_accept_fee}), now, now),
+                )
+                await interaction.followup.send(
+                    embed=error_embed("Offer Rejected", llm_fee_msg[:3900]),
+                    ephemeral=True,
+                )
+                return
+
+            decision["accept"] = True
+            decision["walked_away"] = False
+            decision["forced_proceed_to_contract"] = False
             status = "negotiating"
             cur = await self.bot.db.execute(
                 """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
@@ -645,13 +678,6 @@ class TransfersCog(commands.Cog):
             offer_id = cur.lastrowid
 
             llm_fee_msg = _clean_llm_user_text(decision.get("reason") or "") or None
-            if decision.get("forced_proceed_to_contract"):
-                proceed_note = "Despite the fee concerns, the club is willing to move forward to contract negotiations."
-                if llm_fee_msg:
-                    if "contract negotiation" not in llm_fee_msg.lower():
-                        llm_fee_msg = f"{llm_fee_msg}\n\n{proceed_note}"
-                else:
-                    llm_fee_msg = f"{_fee_bar}\n\n{proceed_note}"
 
             # accepted -> start contract negotiation
             demand = self.market.contract_demand(val, player)
@@ -683,7 +709,7 @@ class TransfersCog(commands.Cog):
                     last_open_err = "empty_opening"
                 except Exception as e:
                     last_open_err = str(e)
-                    logger.exception("LLM contract opening failed (botoffer) attempt=%s offer_id=%s", _attempt + 1, offer_id)
+                    logger.exception("LLM contract opening failed (botnego) attempt=%s offer_id=%s", _attempt + 1, offer_id)
 
             if not contract_opening:
                 # Retry using the same Prompt #3 path (no ad-hoc prompt).
@@ -703,13 +729,13 @@ class TransfersCog(commands.Cog):
                         last_open_err = last_open_err or "empty_opening"
                     except Exception as e:
                         last_open_err = str(e)
-                        logger.exception("LLM contract opening retry failed (botoffer) attempt=%s offer_id=%s", _attempt + 1, offer_id)
+                        logger.exception("LLM contract opening retry failed (botnego) attempt=%s offer_id=%s", _attempt + 1, offer_id)
                 if not contract_opening:
                     await self.bot.db.execute(
                         "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
                         (utc_now_iso(), int(offer_id)),
                     )
-                    logger.warning("LLM contract opening failed (botoffer, no deterministic fallback) offer_id=%s err=%s", offer_id, last_open_err)
+                    logger.warning("LLM contract opening failed (botnego, no deterministic fallback) offer_id=%s err=%s", offer_id, last_open_err)
 
             contract_opening = _clean_llm_user_text(contract_opening) if contract_opening else None
             if not contract_opening:
@@ -740,7 +766,7 @@ class TransfersCog(commands.Cog):
             embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc[:3900])
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
-            logger.exception("botoffer command failed")
+            logger.exception("botnego command failed")
             try:
                 await interaction.followup.send(embed=error_embed("Command Failed", "I couldn't complete that bot offer. Please try again - if it keeps failing, check the team/player names and fee format."), ephemeral=True)
             except Exception:
@@ -939,6 +965,9 @@ class TransfersCog(commands.Cog):
                         user_message=raw_msg,
                         offered_is_explicit=bool(offered_is_explicit),
                         history=meta.get("history") or [],
+                        previous_counter=meta.get("last_counter") if isinstance(meta.get("last_counter"), dict) else None,
+                        previous_offer=meta.get("last_offer") if isinstance(meta.get("last_offer"), dict) else None,
+                        negotiation_stage=str(offer.get("stage") or "contract"),
                     )
                     if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
                         result = dict(llm_decision)
@@ -967,6 +996,9 @@ class TransfersCog(commands.Cog):
                         user_message=raw_msg,
                         offered_is_explicit=bool(offered_is_explicit),
                         history=meta.get("history") or [],
+                        previous_counter=meta.get("last_counter") if isinstance(meta.get("last_counter"), dict) else None,
+                        previous_offer=meta.get("last_offer") if isinstance(meta.get("last_offer"), dict) else None,
+                        negotiation_stage=str(offer.get("stage") or "contract"),
                     )
                     if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
                         result = dict(llm_decision)
@@ -1137,9 +1169,14 @@ class TransfersCog(commands.Cog):
                         (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
                     )
                     extra = fin.get("message", "")
+                    base_msg = str(result.get("message") or "")
+                    tail = "\n\n" + extra
+                    room = 3900 - len(tail)
+                    if len(base_msg) > room:
+                        base_msg = base_msg[: max(0, room - 3)].rstrip() + "..."
                     await interaction.followup.send(embed=success_embed(
                         "Contract Agreed — Transfer Completed",
-                        result["message"] + "\n\n" + extra
+                        (base_msg + tail)[:3900]
                     ), ephemeral=True)
                 else:
                     meta["finalization_error"] = fin.get("reason")
@@ -1147,10 +1184,17 @@ class TransfersCog(commands.Cog):
                         "UPDATE transfer_offers SET status='agreed_pending_finalization', stage='agreed_pending_finalization', meta_json=?, updated_at=? WHERE id=?",
                         (json.dumps(meta), utc_now_iso(), int(offer.get("id"))),
                     )
+                    tail = (
+                        f"\n\nThe contract is agreed, but the transfer could not be finalized automatically: {fin.get('reason','unknown')}."
+                        "\n\nNo player move or budget change was completed by this failed finalization step. Please resolve the issue and retry confirmation."
+                    )
+                    base_msg = str(result.get("message") or "")
+                    room = 3900 - len(tail)
+                    if len(base_msg) > room:
+                        base_msg = base_msg[: max(0, room - 3)].rstrip() + "..."
                     await interaction.followup.send(embed=error_embed(
                         "Contract Agreed — Finalization Pending",
-                        result["message"] + f"\n\nThe contract is agreed, but the transfer could not be finalized automatically: {fin.get('reason','unknown')}."
-                        + "\n\nNo player move or budget change was completed by this failed finalization step. Please resolve the issue and retry confirmation."
+                        (base_msg + tail)[:3900]
                     ), ephemeral=True)
                 return
 
@@ -1171,9 +1215,15 @@ class TransfersCog(commands.Cog):
                     f"Round: {round_no}{_bar_part}\n"
                     "Submit a revised offer or pull out. Lowballing or stalling will raise pressure."
                 )
+            base_msg = str(result.get("message") or "")
+            room = 3900 - len(counter_line)
+            if room < 500:
+                base_msg = base_msg[:500]
+            elif len(base_msg) > room:
+                base_msg = base_msg[: max(0, room - 3)].rstrip() + "..."
             await interaction.followup.send(embed=info_embed(
                 "Contract Counter-Offer",
-                (result["message"] + counter_line)[:3900]
+                (base_msg + counter_line)[:3900]
             ), view=view, ephemeral=True)
 
         except Exception:
@@ -1362,7 +1412,7 @@ class TransfersCog(commands.Cog):
             selling_team_id = int(selling_team.get("team_api_id"))
             seller_manager_id = selling_team.get("manager_user_id")
             if seller_manager_id is None:
-                await interaction.followup.send(embed=error_embed("Bot Team", f"**{selling_team_name}** is an unclaimed bot team. Use `/botoffer` for bot teams."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Bot Team", f"**{selling_team_name}** is an unclaimed bot team. Use `/botnego` for bot teams."), ephemeral=True)
                 return
             if buying_team_id and selling_team_id == buying_team_id:
                 await interaction.followup.send(embed=error_embed("Invalid Target", "You cannot enquire about your own team."), ephemeral=True)
@@ -1514,7 +1564,7 @@ class TransfersCog(commands.Cog):
                             f"**{player_name}** ({selling_team_name}) is **available for sale**.\n\n"
                             f"Enquiry from: **{buying_team_name}**\n"
                             f"Selling club: **{selling_team_name}**\n\n"
-                            f"Next step: you can approach them with `/contractnego` (manager-to-manager) or use the appropriate transfer command for your situation."
+                            f"Next step: you can approach them with `/contractneg` (manager-to-manager) or use the appropriate transfer command for your situation."
                         )
                     )
                 else:
@@ -1532,7 +1582,7 @@ class TransfersCog(commands.Cog):
             except Exception:
                 logger.exception("Failed to DM askaboutplayer buyer offer_id=%s", offer_id)
 
-    @app_commands.command(name="contractnego", description="Approach a club/player with a fee and start FC27-style contract negotiation")
+    @app_commands.command(name="contractneg", description="Approach a club/player with a fee and start FC27-style contract negotiation")
     @app_commands.describe(player_name="Player name", fee="Transfer fee offer (e.g. 20M)", selling_club="Club that owns the player", league="League (optional)")
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def contractnego(self, interaction: discord.Interaction, player_name: str, fee: str, selling_club: str, league: app_commands.Choice[str] | None = None):
@@ -1621,7 +1671,7 @@ class TransfersCog(commands.Cog):
             player = await self._enrich_player_for_llm(player, season_year=season_year)
             val = self.market.value_player(player)
 
-            # /contractnego is fee-agreed: go straight to contract negotiation.
+            # /contractneg is fee-agreed: go straight to contract negotiation.
             # For human-managed clubs this is manager-to-manager agreed; for bot clubs we still
             # move directly into contract talks (fee stage is not a rejection gate here).
             decision = {
@@ -1635,6 +1685,29 @@ class TransfersCog(commands.Cog):
                 "llm": False,
                 "pressure": 0,
             }
+
+            # Enforce minimum acceptable fee for bot/unclaimed clubs (DB/valuation is source of truth).
+            min_accept_fee = int(getattr(val, "min_accept_fee", 0) or 0)
+            if min_accept_fee <= 0:
+                min_accept_fee = int(getattr(val, "market_value", 0) or 0)
+            if is_bot and min_accept_fee > 0 and int(offer_fee) < int(min_accept_fee):
+                decision["accept"] = False
+                decision["reason"] = (
+                    f"{selling_team_name} refuse to sell {player.get('name')} for {fmt_money(offer_fee)}. "
+                    f"The offer is below the minimum acceptable fee of {fmt_money(min_accept_fee)} "
+                    f"(market value {fmt_money(getattr(val, 'market_value', 0) or 0)})."
+                )
+                now = utc_now_iso()
+                await self.bot.db.execute(
+                    """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'club_offer',0,0,?,?,?)""",
+                    (season_id, interaction.guild_id, interaction.channel_id, "contract_nego", "rejected", interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, selling_team.get("manager_user_id"), int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "selling_is_bot": is_bot, "min_accept_fee": min_accept_fee}), now, now),
+                )
+                await interaction.followup.send(
+                    embed=error_embed("Offer Rejected", str(decision.get("reason") or "Offer below minimum acceptable fee.")[:3900]),
+                    ephemeral=True,
+                )
+                return
 
             _fee_ratio = float(offer_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
             if "pressure" in decision:
@@ -1706,7 +1779,7 @@ class TransfersCog(commands.Cog):
                     last_open_err = "empty_opening"
                 except Exception as e:
                     last_open_err = str(e)
-                    logger.exception("LLM contract opening failed (contractnego) attempt=%s offer_id=%s", _attempt + 1, offer_id)
+                    logger.exception("LLM contract opening failed (contractneg) attempt=%s offer_id=%s", _attempt + 1, offer_id)
 
             if not contract_opening:
                 # Retry using the same Prompt #3 path (no ad-hoc prompt).
@@ -1726,13 +1799,13 @@ class TransfersCog(commands.Cog):
                         last_open_err = last_open_err or "empty_opening"
                     except Exception as e:
                         last_open_err = str(e)
-                        logger.exception("LLM contract opening retry failed (contractnego) attempt=%s offer_id=%s", _attempt + 1, offer_id)
+                        logger.exception("LLM contract opening retry failed (contractneg) attempt=%s offer_id=%s", _attempt + 1, offer_id)
                 if not contract_opening:
                     await self.bot.db.execute(
                         "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
                         (utc_now_iso(), int(offer_id)),
                     )
-                    logger.warning("LLM contract opening failed (contractnego, no deterministic fallback) offer_id=%s err=%s", offer_id, last_open_err)
+                    logger.warning("LLM contract opening failed (contractneg, no deterministic fallback) offer_id=%s err=%s", offer_id, last_open_err)
 
             contract_opening = _clean_llm_user_text(contract_opening) if contract_opening else None
             if not contract_opening:
@@ -1765,14 +1838,14 @@ class TransfersCog(commands.Cog):
             embed = success_embed("Fee Accepted — Contract Negotiation", accept_desc[:3900])
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
-            logger.exception("contractnego command failed")
+            logger.exception("contractneg command failed")
             try:
                 await interaction.followup.send(embed=error_embed("Command Failed", "I couldn't start that contract negotiation. Please try again - if it keeps failing, check the player/club/fee details."), ephemeral=True)
             except Exception:
                 pass
 
 
-    @app_commands.command(name="freeagentcontract", description="Start a free-agent contract negotiation (natural language, auto-finalized on agreement)")
+    @app_commands.command(name="agentcontract", description="Start a free-agent contract negotiation (natural language, auto-finalized on agreement)")
     @app_commands.describe(player_name="Free agent name to negotiate with", league="Your league (optional)")
     @app_commands.choices(league=LEAGUE_CHOICES)
     async def freeagentcontract(self, interaction: discord.Interaction, player_name: str, league: app_commands.Choice[str] | None = None):
@@ -1922,7 +1995,7 @@ class TransfersCog(commands.Cog):
             )
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception:
-            logger.exception("freeagentcontract command failed")
+            logger.exception("agentcontract command failed")
             try:
                 await interaction.followup.send(embed=error_embed("Command Failed", "I couldn't start that free-agent negotiation. Please try again - if it keeps failing, check the player name."), ephemeral=True)
             except Exception:
