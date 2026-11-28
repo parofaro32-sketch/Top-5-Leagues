@@ -586,7 +586,7 @@ class LLMService:
                     v = msg.get(k)
                     if isinstance(v, str) and v.strip():
                         return v.strip()
-                for rk in ("reasoning_content", "reasoning"):
+                for rk in ("reasoning_content", "reasoning", "thinking", "thought"):
                     rc = msg.get(rk)
                     if not isinstance(rc, str) or not rc.strip():
                         continue
@@ -681,6 +681,33 @@ class LLMService:
         if text is None:
             return ""
         s = str(text).strip()
+        if not s:
+            return ""
+        # Strip reasoning/thinking blocks that some models emit in content.
+        # Closed blocks: remove entirely.
+        s = re.sub(
+            r"(?is)<(?:think|thinking|thought|reasoning|internal_monologue|reflection)>[\s\S]*?</(?:think|thinking|thought|reasoning|internal_monologue|reflection)>",
+            "",
+            s,
+        ).strip()
+        # Unclosed thinking block at start: drop everything before a real negotiation message.
+        m_unclosed = re.match(r"(?is)^\s*<(?:think|thinking|thought|reasoning|internal_monologue|reflection)>\b", s)
+        if m_unclosed:
+            # If there's a pressure bar after, keep from pressure bar onward.
+            mbar = re.search(r"\[Negotiation Pressure:[^\]]*\]", s)
+            if mbar:
+                candidate = s[mbar.start():].strip()
+                candidate = re.sub(
+                    r"(?is)</?(?:think|thinking|thought|reasoning|internal_monologue|reflection)>",
+                    "",
+                    candidate,
+                ).strip()
+                s = candidate
+            else:
+                # No visible answer marker; discard as leaked thinking.
+                s = ""
+        # Scrub stray closing/opening think tags
+        s = re.sub(r"(?is)</?(?:think|thinking|thought|reasoning|internal_monologue|reflection)>", "", s).strip()
         if not s:
             return ""
         # Scrub internal prompt/format markers that should never reach users
@@ -1199,13 +1226,14 @@ class LLMService:
             walked_away = False
 
         bar = self._pressure_bar(pressure, max_pressure)
-        if "[Negotiation Pressure:" not in msg:
+        bar_idx = msg.find("[Negotiation Pressure:")
+        if bar_idx == -1:
             msg = f"{bar}\n{msg}"
         else:
-            lines = msg.splitlines()
-            if lines and "[Negotiation Pressure:" in lines[0]:
-                lines[0] = bar
-                msg = "\n".join(lines)
+            if bar_idx > 0:
+                # Drop any preamble before the pressure bar (reasoning/planning leak guard).
+                msg = msg[bar_idx:].lstrip()
+            msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
 
         return {
             "accepted": bool(accepted),
@@ -1398,13 +1426,14 @@ class LLMService:
 
         # Ensure pressure bar present and canonical
         bar = self._pressure_bar(pressure, max_pressure)
-        if "[Negotiation Pressure:" not in msg:
+        bar_idx = msg.find("[Negotiation Pressure:")
+        if bar_idx == -1:
             msg = f"{bar}\n{msg}"
         else:
-            lines = msg.splitlines()
-            if lines and "[Negotiation Pressure:" in lines[0]:
-                lines[0] = bar
-                msg = "\n".join(lines)
+            if bar_idx > 0:
+                # Drop any preamble before the pressure bar (reasoning/planning leak guard).
+                msg = msg[bar_idx:].lstrip()
+            msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
 
         # Ensure key terms visible on acceptance/counter
         if accepted and isinstance(agreed_terms, dict):
@@ -1528,13 +1557,14 @@ class LLMService:
         if not msg:
             return None
 
-        if "[Negotiation Pressure:" not in msg:
+        bar_idx = msg.find("[Negotiation Pressure:")
+        if bar_idx == -1:
             msg = f"{bar}\n{msg}"
         else:
-            lines = msg.splitlines()
-            if lines and "[Negotiation Pressure:" in lines[0]:
-                lines[0] = bar
-                msg = "\n".join(lines)
+            if bar_idx > 0:
+                # Drop any preamble before the pressure bar (reasoning/planning leak guard).
+                msg = msg[bar_idx:].lstrip()
+            msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
 
         # Ensure key demand numbers appear
         wage = self._coerce_int(demand.get("wage"), 0)
