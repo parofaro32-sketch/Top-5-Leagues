@@ -1332,35 +1332,39 @@ class TransfersCog(commands.Cog):
                     logger.exception("LLM contract negotiation decision failed attempt=%s offer_id=%s", _attempt + 1, offer.get("id"))
 
             if not isinstance(result, dict):
-                # Retry with the same Prompt #2/#3 method (no ad-hoc prompt).
-                logger.warning("LLM contract negotiation returned no structured result; retrying negotiate_contract offer_id=%s err=%s", offer.get("id"), last_err)
-                try:
-                    llm_decision = await llm.negotiate_contract(
-                        player=player,
-                        demand=demand,
-                        offered=offered,
-                        previous_pressure=previous_pressure,
-                        max_pressure=10,
-                        round_no=int(round_no),
-                        is_free_agent=bool(is_free_agent),
-                        buying_team_name=str(offer.get("buying_team_name") or ""),
-                        selling_team_name=str(offer.get("selling_team_name") or ""),
-                        valuation=valuation if isinstance(valuation, dict) else None,
-                        scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
-                        user_message=raw_msg,
-                        offered_is_explicit=bool(offered_is_explicit),
-                        history=meta.get("history") or [],
-                        previous_counter=meta.get("last_counter") if isinstance(meta.get("last_counter"), dict) else None,
-                        previous_offer=meta.get("last_offer") if isinstance(meta.get("last_offer"), dict) else None,
-                        negotiation_stage=str(offer.get("stage") or "contract"),
-                    )
-                    if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
-                        result = dict(llm_decision)
-                    else:
-                        last_err = last_err or "empty_or_invalid_decision"
-                except Exception as e:
-                    last_err = str(e)
-                    logger.exception("LLM contract negotiation retry failed offer_id=%s", offer.get("id"))
+                _hard = str(getattr(llm, "last_error", "") or "").lower()
+                if any(k in _hard for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
+                    last_err = last_err or _hard
+                else:
+                    # Retry once with the same Prompt #2/#3 method (no ad-hoc prompt).
+                    logger.warning("LLM contract negotiation returned no structured result; retrying negotiate_contract offer_id=%s err=%s", offer.get("id"), last_err)
+                    try:
+                        llm_decision = await llm.negotiate_contract(
+                            player=player,
+                            demand=demand,
+                            offered=offered,
+                            previous_pressure=previous_pressure,
+                            max_pressure=10,
+                            round_no=int(round_no),
+                            is_free_agent=bool(is_free_agent),
+                            buying_team_name=str(offer.get("buying_team_name") or ""),
+                            selling_team_name=str(offer.get("selling_team_name") or ""),
+                            valuation=valuation if isinstance(valuation, dict) else None,
+                            scenario="free_agent" if is_free_agent else "contract_after_fee_agreed",
+                            user_message=raw_msg,
+                            offered_is_explicit=bool(offered_is_explicit),
+                            history=meta.get("history") or [],
+                            previous_counter=meta.get("last_counter") if isinstance(meta.get("last_counter"), dict) else None,
+                            previous_offer=meta.get("last_offer") if isinstance(meta.get("last_offer"), dict) else None,
+                            negotiation_stage=str(offer.get("stage") or "contract"),
+                        )
+                        if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
+                            result = dict(llm_decision)
+                        else:
+                            last_err = last_err or "empty_or_invalid_decision"
+                    except Exception as e:
+                        last_err = str(e)
+                        logger.exception("LLM contract negotiation retry failed offer_id=%s", offer.get("id"))
 
             if not isinstance(result, dict):
                 last_err = last_err or getattr(llm, "last_error", None) or "empty_or_invalid_decision"
