@@ -557,10 +557,64 @@ class LLMService:
                 choice = choices[0] or {}
                 msg = choice.get("message") or choice.get("delta") or {}
                 content = msg.get("content")
+                reasoning_fields = ("reasoning_content", "reasoning", "thinking", "thought")
+
+                def _salvage_reasoning(rc: Any) -> str | None:
+                    if not isinstance(rc, str) or not rc.strip():
+                        return None
+                    rct = rc.strip()
+                    # Only extract a clean JSON object from reasoning; never return raw traces.
+                    if "{" in rct:
+                        start = rct.find("{")
+                        end = rct.rfind("}")
+                        if start != -1 and end > start:
+                            candidate = rct[start:end + 1]
+                            try:
+                                obj = json.loads(candidate)
+                                if isinstance(obj, dict):
+                                    return json.dumps(obj, ensure_ascii=False)
+                            except Exception:
+                                repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+                                try:
+                                    obj = json.loads(repaired)
+                                    if isinstance(obj, dict):
+                                        return json.dumps(obj, ensure_ascii=False)
+                                except Exception:
+                                    pass
+                    # If reasoning contains a pressure-bar message, extract from bar onward.
+                    mbar = re.search(r"\[Negotiation Pressure:[^\]]*\]", rct)
+                    if mbar:
+                        tail = rct[mbar.start():].strip()
+                        tail_head = tail[:500]
+                        if not re.search(
+                            r"(?i)\b(i should|i need to|i'll|i will|let me|we should|i must consider|the user wants|the prompt says|i'm going to|i am going to|my response should|here's how|okay, let me|let's start|step by step)\b",
+                            tail_head,
+                        ):
+                            return tail[:4000]
+                    return None
 
                 if isinstance(content, str):
                     text = content.strip()
                     if text:
+                        # If content itself looks like leaked reasoning, try to salvage from reasoning fields/content.
+                        if LLMService._looks_like_reasoning_leak(text):
+                            # Try extracting a pressure-bar answer from inside the content.
+                            mbar = re.search(r"\[Negotiation Pressure:[^\]]*\]", text)
+                            if mbar:
+                                tail = text[mbar.start():].strip()
+                                tail_head = tail[:500]
+                                if not re.search(
+                                    r"(?i)\b(i should|i need to|i'll|i will|let me|we should|i must consider|the user wants|the prompt says|i'm going to|i am going to|my response should|here's how|okay, let me|let's start|step by step)\b",
+                                    tail_head,
+                                ):
+                                    return tail[:4000]
+                            # Try reasoning fields for a real answer.
+                            for rk in reasoning_fields:
+                                salvaged = _salvage_reasoning(msg.get(rk))
+                                if salvaged:
+                                    return salvaged
+                            # Drop leaked reasoning rather than showing it to users.
+                            return None
                         return text
 
                 if isinstance(content, list):
@@ -570,7 +624,7 @@ class LLMService:
                             parts.append(p)
                         elif isinstance(p, dict):
                             ptype = str(p.get("type") or "").lower()
-                            if ptype in {"thinking", "thought", "reasoning", "analysis", "internal"}:
+                            if ptype in {"thinking", "thought", "reasoning", "analysis", "internal", "reasoning_content"}:
                                 continue
                             # OpenAI-compatible content parts
                             for key in ("text", "output_text", "content"):
@@ -580,14 +634,31 @@ class LLMService:
                                     break
                     text = "".join(parts).strip()
                     if text:
+                        if LLMService._looks_like_reasoning_leak(text):
+                            mbar = re.search(r"\[Negotiation Pressure:[^\]]*\]", text)
+                            if mbar:
+                                tail = text[mbar.start():].strip()
+                                tail_head = tail[:500]
+                                if not re.search(
+                                    r"(?i)\b(i should|i need to|i'll|i will|let me|we should|i must consider|the user wants|the prompt says|i'm going to|i am going to|my response should|here's how|okay, let me|let's start|step by step)\b",
+                                    tail_head,
+                                ):
+                                    return tail[:4000]
+                            for rk in reasoning_fields:
+                                salvaged = _salvage_reasoning(msg.get(rk))
+                                if salvaged:
+                                    return salvaged
+                            return None
                         return text
 
                 # Some providers put text in other fields. Never return raw reasoning/thinking.
                 for k in ("text", "output_text"):
                     v = msg.get(k)
                     if isinstance(v, str) and v.strip():
-                        return v.strip()
-                for rk in ("reasoning_content", "reasoning", "thinking", "thought"):
+                        tv = v.strip()
+                        if not LLMService._looks_like_reasoning_leak(tv):
+                            return tv
+                for rk in reasoning_fields:
                     rc = msg.get(rk)
                     if not isinstance(rc, str) or not rc.strip():
                         continue
@@ -652,12 +723,17 @@ class LLMService:
         s = str(text or "").strip()
         if not s:
             return False
-        # Real negotiation outputs almost always include a pressure bar or JSON structure.
-        if "[Negotiation Pressure:" in s:
-            return False
         if re.search(r"^\s*\{[\s\S]*\}\s*$", s):
             return False
-        head = s[:700].lower()
+
+        # Strip pressure bar for analysis so a bar mention doesn't mask reasoning.
+        bar_idx = s.find("[Negotiation Pressure:")
+        preamble = s[:bar_idx].strip() if bar_idx > 0 else ""
+        body = s[bar_idx:].strip() if bar_idx >= 0 else s
+        head = s[:900].lower()
+        preamble_l = preamble[:500].lower()
+        body_l = body[:700].lower()
+
         reasoning_markers = [
             r"\bi should consider\b", r"\bi need to evaluate\b", r"\bi need to consider\b",
             r"\blet me think\b", r"\bi will formulate\b", r"\bi'll formulate\b",
@@ -665,11 +741,31 @@ class LLMService:
             r"\bthe prompt says\b", r"\bthe user wants\b", r"\bmy response should\b",
             r"\bi am going to\b", r"\bi'm going to\b", r"\bstep by step\b",
             r"\bchain of thought\b", r"\binternal reasoning\b", r"\bas an ai\b",
+            r"\bokay, let me\b", r"\blet's start\b", r"\bi need to start\b",
+            r"\bi should start\b", r"\bi'll start\b", r"\bi will start\b",
+            r"\bthe manager is asking\b", r"\bthe manager wants\b",
+            r"\bi need to make sure\b", r"\bi should make sure\b",
+            r"\blet's break this down\b", r"\blet me break\b",
         ]
         hits = sum(1 for p in reasoning_markers if re.search(p, head))
-        if hits >= 2:
+        preamble_hits = sum(1 for p in reasoning_markers if re.search(p, preamble_l)) if preamble_l else 0
+
+        # Strong reasoning preamble before a pressure bar = leak.
+        if bar_idx > 0 and preamble_hits >= 1:
             return True
-        if hits >= 1 and not re.search(r"(?i)\b(wage|salary|bonus|contract|years|deal|offer|counter|accept|reject|role|signing)\b", head):
+
+        # No pressure bar + reasoning markers = likely leak.
+        if bar_idx < 0:
+            if hits >= 2:
+                return True
+            if hits >= 1 and not re.search(r"(?i)\b(wage|salary|bonus|contract|years|deal|offer|counter|accept|reject|role|signing)\b", head):
+                return True
+            return False
+
+        # Has pressure bar: only flag if heavily reasoning-like.
+        if hits >= 3:
+            return True
+        if hits >= 2 and not re.search(r"(?i)\b(wage|salary|bonus|contract|years|deal|offer|counter|accept|reject|role|signing)\b", body_l):
             return True
         return False
 
