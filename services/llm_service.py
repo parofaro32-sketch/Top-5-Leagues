@@ -280,7 +280,7 @@ class LLMService:
         requested_model = str(model or "").strip()
         last_error: str | None = None
         _timeout_s = int(getattr(self.settings, "llm_timeout", 45) or 45)
-        overall_deadline = time.monotonic() + float(max(20, min(_timeout_s * 2, 60)))
+        overall_deadline = time.monotonic() + float(max(20, min(_timeout_s * 2, 45)))
 
         def _deadline_exceeded() -> bool:
             return time.monotonic() >= overall_deadline
@@ -356,7 +356,7 @@ class LLMService:
                 raw = ""
                 data: dict[str, Any] | None = None
                 retry_after: float | None = None
-                req_timeout = aiohttp.ClientTimeout(total=max(15, min(int(_timeout_s), 35)))
+                req_timeout = aiohttp.ClientTimeout(total=max(12, min(int(_timeout_s), 25)))
                 try:
                     async with session.post(base_url, headers=headers, json=payload, timeout=req_timeout) as resp:
                         raw = await resp.text()
@@ -1205,12 +1205,12 @@ class LLMService:
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=900)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=1000)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
-            raw_reply = await self.chat(msgs, temperature=0.4, max_tokens=700)
+            raw_reply = await self.chat(msgs, temperature=0.4, max_tokens=800)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1278,7 +1278,7 @@ class LLMService:
             "walked_away": bool(walked_away),
             "pressure": int(pressure),
             "pressure_bar": bar,
-            "message": msg[:3500],
+            "message": msg[:3900],
         }
 
     async def negotiate_contract(
@@ -1388,13 +1388,13 @@ class LLMService:
                     msgs.append({"role": role, "content": content[:1500]})
         msgs.append({"role": "user", "content": user_content})
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=900)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=1200)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
             # one retry
-            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=900)
+            raw_reply = await self.chat(msgs, temperature=0.4, max_tokens=900)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1528,7 +1528,7 @@ class LLMService:
             "pressure_bar": bar,
             "counter": counter,
             "agreed_terms": agreed_terms,
-            "message": msg[:3500],
+            "message": msg[:3900],
         }
 
     async def generate_contract_opening(
@@ -1613,12 +1613,12 @@ class LLMService:
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=900)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=1000)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
-            raw_reply = await self.chat(msgs, temperature=0.4, max_tokens=700)
+            raw_reply = await self.chat(msgs, temperature=0.4, max_tokens=800)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1672,7 +1672,7 @@ class LLMService:
                 f"\n\n**Opening demands:** {self._money(wage)}/wk • {demand.get('role')} role • "
                 f"{int(years)} years • {self._money(bonus)} signing bonus."
             )
-        return msg[:3500]
+        return msg[:3900]
 
     # Backwards-compatible aliases used by older call sites
     async def generate_fee_negotiation_message(self, **kwargs):

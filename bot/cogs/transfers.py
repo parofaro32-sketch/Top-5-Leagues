@@ -138,7 +138,7 @@ class BotFeeCounterModal(discord.ui.Modal, title="Submit Higher Transfer Offer")
                 pass
 
 
-def _clean_llm_user_text(text: Any, *, max_len: int = 3500) -> str:
+def _clean_llm_user_text(text: Any, *, max_len: int = 3900) -> str:
     """Sanitize LLM output before showing to users.
 
     Removes code fences/JSON blobs and extracts a readable message when the model
@@ -1440,7 +1440,7 @@ class TransfersCog(commands.Cog):
             if not cleaned_msg:
                 cleaned_msg = "Negotiation response unavailable."
             msg_out = f"{bar}\n{cleaned_msg}"
-            result["message"] = msg_out[:3500]
+            result["message"] = msg_out[:3900]
 
             meta["contract_round"] = round_no
             meta["pressure"] = pressure
@@ -1466,7 +1466,7 @@ class TransfersCog(commands.Cog):
                     _msg_now = "The player's camp is frustrated, but negotiations remain open. Improve your terms."
                 if "walk away" in _msg_now.lower() or "negotiations are over" in _msg_now.lower():
                     _msg_now = re.sub(r"(?i)\b(walk(?:ing)? away|negotiations? (?:are )?over|talks? (?:are )?over|deal is off)\b[^.!\n]*[.!]?", "talks are close to breaking point, but they are still willing to hear an improved offer.", _msg_now)
-                result["message"] = f"{result['pressure_bar']}\n{_msg_now}"[:3500]
+                result["message"] = f"{result['pressure_bar']}\n{_msg_now}"[:3900]
                 bar = result["pressure_bar"]
                 meta["pressure"] = _p_now
                 meta["last_counter"] = result.get("counter")
