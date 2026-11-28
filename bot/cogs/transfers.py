@@ -93,6 +93,51 @@ class AskAboutView(discord.ui.View):
         return  # handled by on_interaction
 
 
+class BotFeeCounterView(discord.ui.View):
+    def __init__(self, cog: "TransfersCog", offer_id: int):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.offer_id = int(offer_id)
+        self.submit_higher.custom_id = f"transfer:botfee:counter:{self.offer_id}"
+        self.walk_away.custom_id = f"transfer:botfee:walkaway:{self.offer_id}"
+
+    @discord.ui.button(label="Submit Higher Offer", style=discord.ButtonStyle.primary, custom_id="transfer:botfee:counter:0")
+    async def submit_higher(self, interaction: discord.Interaction, button: discord.ui.Button):
+        return  # handled by on_interaction
+
+    @discord.ui.button(label="Walk Away", style=discord.ButtonStyle.secondary, custom_id="transfer:botfee:walkaway:0")
+    async def walk_away(self, interaction: discord.Interaction, button: discord.ui.Button):
+        return  # handled by on_interaction
+
+
+class BotFeeCounterModal(discord.ui.Modal, title="Submit Higher Transfer Offer"):
+    fee = discord.ui.TextInput(
+        label="New transfer fee",
+        style=discord.TextStyle.short,
+        required=True,
+        max_length=32,
+        placeholder="e.g. 25000000, 25M, or €25M",
+    )
+
+    def __init__(self, cog: "TransfersCog", offer_id: int):
+        super().__init__()
+        self.cog = cog
+        self.offer_id = offer_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await self.cog.handle_bot_fee_counter_submit(interaction, self)
+        except Exception:
+            logger.exception("BotFeeCounterModal.on_submit failed offer_id=%s", self.offer_id)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=error_embed("Negotiation Error", "I couldn't process that fee offer. Please try again."), ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=error_embed("Negotiation Error", "I couldn't process that fee offer. Please try again."), ephemeral=True)
+            except Exception:
+                pass
+
+
 def _clean_llm_user_text(text: Any, *, max_len: int = 3500) -> str:
     """Sanitize LLM output before showing to users.
 
@@ -152,12 +197,12 @@ def _clean_llm_user_text(text: Any, *, max_len: int = 3500) -> str:
             if counter:
                 parts.append(
                     f"Counter: {fmt_money(counter.get('wage') or 0)}/wk, {counter.get('role') or 'Rotation'} role, "
-                    f"{fmt_money(counter.get('signing_bonus') or 0)} signing bonus, {int(counter.get('contract_years') or 0)} years."
+                    f"{int(counter.get('contract_years') or 0)} years, {fmt_money(counter.get('signing_bonus') or 0)} signing bonus."
                 )
             if agreed:
                 parts.append(
                     f"Agreed terms: {fmt_money(agreed.get('wage') or 0)}/wk, {agreed.get('role') or 'Rotation'} role, "
-                    f"{fmt_money(agreed.get('signing_bonus') or 0)} signing bonus, {int(agreed.get('contract_years') or 0)} years."
+                    f"{int(agreed.get('contract_years') or 0)} years, {fmt_money(agreed.get('signing_bonus') or 0)} signing bonus."
                 )
             if parts:
                 return "\n".join(parts)
@@ -268,6 +313,14 @@ class TransfersCog(commands.Cog):
                 view = AskAboutView(self, offer_id)
                 await self.handle_ask_response(interaction, offer_id, for_sale=False, view=view)
                 return
+            if cid.startswith("transfer:botfee:counter:"):
+                offer_id = int(cid.rsplit(":", 1)[-1])
+                await self.handle_bot_fee_counter_button(interaction, offer_id)
+                return
+            if cid.startswith("transfer:botfee:walkaway:"):
+                offer_id = int(cid.rsplit(":", 1)[-1])
+                await self.handle_bot_fee_walkaway(interaction, offer_id)
+                return
         except Exception:
             logger.exception("transfer interaction handler failed")
             try:
@@ -335,6 +388,304 @@ class TransfersCog(commands.Cog):
                     await interaction.response.send_message(embed=cancel_embed, ephemeral=True)
                 else:
                     await interaction.followup.send(embed=cancel_embed, ephemeral=True)
+            except Exception:
+                pass
+
+    async def handle_bot_fee_counter_button(self, interaction: discord.Interaction, offer_id: int):
+        offer = await self.get_offer(offer_id)
+        if not offer:
+            msg = error_embed("Not Found", "This negotiation is no longer available.")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=msg, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=msg, ephemeral=True)
+            return
+        if interaction.user.id != int(offer.get("buying_user_id") or 0):
+            msg = error_embed("Not Allowed", "Only the buying manager can submit a higher offer.")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=msg, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=msg, ephemeral=True)
+            return
+        if str(offer.get("kind") or "") != "bot_offer":
+            msg = error_embed("Invalid Offer", "This action is only available for bot transfer fee negotiations.")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=msg, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=msg, ephemeral=True)
+            return
+        if str(offer.get("status") or "") not in ("rejected", "countered", "negotiating"):
+            # If already moved to contract/completed/cancelled, don't allow fee counter.
+            if str(offer.get("stage") or "") == "contract" or str(offer.get("status") or "") in ("agreed", "completed", "cancelled", "expired"):
+                msg = error_embed("Inactive", "This fee negotiation is no longer active.")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=msg, ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=msg, ephemeral=True)
+                return
+        await interaction.response.send_modal(BotFeeCounterModal(self, int(offer_id)))
+
+    async def handle_bot_fee_walkaway(self, interaction: discord.Interaction, offer_id: int):
+        offer = await self.get_offer(offer_id)
+        if not offer:
+            msg = error_embed("Not Found", "This negotiation is no longer available.")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=msg, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=msg, ephemeral=True)
+            return
+        if interaction.user.id != int(offer.get("buying_user_id") or 0):
+            msg = error_embed("Not Allowed", "Only the buying manager can walk away.")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=msg, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=msg, ephemeral=True)
+            return
+        now = utc_now_iso()
+        await self.bot.db.execute(
+            "UPDATE transfer_offers SET status='cancelled', stage='ended', updated_at=? WHERE id=?",
+            (now, int(offer_id)),
+        )
+        cancel_embed = info_embed("Negotiation Ended", "You walked away from this bot transfer negotiation.")
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.edit_message(embed=cancel_embed, view=None)
+            else:
+                await interaction.edit_original_response(embed=cancel_embed, view=None)
+        except Exception:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=cancel_embed, ephemeral=True)
+                else:
+                    await interaction.followup.send(embed=cancel_embed, ephemeral=True)
+            except Exception:
+                pass
+
+    async def handle_bot_fee_counter_submit(self, interaction: discord.Interaction, modal: BotFeeCounterModal):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+
+            offer = await self.get_offer(modal.offer_id)
+            if not offer:
+                await interaction.followup.send(embed=error_embed("Not Found", "This negotiation is no longer available."), ephemeral=True)
+                return
+            if interaction.user.id != int(offer.get("buying_user_id") or 0):
+                await interaction.followup.send(embed=error_embed("Not Allowed", "Only the buying manager can submit a higher offer."), ephemeral=True)
+                return
+            if str(offer.get("kind") or "") != "bot_offer":
+                await interaction.followup.send(embed=error_embed("Invalid Offer", "This action is only available for bot transfer fee negotiations."), ephemeral=True)
+                return
+            if str(offer.get("stage") or "") == "contract" or str(offer.get("status") or "") in ("agreed", "completed", "cancelled", "expired"):
+                await interaction.followup.send(embed=error_embed("Inactive", "This fee negotiation is no longer active."), ephemeral=True)
+                return
+
+            new_fee = self._parse_int_money(str(modal.fee.value or ""))
+            if new_fee is None or new_fee <= 0:
+                await interaction.followup.send(embed=error_embed("Invalid Fee", "Enter a valid fee like `25000000`, `25M`, or `€25M`."), ephemeral=True)
+                return
+
+            season_id = str(offer.get("season_id") or "")
+            season = await self.bot.season_service.get_season(season_id) if season_id else None
+            season_year = int((season or {}).get("season_year") or 2026)
+            buying_team_id = int(offer.get("buying_team_api_id") or 0)
+            buying_team_name = str(offer.get("buying_team_name") or "Buying club")
+            selling_team_id = int(offer.get("selling_team_api_id") or 0)
+            selling_team_name = str(offer.get("selling_team_name") or "Selling club")
+            player_api_id = int(offer.get("player_api_id") or 0)
+
+            # bot transfer limit guard
+            used = await self.market.get_bot_transfer_count(season_id, buying_team_id) if season_id else 0
+            if used >= 2:
+                await interaction.followup.send(embed=error_embed("Bot Transfer Limit Reached", f"**{buying_team_name}** has used {used}/2 bot transfers this season."), ephemeral=True)
+                return
+
+            player = await self.market.find_player_in_team(selling_team_id, str(offer.get("player_name") or ""), season_year)
+            if not player or int(player.get("api_id") or 0) != player_api_id:
+                # fallback by api_id from DB
+                row = await self.bot.db.fetchone(
+                    "SELECT * FROM players WHERE api_id=? AND season=? ORDER BY updated_at DESC LIMIT 1",
+                    (player_api_id, season_year),
+                )
+                player = dict(row) if row else None
+            if not player:
+                await interaction.followup.send(embed=error_embed("Player Not Found", "Could not load this player for re-evaluation. Please start a new `/botnego`."), ephemeral=True)
+                return
+
+            player = await self._enrich_player_for_llm(player, season_year=season_year)
+            val = self.market.value_player(player)
+            llm = getattr(self.bot, "llm_service", None)
+            if not (llm and getattr(llm, "enabled", False)):
+                await interaction.followup.send(embed=error_embed("LLM Required", "Bot fee negotiation is configured to use LLM only, but the LLM is not enabled on this bot."), ephemeral=True)
+                return
+
+            meta = {}
+            try:
+                meta = json.loads(offer.get("meta_json") or "{}")
+            except Exception:
+                meta = {}
+
+            prev_round = int(meta.get("fee_round") or meta.get("round") or 1)
+            round_no = prev_round + 1
+            prev_pressure = int(meta.get("fee_pressure") or offer.get("pressure") or 0)
+
+            decision = None
+            last_err = None
+            try:
+                llm_decision = await llm.negotiate_fee(
+                    player=player,
+                    valuation=val.__dict__,
+                    offer_fee=int(new_fee),
+                    buying_team_name=str(buying_team_name),
+                    selling_team_name=str(selling_team_name),
+                    round_no=round_no,
+                    previous_pressure=prev_pressure,
+                    max_pressure=10,
+                )
+                if isinstance(llm_decision, dict) and str(llm_decision.get("message") or "").strip():
+                    decision = {
+                        "accept": bool(llm_decision.get("accepted")),
+                        "walked_away": bool(llm_decision.get("walked_away")),
+                        "reason": str(llm_decision.get("message") or "").strip(),
+                        "pressure": int(llm_decision.get("pressure") or prev_pressure),
+                        "llm": True,
+                    }
+                    if decision["pressure"] >= 10:
+                        decision["walked_away"] = True
+                        decision["accept"] = False
+                    if decision["walked_away"]:
+                        decision["accept"] = False
+                else:
+                    last_err = "empty_or_invalid_decision"
+            except Exception as e:
+                last_err = str(e)
+                logger.exception("LLM fee negotiation failed (botnego counter) offer_id=%s", offer.get("id"))
+
+            if not isinstance(decision, dict):
+                await interaction.followup.send(embed=error_embed("LLM Negotiation Failed", f"I couldn't get a valid LLM negotiation decision right now. Please retry. ({str(last_err or getattr(llm, 'last_error', None) or 'unknown')[:160]})"), ephemeral=True)
+                return
+
+            _fee_ratio = float(new_fee) / max(1, int(val.min_accept_fee or val.market_value or 1))
+            if "pressure" in decision:
+                _fee_pressure = max(0, min(10, int(decision.get("pressure") or 0)))
+            else:
+                _fee_pressure = 0 if decision.get("accept") else min(10, max(2, int(round((1.0 - min(1.2, _fee_ratio)) * 10))))
+            _fee_pressure = max(prev_pressure, _fee_pressure)
+            _fee_bar = negotiation_pressure_bar(_fee_pressure, 10)
+            decision["pressure"] = _fee_pressure
+            decision["pressure_bar"] = _fee_bar
+
+            min_accept_fee = int(getattr(val, "min_accept_fee", 0) or 0)
+            if min_accept_fee <= 0:
+                min_accept_fee = int(getattr(val, "market_value", 0) or 0)
+            fee_too_low = bool(min_accept_fee > 0 and int(new_fee) < int(min_accept_fee))
+            llm_rejected = bool(decision.get("walked_away")) or (not bool(decision.get("accept")))
+
+            now = utc_now_iso()
+            if fee_too_low or llm_rejected:
+                decision["accept"] = False
+                decision["walked_away"] = bool(decision.get("walked_away")) and not fee_too_low
+                decision["forced_proceed_to_contract"] = False
+                llm_fee_msg = _clean_llm_user_text(decision.get("reason") or "") or None
+                if fee_too_low:
+                    refusal = (
+                        f"{_fee_bar}\n\n"
+                        f"**{selling_team_name}** refuse to sell **{player.get('name')}** for {fmt_money(new_fee)}. "
+                        f"That offer is below the minimum acceptable fee of {fmt_money(min_accept_fee)} "
+                        f"(market value {fmt_money(getattr(val, 'market_value', 0) or 0)})."
+                    )
+                    if llm_rejected and llm_fee_msg:
+                        refusal = llm_fee_msg + "\n\n" + refusal
+                    llm_fee_msg = refusal
+                if not llm_fee_msg:
+                    llm_fee_msg = f"{_fee_bar}\n\n**{selling_team_name}** rejected the offer for **{player.get('name')}**."
+
+                meta.update({
+                    "valuation": val.__dict__,
+                    "decision": decision,
+                    "fee_pressure": _fee_pressure,
+                    "min_accept_fee": min_accept_fee,
+                    "fee_round": round_no,
+                })
+                await self.bot.db.execute(
+                    "UPDATE transfer_offers SET fee=?, status='rejected', stage='club_offer', pressure=?, meta_json=?, updated_at=? WHERE id=?",
+                    (int(new_fee), int(_fee_pressure), json.dumps(meta), now, int(offer.get("id"))),
+                )
+                view = BotFeeCounterView(self, int(offer.get("id")))
+                await interaction.followup.send(embed=error_embed("Offer Rejected", llm_fee_msg[:3900]), view=view, ephemeral=True)
+                return
+
+            # Accepted - proceed to contract negotiation
+            decision["accept"] = True
+            decision["walked_away"] = False
+            decision["forced_proceed_to_contract"] = False
+            llm_fee_msg = _clean_llm_user_text(decision.get("reason") or "") or None
+
+            demand = self.market.contract_demand(val, player)
+            contract_meta = {
+                "valuation": val.__dict__,
+                "decision": decision,
+                "demand": demand,
+                "contract_round": 0,
+                "pressure": 0,
+                "fee_pressure": _fee_pressure,
+                "fee_round": round_no,
+            }
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET fee=?, status='negotiating', stage='contract', pressure=?, meta_json=?, updated_at=? WHERE id=?",
+                (int(new_fee), 0, json.dumps(contract_meta), now, int(offer.get("id"))),
+            )
+
+            view = ContractNegView(self, int(offer.get("id")))
+            contract_opening = None
+            last_open_err = None
+            for _attempt in range(2):
+                try:
+                    contract_opening = await llm.generate_contract_opening(
+                        player=player,
+                        demand=demand,
+                        valuation=val.__dict__,
+                        buying_team_name=str(buying_team_name),
+                        selling_team_name=str(selling_team_name),
+                        is_free_agent=False,
+                        scenario="contract_after_fee_agreed",
+                    )
+                    if contract_opening:
+                        break
+                    last_open_err = "empty_opening"
+                except Exception as e:
+                    last_open_err = str(e)
+                    logger.exception("LLM contract opening failed (botnego counter) attempt=%s offer_id=%s", _attempt + 1, offer.get("id"))
+
+            contract_opening = _clean_llm_user_text(contract_opening) if contract_opening else None
+            if not contract_opening:
+                _oe = last_open_err or getattr(llm, "last_error", None) or "empty_opening"
+                await interaction.followup.send(
+                    embed=error_embed("LLM Negotiation Failed", f"I couldn't generate the contract opening message right now. Please try again. ({str(_oe)[:160]})"),
+                    ephemeral=True,
+                )
+                return
+
+            contract_meta["history"] = [{"role": "assistant", "content": contract_opening[:3000]}]
+            await self.bot.db.execute(
+                "UPDATE transfer_offers SET meta_json=?, updated_at=? WHERE id=?",
+                (json.dumps(contract_meta), now, int(offer.get("id"))),
+            )
+
+            parts = []
+            if llm_fee_msg:
+                parts.append(llm_fee_msg)
+                parts.append(f"**Fee agreed:** {fmt_money(new_fee)}")
+            parts.append(contract_opening)
+            parts.append("Submit your contract offer using the button below.")
+            accept_desc = "\n\n".join(parts)
+            embed = success_embed("Offer Accepted — Contract Negotiation", accept_desc[:3900])
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        except Exception:
+            logger.exception("handle_bot_fee_counter_submit failed offer_id=%s", getattr(modal, "offer_id", None))
+            try:
+                await interaction.followup.send(embed=error_embed("Negotiation Error", "I couldn't process that higher offer. Please try again."), ephemeral=True)
             except Exception:
                 pass
 
@@ -655,13 +1006,16 @@ class TransfersCog(commands.Cog):
                     llm_fee_msg = refusal
                 if not llm_fee_msg:
                     llm_fee_msg = f"{_fee_bar}\n\n**{selling_team_name}** rejected the offer for **{player.get('name')}**."
-                await self.bot.db.execute(
+                rej_cur = await self.bot.db.execute(
                     """INSERT INTO transfer_offers(season_id,guild_id,channel_id,kind,status,buying_user_id,buying_team_api_id,buying_team_name,selling_team_api_id,selling_team_name,selling_manager_user_id,player_api_id,player_name,fee,stage,round,pressure,meta_json,created_at,updated_at)
                        VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?, 'club_offer',0,0,?, ?,?)""",
-                    (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "fee_pressure": _fee_pressure, "min_accept_fee": min_accept_fee}), now, now),
+                    (season_id, interaction.guild_id, interaction.channel_id, "bot_offer", status, interaction.user.id, buying_team_id, buying_team_name, selling_team_id, selling_team_name, int(player.get("api_id")), str(player.get("name")), int(offer_fee), json.dumps({"valuation": val.__dict__, "decision": decision, "fee_pressure": _fee_pressure, "min_accept_fee": min_accept_fee, "fee_round": 1}), now, now),
                 )
+                rej_offer_id = int(getattr(rej_cur, "lastrowid", 0) or 0)
+                rej_view = BotFeeCounterView(self, rej_offer_id) if rej_offer_id > 0 else None
                 await interaction.followup.send(
                     embed=error_embed("Offer Rejected", llm_fee_msg[:3900]),
+                    view=rej_view,
                     ephemeral=True,
                 )
                 return
@@ -1210,8 +1564,8 @@ class TransfersCog(commands.Cog):
                 _bar_in_msg = "[Negotiation Pressure:" in str(result.get("message") or "")
                 _bar_part = "" if _bar_in_msg else f" • {bar}"
                 counter_line = (
-                    f"\n\n**Your offer:** {fmt_money(wage)}/wk • {role} • bonus {fmt_money(bonus)} • {years} yrs\n"
-                    f"**Counter-demand:** {fmt_money(counter.get('wage'))}/wk • {counter.get('role')} • bonus {fmt_money(counter.get('signing_bonus'))} • {counter.get('contract_years')} yrs\n"
+                    f"\n\n**Your offer:** {fmt_money(wage)}/wk • {role} • {years} yrs • Signing bonus {fmt_money(bonus)}\n"
+                    f"**Counter-demand:** {fmt_money(counter.get('wage'))}/wk • {counter.get('role')} • {counter.get('contract_years')} yrs • Signing bonus {fmt_money(counter.get('signing_bonus'))}\n"
                     f"Round: {round_no}{_bar_part}\n"
                     "Submit a revised offer or pull out. Lowballing or stalling will raise pressure."
                 )
@@ -1353,7 +1707,7 @@ class TransfersCog(commands.Cog):
 
         msg = (
             f"**{conf.get('player_name')}** moved from **{conf.get('from_team_name')}** to **{conf.get('to_team_name')}**.\n"
-            f"Fee: {fmt_money(fee)} • Wage: {fmt_money(wage)}/wk • Bonus: {fmt_money(bonus)} • {years} years • Role: {role}\n"
+            f"Transfer fee: {fmt_money(fee)} • Wage: {fmt_money(wage)}/wk • Role: {role} • {years} years • Signing bonus: {fmt_money(bonus)}\n"
             f"Transfer finalized (ID `{tid}`). Budgets auto-deducted from buying club."
         )
         if used_after is not None:

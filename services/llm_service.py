@@ -280,7 +280,7 @@ class LLMService:
         requested_model = str(model or "").strip()
         last_error: str | None = None
         _timeout_s = int(getattr(self.settings, "llm_timeout", 45) or 45)
-        overall_deadline = time.monotonic() + float(max(30, min(_timeout_s * 2, 90)))
+        overall_deadline = time.monotonic() + float(max(20, min(_timeout_s * 2, 60)))
 
         def _deadline_exceeded() -> bool:
             return time.monotonic() >= overall_deadline
@@ -755,12 +755,12 @@ class LLMService:
                 if counter:
                     parts.append(
                         f"Counter: {LLMService._money(counter.get('wage') or 0)}/wk, {counter.get('role') or 'Rotation'} role, "
-                        f"{LLMService._money(counter.get('signing_bonus') or 0)} signing bonus, {int(counter.get('contract_years') or 0)} years."
+                        f"{int(counter.get('contract_years') or 0)} years, {LLMService._money(counter.get('signing_bonus') or 0)} signing bonus."
                     )
                 if agreed:
                     parts.append(
                         f"Agreed terms: {LLMService._money(agreed.get('wage') or 0)}/wk, {agreed.get('role') or 'Rotation'} role, "
-                        f"{LLMService._money(agreed.get('signing_bonus') or 0)} signing bonus, {int(agreed.get('contract_years') or 0)} years."
+                        f"{int(agreed.get('contract_years') or 0)} years, {LLMService._money(agreed.get('signing_bonus') or 0)} signing bonus."
                     )
                 if parts:
                     return "\n".join(parts)
@@ -1186,12 +1186,12 @@ class LLMService:
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=1300)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=800)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
-            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=1300)
+            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=800)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1350,13 +1350,13 @@ class LLMService:
                     msgs.append({"role": role, "content": content[:3000]})
         msgs.append({"role": "user", "content": user_content})
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=1600)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=900)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
             # one retry
-            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=1600)
+            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=900)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1441,14 +1441,14 @@ class LLMService:
             if wage_fmt not in msg and str(int(agreed_terms.get("wage") or 0)) not in msg.replace(",", ""):
                 msg += (
                     f"\n\n**Agreed terms:** {self._money(agreed_terms.get('wage'))}/wk, {agreed_terms.get('role')}, "
-                    f"{self._money(agreed_terms.get('signing_bonus'))} signing bonus, {int(agreed_terms.get('contract_years') or 0)} years."
+                    f"{int(agreed_terms.get('contract_years') or 0)} years, {self._money(agreed_terms.get('signing_bonus'))} signing bonus."
                 )
         if counter and not accepted and not walked_away and not manager_ended:
             wage_fmt = self._money(counter.get("wage"))
             if wage_fmt not in msg and str(int(counter.get("wage") or 0)) not in msg.replace(",", ""):
                 msg += (
                     f"\n\n**Counter-demand:** {self._money(counter.get('wage'))}/wk, {counter.get('role')}, "
-                    f"{self._money(counter.get('signing_bonus'))} signing bonus, {int(counter.get('contract_years') or 0)} years."
+                    f"{int(counter.get('contract_years') or 0)} years, {self._money(counter.get('signing_bonus'))} signing bonus."
                 )
 
         return {
@@ -1544,12 +1544,12 @@ class LLMService:
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=1400)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=800)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
-            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=1400)
+            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=800)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1582,7 +1582,7 @@ class LLMService:
         if missing_bits or (demand.get("role") and str(demand.get("role")) not in msg):
             msg += (
                 f"\n\n**Opening demands:** {self._money(wage)}/wk • {demand.get('role')} role • "
-                f"{self._money(bonus)} signing bonus • {int(years)} years."
+                f"{int(years)} years • {self._money(bonus)} signing bonus."
             )
         return msg[:3500]
 
