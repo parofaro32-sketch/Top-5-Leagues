@@ -356,8 +356,9 @@ class LLMService:
                 raw = ""
                 data: dict[str, Any] | None = None
                 retry_after: float | None = None
+                req_timeout = aiohttp.ClientTimeout(total=max(15, min(int(_timeout_s), 35)))
                 try:
-                    async with session.post(base_url, headers=headers, json=payload) as resp:
+                    async with session.post(base_url, headers=headers, json=payload, timeout=req_timeout) as resp:
                         raw = await resp.text()
                         resp_status = resp.status
                         ra = resp.headers.get("Retry-After")
@@ -373,7 +374,7 @@ class LLMService:
                                 payload2 = dict(payload)
                                 payload2.pop("response_format", None)
                                 try:
-                                    async with session.post(base_url, headers=headers, json=payload2) as resp2:
+                                    async with session.post(base_url, headers=headers, json=payload2, timeout=req_timeout) as resp2:
                                         raw2 = await resp2.text()
                                         ra2 = resp2.headers.get("Retry-After")
                                         if ra2:
@@ -934,16 +935,27 @@ class LLMService:
         t = str(text or "").strip().lower()
         if not t:
             return False
-        # Strong acceptance cues
+        # Explicit rejection/negation that should never be treated as acceptance
+        if re.search(
+            r"\b(no deal|not a deal|not agreed|never agreed|not\s+agree\b|can'?t agree|cannot agree|won'?t agree|do not agree|don'?t agree|"
+            r"can'?t accept|cannot accept|won'?t accept|do not accept|don'?t accept|not accept|"
+            r"reject|decline|refuse|unacceptable|not acceptable)\b",
+            t,
+        ):
+            # Allow only very explicit strong acceptance from the same party
+            if not re.search(r"\b(we accept|i accept|we(?:'re| are) happy to accept|deal done|we have a deal|let'?s do it|shake on it)\b", t):
+                return False
+        # Strong acceptance cues. Negation guard above runs first.
         accept_patterns = [
-            r"\b(we (?:have )?a deal|deal\b|agreed|agreement reached|we accept|i accept|we(?:'re| are) happy to accept|accepted|let'?s do it|done deal|shake on it)\b",
+            r"\b(we (?:have )?a deal|deal done|deal agreed|agreement reached|we accept|i accept|we(?:'re| are) happy to accept|accepted|let'?s do it|shake on it)\b",
             r"\b(?:accept|agree(?:d)? to) (?:the|your|this) (?:offer|terms|deal|proposal)\b",
+            r"\b(?:terms? (?:are )?agreed|agreed on (?:the )?terms|agreed terms)\b",
+            r"\b(we(?:'ve| have)?\s+agree(?:d)?|i(?:'ve| have)?\s+agree(?:d)?)\b",
         ]
         if any(re.search(p, t) for p in accept_patterns):
-            # Avoid false positives like "if you accept..." "would you accept..." "can't accept"
-            if re.search(r"\b(if|would|could|can you|will you|please|unless|before we accept|can'?t accept|cannot accept|won'?t accept|not accept)\b", t):
-                # Allow "we accept..." / "I accept..." strong forms
-                if re.search(r"\b(we accept|i accept|we(?:'re| are) happy to accept|deal done|we have a deal|agreed)\b", t):
+            # Avoid false positives like "if you accept..." "would you accept..."
+            if re.search(r"\b(if|would you|could you|can you|will you|please|unless)\b", t):
+                if re.search(r"\b(we accept|i accept|we(?:'re| are) happy to accept|deal done|we have a deal|let'?s do it|shake on it)\b", t):
                     return True
                 return False
             return True
@@ -1001,11 +1013,12 @@ class LLMService:
             pressure = prev_p
 
         manager_ended = cls._detect_manager_end_intent(manager_message)
+        manager_accepted = (not manager_ended) and cls._detect_acceptance_intent(manager_message)
         # Agent-side signals
         agent_walkaway = cls._detect_walkaway_intent(msg)
         agent_accepted = cls._detect_acceptance_intent(msg)
 
-        accepted = bool(agent_accepted) and not manager_ended
+        accepted = (bool(agent_accepted) or bool(manager_accepted)) and not manager_ended
         walked_away = bool(agent_walkaway) and not accepted and not manager_ended
 
         if pressure >= int(max_pressure):
@@ -1028,9 +1041,13 @@ class LLMService:
         counter = None
         agreed_terms = None
         if accepted:
-            base = dict(offered) if offered else dict(demand)
+            # If manager explicitly accepted and agent didn't, prefer agent's last counter/terms.
+            if manager_accepted and not agent_accepted and isinstance(previous_counter, dict):
+                base = dict(previous_counter)
+            else:
+                base = dict(offered) if offered else dict(demand)
             base.update({k: v for k, v in extracted.items() if v is not None})
-            agreed_terms = cls._sanitize_contract_counter(base, fallback=demand or offered)
+            agreed_terms = cls._sanitize_contract_counter(base, fallback=demand or offered or previous_counter)
         elif not walked_away and not manager_ended:
             base = dict(previous_counter) if isinstance(previous_counter, dict) else dict(demand)
             base.update({k: v for k, v in extracted.items() if v is not None})
@@ -1077,6 +1094,8 @@ class LLMService:
             "accepted": bool(accepted),
             "walked_away": bool(walked_away),
             "manager_ended": bool(manager_ended),
+            "manager_accepted": bool(manager_accepted),
+            "agent_accepted": bool(agent_accepted),
             "pressure": int(pressure),
             "counter": counter,
             "agreed_terms": agreed_terms,
@@ -1186,12 +1205,12 @@ class LLMService:
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=800)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=900)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
-            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=800)
+            raw_reply = await self.chat(msgs, temperature=0.4, max_tokens=700)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1231,9 +1250,28 @@ class LLMService:
             msg = f"{bar}\n{msg}"
         else:
             if bar_idx > 0:
-                # Drop any preamble before the pressure bar (reasoning/planning leak guard).
-                msg = msg[bar_idx:].lstrip()
-            msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
+                preamble = msg[:bar_idx].strip()
+                # Drop preamble only if it looks like reasoning/planning leak.
+                _reasoning_preamble = bool(
+                    self._looks_like_reasoning_leak(preamble)
+                    or re.search(
+                        r"(?is)<(?:think|thinking|thought|reasoning|internal_monologue|reflection)>",
+                        preamble,
+                    )
+                    or re.search(
+                        r"(?i)^(i should|i need to|let me|i'll|i will|here's my|my response|the user|the manager said|i'm going to|i am going to)\b",
+                        preamble[:200],
+                    )
+                )
+                if _reasoning_preamble:
+                    msg = msg[bar_idx:].lstrip()
+                else:
+                    # Keep legitimate preamble, but ensure bar is first line.
+                    rest = msg[bar_idx:].lstrip()
+                    rest = re.sub(r"^\[Negotiation Pressure:[^\]]*\]\s*", "", rest, count=1, flags=re.MULTILINE).strip()
+                    msg = f"{bar}\n{preamble}\n{rest}".strip() if preamble else f"{bar}\n{rest}".strip()
+            else:
+                msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
 
         return {
             "accepted": bool(accepted),
@@ -1341,13 +1379,13 @@ class LLMService:
 
         msgs: list[dict[str, str]] = [{"role": "system", "content": persona}]
         if isinstance(history, list):
-            for h in history[-12:]:
+            for h in history[-8:]:
                 if not isinstance(h, dict):
                     continue
                 role = str(h.get("role") or "").strip().lower()
                 content = str(h.get("content") or "").strip()
                 if role in ("user", "assistant") and content:
-                    msgs.append({"role": role, "content": content[:3000]})
+                    msgs.append({"role": role, "content": content[:1500]})
         msgs.append({"role": "user", "content": user_content})
 
         raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=900)
@@ -1381,6 +1419,8 @@ class LLMService:
         accepted = bool(decision.get("accepted"))
         walked_away = bool(decision.get("walked_away"))
         manager_ended = bool(decision.get("manager_ended"))
+        manager_accepted = bool(decision.get("manager_accepted"))
+        agent_accepted = bool(decision.get("agent_accepted"))
         counter = decision.get("counter") if isinstance(decision.get("counter"), dict) else None
         agreed_terms = decision.get("agreed_terms") if isinstance(decision.get("agreed_terms"), dict) else None
 
@@ -1424,6 +1464,16 @@ class LLMService:
             base.update({k: v for k, v in extracted.items() if v is not None})
             agreed_terms = self._sanitize_contract_counter(base, fallback=offered or demand)
 
+        # If manager clearly agreed but the LLM reply is unclear, make acceptance explicit.
+        if accepted and manager_accepted and not agent_accepted and isinstance(agreed_terms, dict):
+            msg = (
+                f"{self._pressure_bar(pressure, max_pressure)}\n"
+                f"Deal agreed. {player_name} is happy to accept the terms on the table. "
+                f"We're ready to finalize the contract at {self._money(agreed_terms.get('wage'))}/wk, "
+                f"{agreed_terms.get('role')} role, {int(agreed_terms.get('contract_years') or 0)} years, "
+                f"with a {self._money(agreed_terms.get('signing_bonus'))} signing bonus."
+            )
+
         # Ensure pressure bar present and canonical
         bar = self._pressure_bar(pressure, max_pressure)
         bar_idx = msg.find("[Negotiation Pressure:")
@@ -1431,9 +1481,28 @@ class LLMService:
             msg = f"{bar}\n{msg}"
         else:
             if bar_idx > 0:
-                # Drop any preamble before the pressure bar (reasoning/planning leak guard).
-                msg = msg[bar_idx:].lstrip()
-            msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
+                preamble = msg[:bar_idx].strip()
+                # Drop preamble only if it looks like reasoning/planning leak.
+                _reasoning_preamble = bool(
+                    self._looks_like_reasoning_leak(preamble)
+                    or re.search(
+                        r"(?is)<(?:think|thinking|thought|reasoning|internal_monologue|reflection)>",
+                        preamble,
+                    )
+                    or re.search(
+                        r"(?i)^(i should|i need to|let me|i'll|i will|here's my|my response|the user|the manager said|i'm going to|i am going to)\b",
+                        preamble[:200],
+                    )
+                )
+                if _reasoning_preamble:
+                    msg = msg[bar_idx:].lstrip()
+                else:
+                    # Keep legitimate preamble, but ensure bar is first line.
+                    rest = msg[bar_idx:].lstrip()
+                    rest = re.sub(r"^\[Negotiation Pressure:[^\]]*\]\s*", "", rest, count=1, flags=re.MULTILINE).strip()
+                    msg = f"{bar}\n{preamble}\n{rest}".strip() if preamble else f"{bar}\n{rest}".strip()
+            else:
+                msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
 
         # Ensure key terms visible on acceptance/counter
         if accepted and isinstance(agreed_terms, dict):
@@ -1544,12 +1613,12 @@ class LLMService:
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=800)
+        raw_reply = await self.chat(msgs, temperature=0.7, max_tokens=900)
         _le = str(self.last_error or "").lower()
         if not isinstance(raw_reply, str) or not raw_reply.strip():
             if any(k in _le for k in ["overall_deadline_exceeded", "exhausted all providers", "llm_disabled"]):
                 return None
-            raw_reply = await self.chat(msgs, temperature=0.5, max_tokens=800)
+            raw_reply = await self.chat(msgs, temperature=0.4, max_tokens=700)
 
         msg = self._clean_user_message_text(raw_reply or "")
         if self._looks_like_reasoning_leak(msg):
@@ -1562,9 +1631,28 @@ class LLMService:
             msg = f"{bar}\n{msg}"
         else:
             if bar_idx > 0:
-                # Drop any preamble before the pressure bar (reasoning/planning leak guard).
-                msg = msg[bar_idx:].lstrip()
-            msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
+                preamble = msg[:bar_idx].strip()
+                # Drop preamble only if it looks like reasoning/planning leak.
+                _reasoning_preamble = bool(
+                    self._looks_like_reasoning_leak(preamble)
+                    or re.search(
+                        r"(?is)<(?:think|thinking|thought|reasoning|internal_monologue|reflection)>",
+                        preamble,
+                    )
+                    or re.search(
+                        r"(?i)^(i should|i need to|let me|i'll|i will|here's my|my response|the user|the manager said|i'm going to|i am going to)\b",
+                        preamble[:200],
+                    )
+                )
+                if _reasoning_preamble:
+                    msg = msg[bar_idx:].lstrip()
+                else:
+                    # Keep legitimate preamble, but ensure bar is first line.
+                    rest = msg[bar_idx:].lstrip()
+                    rest = re.sub(r"^\[Negotiation Pressure:[^\]]*\]\s*", "", rest, count=1, flags=re.MULTILINE).strip()
+                    msg = f"{bar}\n{preamble}\n{rest}".strip() if preamble else f"{bar}\n{rest}".strip()
+            else:
+                msg = re.sub(r"^\[Negotiation Pressure:[^\]]*\]", bar, msg, count=1, flags=re.MULTILINE)
 
         # Ensure key demand numbers appear
         wage = self._coerce_int(demand.get("wage"), 0)
